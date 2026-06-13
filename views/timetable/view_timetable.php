@@ -18,6 +18,78 @@ function color_hex($hue)
         round(255 * hue2rgb($hue - 1/3))
     );
 }
+
+function pending_lectures_till_today($ci, $lecture_id)
+{
+    $lectures = $ci->db
+        ->where('lecture_id', $lecture_id)
+        ->where('date <=', date('Y-m-d'))
+        ->group_by('date')
+        ->get('session_syllabus')
+        ->result_array();
+
+    $pending = 0;
+
+    foreach ($lectures as $lecture) {
+        $isPending = 0;
+
+        $allDayTopics = $ci->db
+            ->where('lecture_id = "'.$lecture_id.'" and date like "'.$lecture['date'].'" and topic_ids != ""')
+            ->get('session_syllabus')
+            ->result_array();
+
+        foreach ($allDayTopics as $allDayTopic) {
+            if ($isPending == 0) {
+                $checking_ids = explode(',', $allDayTopic['topic_ids']);
+                foreach ($checking_ids as $checking_id) {
+                    if ($checking_id != '') {
+                        $studied = $ci->db->get_where('study_by_teacher', array(
+                            'topic_id' => $checking_id,
+                            'session_syllabus_id' => $lecture['id'],
+                            'is_quiz' => $lecture['is_quiz']
+                        ))->result_array();
+
+                        if (count($studied) == 0) {
+                            $isPending = 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($isPending == 0) {
+            $allDayPracticals = $ci->db
+                ->where('lecture_id = "'.$lecture_id.'" and date like "'.$lecture['date'].'" and practical_ids != ""')
+                ->get('session_syllabus')
+                ->result_array();
+
+            foreach ($allDayPracticals as $allDayPractical) {
+                if ($isPending == 0) {
+                    $checking_ids = explode(',', $allDayPractical['practical_ids']);
+                    foreach ($checking_ids as $checking_id) {
+                        if ($checking_id != '') {
+                            $studied = $ci->db->get_where('study_by_teacher', array(
+                                'practical_id' => $checking_id,
+                                'session_syllabus_id' => $lecture['id'],
+                                'is_quiz' => $lecture['is_quiz']
+                            ))->result_array();
+
+                            if (count($studied) == 0) {
+                                $isPending = 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if ($isPending == 1) {
+            $pending++;
+        }
+    }
+
+    return $pending;
+}
 ?>
 <!-- BEGIN CONTENT -->
 <div class="page-content-wrapper">
@@ -165,6 +237,9 @@ function color_hex($hue)
                                     Time
                                 </th>
                                 <th>
+                                    Total Pending Lectures Till Today
+                                </th>
+                                <th>
                                     Zoom ID
                                 </th>
                                 <th>
@@ -226,6 +301,12 @@ function color_hex($hue)
                                     <td><?php  echo $loan ['room_name']  ?></td>
                                     <td><?php  echo $loan ['first_name']. ' - ' .$loan ['last_name']  ?></td>
                                     <td><?php  echo $loan ['start_date']. ' - ' .$loan ['end_date']  ?></td>
+                                    <td style="text-align:center;">
+                                        <?php $pendingLectures = pending_lectures_till_today($this, $loan['id']); ?>
+                                        <a href="<?php echo site_url();?>/timetable/today_lecture/<?php echo $loan['id'];?>" class="btn <?php echo $pendingLectures > 0 ? 'red' : 'green'; ?>">
+                                            <?php echo $pendingLectures; ?>
+                                        </a>
+                                    </td>
                                     <td><?php  echo $loan ['zoom_id'];  ?></td>
                                     <td>
                                         <?php

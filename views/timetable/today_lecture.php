@@ -19,6 +19,80 @@
             <?php endif;?>
 			<?php
 				if(count($my_lectures)>0):
+					$totalLecturesTillToday = count($my_lectures);
+					$pendingLecturesTillToday = 0;
+					$doneLecturesTillToday = 0;
+					$visible_lectures = array();
+					$lectureCounter = 0;
+
+					foreach($my_lectures as $lecture)
+					{
+						$lectureCounter++;
+						$isPending = 0;
+
+						$allDayTopics = $this->db->where('lecture_id = "'.$lecture['lecture_id'].'" and date like "'.$lecture['date'].'" and topic_ids != ""')->get('session_syllabus')->result_array();
+
+						foreach($allDayTopics as $allDayTopic)
+						{
+							if($isPending==0)
+							{
+								$checking_ids = explode(',',$allDayTopic['topic_ids']);
+								foreach($checking_ids as $checking_id)
+								{
+									if($checking_id!='')
+									{
+										$studied = $this->db->get_where('study_by_teacher',array('topic_id'=>$checking_id,'session_syllabus_id'=>$lecture['session_syllabus_id'],'is_quiz'=>$lecture['is_quiz']))->result_array();
+										if(count($studied)==0)
+										{
+											$isPending=1;
+										}
+									}
+								}
+							}
+						}
+
+						if($isPending==0)
+						{
+							$allDayPracticals = $this->db->where('lecture_id = "'.$lecture['lecture_id'].'" and date like "'.$lecture['date'].'" and practical_ids != ""')->get('session_syllabus')->result_array();
+
+							foreach($allDayPracticals as $allDayPractical)
+							{
+								if($isPending==0)
+								{
+									$checking_ids = explode(',',$allDayPractical['practical_ids']);
+									foreach($checking_ids as $checking_id)
+									{
+										if($checking_id!='')
+										{
+											$studied = $this->db->get_where('study_by_teacher',array('practical_id'=>$checking_id,'session_syllabus_id'=>$lecture['session_syllabus_id'],'is_quiz'=>$lecture['is_quiz']))->result_array();
+											if(count($studied)==0)
+											{
+												$isPending=1;
+											}
+										}
+									}
+								}
+							}
+						}
+
+						if($isPending==1)
+						{
+							$pendingLecturesTillToday++;
+						}
+						else
+						{
+							$doneLecturesTillToday++;
+						}
+
+						if($lectureCounter<=5 || $isPending==1)
+						{
+							$visible_lectures[] = $lecture;
+						}
+					}
+
+					usort($visible_lectures, function($a, $b) {
+						return strtotime($a['date']) - strtotime($b['date']);
+					});
 			?>
 			<div class="row">
 				<div class="col-md-12">
@@ -30,6 +104,32 @@
 							</div>
 						</div>
 						<div class="portlet-body table-responsive">
+							<div class="row" style="margin-bottom:15px;">
+								<div class="col-md-3 col-sm-6" style="margin-bottom:8px;">
+									<div class="alert alert-info" style="margin-bottom:0;text-align:center;">
+										<strong>Total Till Today</strong><br>
+										<span style="font-size:22px;"><?php echo $totalLecturesTillToday; ?></span>
+									</div>
+								</div>
+								<div class="col-md-3 col-sm-6" style="margin-bottom:8px;">
+									<div class="alert alert-danger" style="margin-bottom:0;text-align:center;">
+										<strong>Pending</strong><br>
+										<span style="font-size:22px;"><?php echo $pendingLecturesTillToday; ?></span>
+									</div>
+								</div>
+								<div class="col-md-3 col-sm-6" style="margin-bottom:8px;">
+									<div class="alert alert-success" style="margin-bottom:0;text-align:center;">
+										<strong>Done</strong><br>
+										<span style="font-size:22px;"><?php echo $doneLecturesTillToday; ?></span>
+									</div>
+								</div>
+								<div class="col-md-3 col-sm-6" style="margin-bottom:8px;">
+									<div class="alert alert-warning" style="margin-bottom:0;text-align:center;">
+										<strong>Showing</strong><br>
+										<span style="font-size:22px;"><?php echo count($visible_lectures); ?></span>
+									</div>
+								</div>
+							</div>
 							<label><input type="checkbox" class="all_open" name="all_open" value="1" /> All Open</label>
 							<table class="table table-bordered table-hover">
 							<thead>
@@ -54,73 +154,7 @@
 							<tbody>
 							<?php
 								$i=1;
-								foreach($my_lectures as $lecture):
-
-								if(strtotime($lecture['date'])>=strtotime(date('Y-m-d',strtotime("-5 day", strtotime(date('Y-m-d'))))))
-								{
-									$show=1;
-								}
-								else
-								{
-									//CHECK TOPICS STUDIED
-									$show=0;
-									$allDayTopics = $this->db->where('lecture_id = "'.$lecture['lecture_id'].'" and date like "'.$lecture['date'].'" and topic_ids != ""')->get('session_syllabus')->result_array();
-
-									foreach($allDayTopics as $allDayTopic)
-									{
-										if($show==0)
-										{
-											$checking_ids = explode(',',$allDayTopic['topic_ids']);
-											foreach($checking_ids as $checking_id)
-											{
-												if($checking_id!='')
-												{
-													$studied = $this->db->get_where('study_by_teacher',array('topic_id'=>$checking_id,'session_syllabus_id'=>$lecture['session_syllabus_id'],'is_quiz'=>$lecture['is_quiz']))->result_array();
-													if(count($studied)>0)
-													{
-														$show=0;
-													}
-													else
-													{
-														$show=1;
-													}
-												}
-											}
-										}
-									}
-
-									//CHECK PRACTICAL STUDIED
-									if($show==0)
-									{
-										$allDayTopics = $this->db->where('lecture_id = "'.$lecture['lecture_id'].'" and date like "'.$lecture['date'].'" and practical_ids != ""')->get('session_syllabus')->result_array();
-
-										foreach($allDayTopics as $allDayTopic)
-										{
-											if($show==0)
-											{
-												$checking_ids = explode(',',$allDayTopic['practical_ids']);
-												foreach($checking_ids as $checking_id)
-												{
-													if($checking_id!='')
-													{
-														$studied = $this->db->get_where('study_by_teacher',array('practical_id'=>$checking_id,'session_syllabus_id'=>$lecture['session_syllabus_id'],'is_quiz'=>$lecture['is_quiz']))->result_array();
-														if(count($studied)>0)
-														{
-															$show=0;
-														}
-														else
-														{
-															$show=1;
-														}
-													}
-												}
-											}
-										}
-									}
-								}
-							?>
-							<?php
-								if($show==1):
+								foreach($visible_lectures as $lecture):
 							?>
                             <tr class="odd gradeX <?php if(date('Y-m-d')==$lecture['date']){echo 'success';}?>">
                                 <td class="hidden">
@@ -317,9 +351,6 @@
 								</td>
 							</tr>
 							<?php
-								endif;
-							?>
-                            <?php
 								$i++;
                             	endforeach;
 							?>

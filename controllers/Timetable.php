@@ -503,8 +503,9 @@ class Timetable extends CI_Controller {
 		$this->db->join('courses','courses.course_id=lectures.course','inner');
 		$this->db->join('campuses','campuses.campus_id=lectures.campus','inner');
 		$this->db->join('course_subjects','course_subjects.course_subject_id=session_syllabus.subject_id','inner');
-		$this->db->where(array('lectures.id'=>$lecture_id,'session_syllabus.date<='=>date('Y-m-d',strtotime("+5 day", strtotime(date('Y-m-d'))))));
+		$this->db->where(array('lectures.id'=>$lecture_id,'session_syllabus.date<='=>date('Y-m-d')));
 		$this->db->group_by('session_syllabus.date');
+		$this->db->order_by('session_syllabus.date', 'DESC');
 		$data['my_lectures'] = $this->db->get()->result_array();
 
         $this->load->view('inc/header');
