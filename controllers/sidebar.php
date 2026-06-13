@@ -343,6 +343,11 @@
                                             <i class="icon-plus"></i>
                                             Salary Report</a>
                                     </li>
+                                    <li class="<?php if($this->uri->segment(1)=='salary' && $this->uri->segment(2)=='minimum_salary_adjustment_report'){echo 'active';}?>">
+                                        <a href="<?php echo site_url();?>/salary/minimum_salary_adjustment_report">
+                                            <i class="icon-plus"></i>
+                                            Minimum Salary Adjustment Report</a>
+                                    </li>
                                 </ul>
                             </li>
 
@@ -2146,6 +2151,11 @@
                                             <i class="icon-plus"></i>
                                             Salary Report</a>
                                     </li>
+                        <li class="<?php if($this->uri->segment(1)=='salary' && $this->uri->segment(2)=='minimum_salary_adjustment_report'){echo 'active';}?>">
+                            <a href="<?php echo site_url();?>/salary/minimum_salary_adjustment_report">
+                                <i class="icon-plus"></i>
+                                Minimum Salary Adjustment Report</a>
+                        </li>
                     </ul>
                 </li>
 				

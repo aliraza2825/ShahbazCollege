@@ -22,8 +22,10 @@
         <div class="row">
             <div class="col-md-2"></div>
             <div class="col-md-6" style="background-color: white;padding: 20px 30px;    border-radius: 20px!important;box-shadow: 10px 10px 5px -8px rgba(0,0,0,0.75);">
-                <h3 style="margin:5px 0px 20px 0px;text-align: center;font-weight: bold">Select Campus To Generate Salary</h3>
-                <form class="form-horizontal" role="form" method="post" action="<?php echo site_url();?>/salary/salary_report">
+                <h3 style="margin:5px 0px 20px 0px;text-align: center;font-weight: bold">
+                    <?php echo !empty($minimum_adjustment_report) ? 'Select Campus For Minimum Salary Adjustment Report' : 'Select Campus To Generate Salary'; ?>
+                </h3>
+                <form class="form-horizontal" role="form" method="post" action="<?php echo site_url();?>/salary/<?php echo !empty($minimum_adjustment_report) ? 'minimum_salary_adjustment_report' : 'salary_report'; ?>">
                     <div class="form-body">
                         <div class="form-group">
                             <label class="col-md-2 control-label">Campus <span class="required">*</span></label>
@@ -85,6 +87,7 @@
             $pending = 0;
             $cash = 0;
             $bank = 0;
+            $minimumAdjustmentTotal = 0;
             ?>
 
             <button class="btn green" id="print" onclick="printContent('printtable');" >Print</button>
@@ -95,7 +98,9 @@
                     <div class="portlet box grey-cascade">
                         <div class="portlet-title">
                             <div class="caption">
-                                <i class="fa fa-list"></i> Staff Salary List ( <?php echo @$salary[0]['campus_name'];?> ) For The Month of <?php echo $month.' - '.$year ?>
+                                <i class="fa fa-list"></i>
+                                <?php echo !empty($minimum_adjustment_report) ? 'Minimum Salary Adjustment Report' : 'Staff Salary List'; ?>
+                                ( <?php echo @$salary[0]['campus_name'];?> ) For The Month of <?php echo $month.' - '.$year ?>
 
                             </div>
                         </div>
@@ -135,6 +140,11 @@
                                     <th>
                                         Salary
                                     </th>
+                                    <?php if (!empty($minimum_adjustment_report)): ?>
+                                    <th>
+                                        Minimum Salary Adjustment
+                                    </th>
+                                    <?php endif; ?>
                                     <th>
                                         No of Days
                                     </th>
@@ -187,6 +197,9 @@
                                     $i=0;
                                     $thisMonthTotalBasicSalary=0;
                                     foreach($salary as $list):
+                                        $minimumAdjustment = !empty($minimum_adjustment_report) ? (float) @$list['minimum_salary_adjustment'] : 0;
+                                        $baseSalaryWithAllowance = (float) $list['basic_salary'] + (float) $list['new_user_alownce'];
+                                        $reportSalary = $baseSalaryWithAllowance + $minimumAdjustment;
                                         if ($list['expense_id'] != NULL)
                                             array_push($exp_ids,$list['expense_id']);
                                     ?>
@@ -227,9 +240,15 @@
                                             <?php $earnings+=round($list['new_user_alownce']); ?>
                                         </td>
                                         <td style="text-align: right;">
-                                            <?php echo round($list['basic_salary'] + $list['new_user_alownce']);?>
+                                            <?php echo round($reportSalary);?>
                                             <?php $grosssals+=round($list['gross_salary']);?>
                                         </td>
+                                        <?php if (!empty($minimum_adjustment_report)): ?>
+                                        <td style="text-align: right;">
+                                            <?php echo round($minimumAdjustment); ?>
+                                            <?php $minimumAdjustmentTotal += round($minimumAdjustment); ?>
+                                        </td>
+                                        <?php endif; ?>
                                         <td style="text-align: right;">
                                             <?php echo $list['no_of_days'];?>
                                         </td>
@@ -238,17 +257,18 @@
                                                 $month = date('m',strtotime($this->input->post('to_date')));
                                                 $year = date('Y',strtotime($this->input->post('to_date')));
                                                 $daysthismonth=cal_days_in_month(CAL_GREGORIAN,$month,$year);
-                                                $oneDaySalary = ($list['basic_salary'] + $list['new_user_alownce'])/$daysthismonth;
-                                                $presentDaysSalary = $oneDaySalary*$list['no_of_days'];
+                                                $oneDaySalary = $baseSalaryWithAllowance/$daysthismonth;
+                                                $presentDaysSalary = ($oneDaySalary*$list['no_of_days']) + $minimumAdjustment;
                                                 echo number_format($presentDaysSalary);
                                                 $thisMonthTotalBasicSalary+=$presentDaysSalary;
                                             ?>
                                         </td>
 										<td style="text-align: right;">
                                             <?php
-                                            if ($list['earnings']-$list['new_user_alownce'] > 0):
-                                                echo round($list['earnings']-$list['new_user_alownce']);?>
-                                                <?php $user_alownce+=round(($list['earnings']-$list['new_user_alownce']));
+                                            $otherEarnings = $list['earnings'] - $list['new_user_alownce'];
+                                            if ($otherEarnings > 0):
+                                                echo round($otherEarnings);?>
+                                                <?php $user_alownce+=round($otherEarnings);
                                                 else:
                                                 echo "0";
                                             endif;?>
@@ -359,6 +379,11 @@
                                     <th style = "font-weight:bold; text-align: right;">
                                         <?php echo $grosssals ?>
                                     </th>
+                                    <?php if (!empty($minimum_adjustment_report)): ?>
+                                    <th style = "font-weight:bold; text-align: right;">
+                                        <?php echo $minimumAdjustmentTotal; ?>
+                                    </th>
+                                    <?php endif; ?>
                                     <th style = "font-weight:bold; text-align: right;">
                                         <?php //echo $user_alownce ?>
                                     </th>

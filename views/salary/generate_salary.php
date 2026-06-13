@@ -319,6 +319,18 @@
                                                 <input type="text" class="form-control input-inline " name="tax_salary" id="tax" value="<?php echo @$income_tax ?: 0; ?>" placeholder="Tax" style="width: 100%!important;" readonly>
                                             </div>
                                             <div class="col-md-4" style="margin-bottom: 10px">
+                                                <lable>Minimum Salary Adjustment : </lable>
+                                            </div>
+                                            <div class="col-md-8" style="margin-bottom: 10px">
+                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="minimum_salary_adjustment" value="0" placeholder="Minimum Salary Adjustment" style="width: 100%!important;" readonly>
+                                            </div>
+                                            <div class="col-md-4" style="margin-bottom: 10px">
+                                                <lable>Adjustment Target Salary : </lable>
+                                            </div>
+                                            <div class="col-md-8" style="margin-bottom: 10px">
+                                                <input type="text" class="form-control input-inline " id="minimum_salary_target" value="0" placeholder="Adjustment Target Salary" style="width: 100%!important;" readonly>
+                                            </div>
+                                            <div class="col-md-4" style="margin-bottom: 10px">
                                                 <lable>Net Salary : </lable>
                                             </div>
                                             <div class="col-md-8" style="margin-bottom: 10px">
@@ -344,7 +356,10 @@
                             <input type="hidden" name="campus_id" class="campus_id" value="<?php echo $campus_id ?>" />
                             <input type="hidden" name="month" value="<?php echo $this->uri->segment(5); ?>" />
                             <input type="hidden" name="year" value="<?php echo $this->uri->segment(6); ?>" />
-                            <button type="submit" class="btn green">Generate Now</button>
+                            <button type="submit" id="generate_now_btn" class="btn green">Generate Now</button>
+                            <div id="pettycash_adjustment_error" class="alert alert-danger" style="display: none; margin: 0;">
+                                Petty cash account is not created for this employee. Please create petty cash first.
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -392,7 +407,8 @@
         var deductionsValue = document.getElementsByName('deductionsValue[]');
     
         for (var i = 0; i < earningsValue.length; i++) {
-            total_earnings += parseFloat(earningsValue[i].value) || 0;
+            var earningAmount = parseFloat(earningsValue[i].value) || 0;
+            total_earnings += earningAmount;
         }
     
         for (var j = 0; j < deductionsValue.length; j++) {
@@ -415,7 +431,17 @@
         
         }
         
-        var net_salary = (earned_salary + (total_earnings-allownces)) - total_deduction - tax;
+        var incentives = total_earnings - allownces;
+        var salaryBeforeDeductions = earned_salary + incentives;
+        var minimumSalaryAdjustment = 0;
+        var minimumSalaryTarget = 0;
+
+        if (salaryBeforeDeductions < 40000) {
+            minimumSalaryTarget = Math.floor(Math.random() * 5001) + 40000;
+            minimumSalaryAdjustment = minimumSalaryTarget - salaryBeforeDeductions;
+        }
+
+        var net_salary = salaryBeforeDeductions + minimumSalaryAdjustment - total_deduction - tax;
         
         // console.log({
         //     basicSalary: basicSalary,
@@ -431,10 +457,26 @@
         $("#total_earnings").val((total_earnings-allownces).toFixed(0));
         $("#total_deduction").val(total_deduction.toFixed(0));
         $("#final_gross_salary").val(gross_salary.toFixed(0));
+        $("#minimum_salary_adjustment").val(minimumSalaryAdjustment.toFixed(0));
+        $("#minimum_salary_target").val(minimumSalaryTarget.toFixed(0));
         $("#net_salary").val(net_salary.toFixed(0));
         $("#earned_salary").val(earned_salary.toFixed(0));
+
+        togglePettycashAdjustmentError(minimumSalaryAdjustment);
     
         return false;
+    }
+
+    function togglePettycashAdjustmentError(minimumSalaryAdjustment) {
+        var hasPettycash = <?php echo empty($salary_pettycash) ? 'false' : 'true'; ?>;
+
+        if (!hasPettycash && minimumSalaryAdjustment > 0) {
+            $("#generate_now_btn").hide();
+            $("#pettycash_adjustment_error").show();
+        } else {
+            $("#generate_now_btn").show();
+            $("#pettycash_adjustment_error").hide();
+        }
     }
     
     function daysInThisMonth() {

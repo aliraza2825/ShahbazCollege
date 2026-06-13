@@ -286,6 +286,10 @@ class Salary  extends CI_Controller{
 
         $data['staff'] = $this->db->get_where('users', array('user_id' => $user_id))->row();
         $data['user_id'] = $user_id;
+        $data['salary_pettycash'] = $this->db
+            ->where('assign_to', $user_id)
+            ->get('petty_cash_college_wise')
+            ->row_array();
 
         $this->db->select('allownces.name,allownces.type,user_allowances.amount');
         $this->db->from('user_allowances');
@@ -603,6 +607,48 @@ class Salary  extends CI_Controller{
             'tax_slab_id' => $slab['id']
         );
     }
+
+    private function post_minimum_salary_adjustment_to_pettycash($user_id, $campus_id, $amount, $month, $year, $payroll_id, $is_reversal = false)
+    {
+        $amount = round((float) $amount, 2);
+        if ($amount <= 0) {
+            return;
+        }
+
+        $pettycash = $this->db
+            ->where('assign_to', $user_id)
+            ->get('petty_cash_college_wise')
+            ->row_array();
+
+        if (!$pettycash) {
+            return;
+        }
+
+        if ($is_reversal) {
+            $this->db->set('remaining_amount', 'remaining_amount - ' . $amount, false);
+            $debitCredit = 'C';
+            $reason = 'Reversal of minimum salary adjustment for ' . $month . '-' . $year . ' Payroll ID ' . $payroll_id;
+        } else {
+            $this->db->set('remaining_amount', 'remaining_amount + ' . $amount, false);
+            $debitCredit = 'D';
+            $reason = 'Minimum salary adjustment for ' . $month . '-' . $year . ' Payroll ID ' . $payroll_id;
+        }
+
+        $this->db->where('id', $pettycash['id']);
+        $this->db->update('petty_cash_college_wise');
+
+        $this->db->insert('petty_cash_history', array(
+            'campus_id' => $campus_id,
+            'user_id' => $user_id,
+            'amount_given' => $amount,
+            'debit_credit' => $debitCredit,
+            'transaction_pettycash_account' => $pettycash['id'],
+            'status' => '1',
+            'reason' => $reason,
+            'transaction_by' => $this->session->userdata('name'),
+            'created_at' => date('Y-m-d H:i:s')
+        ));
+    }
     
     
 
@@ -633,6 +679,18 @@ class Salary  extends CI_Controller{
         $deductions      = (float) $this->input->post('deduction_salary');
         $earnings_total  = (float) $this->input->post('earing_salary');
         $tax_salary      = (float) $this->input->post('tax_salary');
+        $minimumSalaryAdjustment = (float) $this->input->post('minimum_salary_adjustment');
+
+        $salaryPettycash = $this->db
+            ->where('assign_to', $user_id)
+            ->get('petty_cash_college_wise')
+            ->row_array();
+
+        if ($minimumSalaryAdjustment > 0 && !$salaryPettycash) {
+            $this->session->set_flashdata('error', 'Payroll not generated. Please create petty cash account for this employee first.');
+            redirect(site_url() . '/salary/generate_salary/' . $user_id . '/' . $campus_id . '/' . $month . '/' . $year);
+            return;
+        }
     
         if ($gross_salary <= 0) {
             $gross_salary = $basic_salary + $earnings_total;
@@ -653,6 +711,17 @@ class Salary  extends CI_Controller{
     
         if ($oldPayroll) {
             $oldPayrollId = $oldPayroll['id'];
+            $oldMinimumAdjustment = (float) $this->db
+                ->select_sum('amount')
+                ->where('payroll_id', $oldPayrollId)
+                ->where('name', 'Minimum Salary Adjustment')
+                ->get('payroll_earn_deducs')
+                ->row()
+                ->amount;
+
+            if ($oldMinimumAdjustment > 0) {
+                $this->post_minimum_salary_adjustment_to_pettycash($user_id, $campus_id, $oldMinimumAdjustment, $month, $year, $oldPayrollId, true);
+            }
     
             $this->db->where('payroll_id', $oldPayrollId)->delete('payroll_earn_deducs');
             $this->db->where('payroll_id', $oldPayrollId)->delete('payroll_statutory_contributions');
@@ -690,7 +759,6 @@ class Salary  extends CI_Controller{
         $insertId = $this->db->insert_id();
     
         if ($insertId) {
-    
             /*
              * Earnings Save
              */
@@ -755,6 +823,16 @@ class Salary  extends CI_Controller{
                     'name'       => 'Income Tax',
                     'type_id'    => '1',
                     'amount'     => $tax_salary,
+                    'created_by' => $this->session->userdata('user_id')
+                ));
+            }
+
+            if ($minimumSalaryAdjustment > 0) {
+                $this->db->insert('payroll_earn_deducs', array(
+                    'payroll_id' => $insertId,
+                    'name'       => 'Minimum Salary Adjustment',
+                    'type_id'    => '2',
+                    'amount'     => $minimumSalaryAdjustment,
                     'created_by' => $this->session->userdata('user_id')
                 ));
             }
@@ -853,6 +931,10 @@ class Salary  extends CI_Controller{
                     ));
                 }
             }
+
+            if ($minimumSalaryAdjustment > 0) {
+                $this->post_minimum_salary_adjustment_to_pettycash($user_id, $campus_id, $minimumSalaryAdjustment, $month, $year, $insertId);
+            }
         }
     
         $this->db->trans_complete();
@@ -923,7 +1005,64 @@ class Salary  extends CI_Controller{
 			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Special%")) as special,
 			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0) as earnings,
 			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
+            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Minimum Salary Adjustment") as minimum_salary_adjustment,
 			users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name');
+        $this->db->from('payroll');
+        $this->db->join('users','payroll.user_id = users.user_id ','inner');
+        $this->db->join('campuses','users.campus_id = campuses.campus_id ','inner');
+        $this->db->join('user_allowances','user_allowances.user_id = users.user_id ','inner');
+        $this->db->join('designations', 'designations.designation_id=users.designation_id', 'INNER');
+        $this->db->join('departments', 'departments.department_id=users.department_id', 'INNER');
+        $this->db->group_by('users.user_id');
+        $this->db->where("payroll_month = '".$month."'");
+        $this->db->where("payroll_year = '".$year."'");
+        if($course_id != '' && $course_id != null){
+            $this->db->where("users.campus_id = ".$course_id);
+            $data['iscampus']='true';
+        }else{
+            $data['iscampus']='false';
+        }
+
+        $data['salary'] = $this->db->get()->result_array();
+        foreach ($data['salary'] as $key => $salary) {
+            $minimumAdjustment = (float) @$salary['minimum_salary_adjustment'];
+            if ($minimumAdjustment > 0) {
+                $data['salary'][$key]['earned_salary'] = (float) $salary['earned_salary'] - $minimumAdjustment;
+            }
+        }
+        $data['month'] = $month;
+        $data['year'] = $year;
+        $data['my_campus'] = $this->input->post('campus_id');
+
+        $data['disbursed'] = $this->db->get_where("expenses","expenses.campus_id = '$course_id' and expenses.salary_year = '$year' and expenses.salary_month = '$month' and expenses.approved_status = '1'")->result_array();
+        $data['stat_rules'] = $this->db
+            ->order_by('id', 'DESC')
+            ->get_where('payroll_statutory_rules','status = 1')
+            ->result_array();
+
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('salary/salary_list_report',$data);
+        $this->load->view('inc/footer');
+    }
+
+    public function minimum_salary_adjustment_report(){
+
+        $data['campuses'] = $this->db->get_where('campuses',array('status'=>1))->result_array();
+
+        $course_id = $this->input->post('campus_id');
+        $month = $this->input->post('to_date');
+
+        $month = date("M", strtotime($month));
+        $year = date("Y", strtotime($this->input->post('to_date')));
+
+        $this->db->select('payroll.*,(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Loan installment%")) as loan,
+            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Advance installment%")) as advance,
+            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Special%")) as special,
+            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0) as earnings,
+            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
+            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Minimum Salary Adjustment") as minimum_salary_adjustment,
+            users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name');
         $this->db->from('payroll');
         $this->db->join('users','payroll.user_id = users.user_id ','inner');
         $this->db->join('campuses','users.campus_id = campuses.campus_id ','inner');
@@ -944,6 +1083,7 @@ class Salary  extends CI_Controller{
         $data['month'] = $month;
         $data['year'] = $year;
         $data['my_campus'] = $this->input->post('campus_id');
+        $data['minimum_adjustment_report'] = true;
 
         $data['disbursed'] = $this->db->get_where("expenses","expenses.campus_id = '$course_id' and expenses.salary_year = '$year' and expenses.salary_month = '$month' and expenses.approved_status = '1'")->result_array();
         $data['stat_rules'] = $this->db
