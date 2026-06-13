@@ -1,0 +1,108 @@
+<?php
+	$myAccess = checkUserAccess();
+?>	
+    <!-- BEGIN CONTENT -->
+	<div class="page-content-wrapper">
+		<div class="page-content">
+			<!-- BEGIN PAGE HEADER-->
+			<!--<h3 class="page-title">
+			All Classes <small>Here you can find all classes</small>
+			</h3>-->
+            <!-- END PAGE HEADER-->
+			<!-- BEGIN PAGE CONTENT-->
+            <?php if(@$this->session->userdata('message')):?>
+                <div class="alert alert-success">
+                    <button class="close" data-close="alert"></button>
+                    <span>
+                    <?php echo $this->session->userdata('message');?> </span>
+                </div>
+            <?php endif;?>
+
+			<div class="row">
+				<div class="col-md-12">
+					<!-- BEGIN EXAMPLE TABLE PORTLET-->
+					<div class="portlet box grey-cascade">
+						<div class="portlet-title">
+							<div class="caption">
+								<i class="fa fa-search"></i> Find Vendor
+							</div>
+						</div>
+						<div class="portlet-body form">
+							<form class="form-horizontal" role="form" method="post" action="#">
+								<div class="form-body">
+									<div class="row">
+										<div class="col-md-6">
+											<div class="form-group">
+												<label class="col-md-3 control-label">Product <span class="required">*</span></label>
+												<div class="col-md-9">
+													<select name="product_name_id" class="form-control input-inline input-large select2 product_name_id" required>
+														<option value="">SELECT Product</option>
+														<?php
+															foreach($product_names as $product_name):
+														?>
+														<option value="<?php echo $product_name['product_name_id'];?>"><?php echo $product_name['product_name'];?></option>
+														<?php
+															endforeach;
+														?>
+													</select>
+												</div>
+											</div>
+										</div>
+										<div class="col-md-6">
+											<div class="form-group">
+												<label class="col-md-3 control-label">Campus</label>
+												<div class="col-md-9">
+													<select name="campus_id" class="form-control input-inline input-large select2 campus_id" required>
+														<option value="">SELECT Campus</option>
+														<?php
+															foreach($campuses as $campus):
+														?>
+														<option value="<?php echo $campus['campus_id'];?>"><?php echo $campus['campus_name'];?></option>
+														<?php
+															endforeach;
+														?>
+													</select>
+												</div>
+											</div>
+										</div>
+									</div>
+								</div>
+								<div class="form-actions">
+									<div class="row">
+										<div class="col-md-offset-3 col-md-9">
+											<button type="button" class="btn green check_vendor">Check Vendor</button>
+										</div>
+									</div>
+								</div>
+							</form>
+						</div>
+					</div>
+					<!-- END EXAMPLE TABLE PORTLET-->
+				</div>
+			</div>
+
+			<div class="row">
+				<div class="col-md-12">
+					<div class="portlet box grey-cascade">
+						<div class="portlet-title">
+							<div class="caption">
+								<i class="fa fa-list"></i> All Vendors
+							</div>
+						</div>
+						<div class="portlet-body all_vendors_body">
+							
+						</div>
+						<div class="portlet-body processing" style="display:none;">
+							<div class="row">
+								<div class="col-md-12 text-center">
+									<i class="fa fa-spinner fa-spin fa-4x" aria-hidden="true"></i>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+			<!-- END PAGE CONTENT-->
+		</div>
+	</div>
+	<!-- END CONTENT -->
