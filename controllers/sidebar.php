@@ -91,6 +91,11 @@
                                     <i class="fa fa-list"></i>
                                     Confirmed Admissions</a>
                             </li>
+                            <li class="<?php if($this->uri->segment(2)=='dynamic_forms'){echo 'active';}?>">
+                                <a href="<?php echo site_url();?>/online_application/dynamic_forms">
+                                    <i class="fa fa-wpforms"></i>
+                                    Dynamic Forms</a>
+                            </li>
                             <li class="<?php if($this->uri->segment(2)=='upload_fb_leads'){echo 'active';}?>">
                                 <a href="<?php echo site_url();?>/online_application/upload_fb_leads">
                                     <i class="fa fa-upload"></i>
@@ -1344,6 +1349,11 @@
 							<a href="<?php echo site_url();?>/online_application/confirmed_admissions">
 							<i class="fa fa-list"></i>
 							Confirmed Admissions</a>
+						</li>
+                        <li class="<?php if($this->uri->segment(2)=='dynamic_forms'){echo 'active';}?>">
+							<a href="<?php echo site_url();?>/online_application/dynamic_forms">
+							<i class="fa fa-wpforms"></i>
+							Dynamic Forms</a>
 						</li>
                         <?php
                         	endif;

@@ -420,8 +420,70 @@
 					</div>
 					<!-- END SAMPLE FORM PORTLET-->
 				</div>
-			</div>
+            </div>
             
+            <?php if(!empty($dynamic_submissions)): ?>
+            <div class="row">
+                <div class="col-md-12 ">
+                    <div class="portlet box green ">
+                        <div class="portlet-title">
+                            <div class="caption">
+                                <i class="fa fa-list"></i> Dynamic Form Submissions
+                            </div>
+                        </div>
+                        <div class="portlet-body table-responsive">
+                            <table class="table table-bordered table-hover">
+                                <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Date</th>
+                                    <th>Time</th>
+                                    <th>Form</th>
+                                    <th>Submitted Data</th>
+                                    <th>Action</th>
+                                </tr>
+                                </thead>
+                                <tbody>
+                                <?php foreach($dynamic_submissions as $submission): ?>
+                                    <?php
+                                        $values = $this->db
+                                            ->where('submission_id', $submission['id'])
+                                            ->order_by('id', 'ASC')
+                                            ->get('dynamic_form_submission_values')
+                                            ->result_array();
+                                    ?>
+                                    <tr>
+                                        <td><?php echo $submission['id']; ?></td>
+                                        <td><?php echo date('Y-m-d', strtotime($submission['created_at'])); ?></td>
+                                        <td><?php echo date('H:i:s A', strtotime($submission['created_at'])); ?></td>
+                                        <td>
+                                            <?php echo htmlspecialchars($submission['form_title']); ?><br>
+                                            <small><?php echo htmlspecialchars($submission['slug']); ?></small>
+                                        </td>
+                                        <td>
+                                            <?php foreach($values as $value): ?>
+                                                <strong><?php echo htmlspecialchars($value['field_label']); ?>:</strong>
+                                                <?php if($value['field_type'] == 'file' && $value['value'] != ''): ?>
+                                                    <a href="<?php echo base_url();?>uploads/<?php echo htmlspecialchars($value['value']); ?>" target="_blank">View File</a>
+                                                <?php else: ?>
+                                                    <?php echo nl2br(htmlspecialchars($value['value'])); ?>
+                                                <?php endif; ?>
+                                                <br>
+                                            <?php endforeach; ?>
+                                        </td>
+                                        <td>
+                                            <a href="<?php echo site_url();?>/online_application/dynamic_submission_checked/<?php echo $submission['id']; ?>" class="btn green" onclick="return confirm('Mark this submission as checked?')">Mark Checked</a>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+
             <!---END CLASSES STATUS--->
 		</div>
 	</div>
