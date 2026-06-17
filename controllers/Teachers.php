@@ -21,6 +21,14 @@ class Teachers extends CI_Controller {
 		parent::__construct();
 		$this->load->model('teacher');
 		$this->load->library('upload');	
+		$this->ensure_salary_adjustment_column();
+	}
+
+	private function ensure_salary_adjustment_column()
+	{
+		if (!$this->db->field_exists('salary_adjustment', 'users')) {
+			$this->db->query("ALTER TABLE users ADD salary_adjustment DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER gross_salary");
+		}
 	}
 	
 	public function insert()
@@ -55,6 +63,7 @@ class Teachers extends CI_Controller {
 				'date_of_birth'		=> $this->input->post('date_of_birth'),
 				'joining_date'		=> $this->input->post('joining_date'),
 				'salary'			=> $this->input->post('salary'),
+				'salary_adjustment'	=> (float) $this->input->post('salary_adjustment'),
 				'designation'		=> $this->input->post('designation'),
 				'city'				=> $this->input->post('city'),
 				'address'			=> $this->input->post('address'),
@@ -164,6 +173,7 @@ class Teachers extends CI_Controller {
             'joining_date'		=> $this->input->post('joining_date'),
             'salary'			=> $total_salary,
             'gross_salary'		=> $this->input->post('gross_salary'),
+            'salary_adjustment'	=> (float) $this->input->post('salary_adjustment'),
             'designation'		=> $this->input->post('designation'),
             'city'				=> $this->input->post('city'),
             'address'			=> $this->input->post('address'),

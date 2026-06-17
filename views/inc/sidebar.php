@@ -445,7 +445,7 @@ $myAccess = checkUserAccess();
                                     <li class="<?php if($this->uri->segment(1)=='salary' && $this->uri->segment(2)=='minimum_salary_adjustment_report'){echo 'active';}?>">
                                         <a href="<?php echo site_url();?>/salary/minimum_salary_adjustment_report">
                                             <i class="icon-plus"></i>
-                                            Minimum Salary Adjustment Report</a>
+                                            Salary Adjustment Report</a>
                                     </li>
                                 </ul>
                             </li>
@@ -3208,7 +3208,7 @@ $myAccess = checkUserAccess();
                                 <li class="<?php if($this->uri->segment(1)=='salary' && $this->uri->segment(2)=='minimum_salary_adjustment_report'){echo 'active';}?>">
                                     <a href="<?php echo site_url();?>/salary/minimum_salary_adjustment_report">
                                         <i class="icon-plus"></i>
-                                        Minimum Salary Adjustment Report</a>
+                                        Salary Adjustment Report</a>
                                 </li>
                                 <?php
                                     if(@$myAccess[0]['payroll_statutory_rules']==1):

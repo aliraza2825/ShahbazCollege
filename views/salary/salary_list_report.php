@@ -23,7 +23,7 @@
             <div class="col-md-2"></div>
             <div class="col-md-6" style="background-color: white;padding: 20px 30px;    border-radius: 20px!important;box-shadow: 10px 10px 5px -8px rgba(0,0,0,0.75);">
                 <h3 style="margin:5px 0px 20px 0px;text-align: center;font-weight: bold">
-                    <?php echo !empty($minimum_adjustment_report) ? 'Select Campus For Minimum Salary Adjustment Report' : 'Select Campus To Generate Salary'; ?>
+                    <?php echo !empty($minimum_adjustment_report) ? 'Select Campus For Salary Adjustment Report' : 'Select Campus To Generate Salary'; ?>
                 </h3>
                 <form class="form-horizontal" role="form" method="post" action="<?php echo site_url();?>/salary/<?php echo !empty($minimum_adjustment_report) ? 'minimum_salary_adjustment_report' : 'salary_report'; ?>">
                     <div class="form-body">
@@ -99,7 +99,7 @@
                         <div class="portlet-title">
                             <div class="caption">
                                 <i class="fa fa-list"></i>
-                                <?php echo !empty($minimum_adjustment_report) ? 'Minimum Salary Adjustment Report' : 'Staff Salary List'; ?>
+                                <?php echo !empty($minimum_adjustment_report) ? 'Salary Adjustment Report' : 'Staff Salary List'; ?>
                                 ( <?php echo @$salary[0]['campus_name'];?> ) For The Month of <?php echo $month.' - '.$year ?>
 
                             </div>
@@ -142,7 +142,7 @@
                                     </th>
                                     <?php if (!empty($minimum_adjustment_report)): ?>
                                     <th>
-                                        Minimum Salary Adjustment
+                                        Salary Adjustment
                                     </th>
                                     <?php endif; ?>
                                     <th>

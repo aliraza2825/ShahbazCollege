@@ -368,6 +368,13 @@
                                                     <span class="help-inline"></span>
                                                 </div>
                                             </div>
+                                            <div class="form-group">
+                                                <label class="col-md-3 control-label">Salary Adjustment</label>
+                                                <div class="col-md-9">
+                                                    <input type="number" step="0.01" min="0" class="form-control input-inline input-medium" name="salary_adjustment" placeholder="Enter salary adjustment" value="<?php echo isset($teacher['salary_adjustment']) ? $teacher['salary_adjustment'] : 0; ?>">
+                                                    <span class="help-inline"></span>
+                                                </div>
+                                            </div>
                                         </div>
                                         <style>
                                             .ex1 {

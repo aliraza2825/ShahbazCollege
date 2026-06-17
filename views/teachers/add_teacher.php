@@ -251,6 +251,17 @@
                                     <div class="row">
                                         <div class="col-md-6">
                                             <div class="form-group">
+                                                <label class="col-md-3 control-label">Salary Adjustment</label>
+                                                <div class="col-md-9">
+                                                    <input type="number" step="0.01" min="0" class="form-control input-inline input-medium" name="salary_adjustment" placeholder="Enter salary adjustment" value="0">
+                                                    <span class="help-inline"></span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <div class="form-group">
                                                 <label class="col-md-3 control-label">City </label>
                                                 <div class="col-md-9">
                                                     <input type="text" class="form-control input-inline input-medium" name="city" placeholder="Enter teacher's city" value="">
@@ -407,7 +418,6 @@
             });
         }, false );
     </script>
-
 
 
 

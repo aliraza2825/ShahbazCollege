@@ -6,7 +6,15 @@ class Salary  extends CI_Controller{
     public function __construct()
     {
         parent::__construct();
+        $this->ensure_salary_adjustment_column();
         //$this->load->library('Email_reader');
+    }
+
+    private function ensure_salary_adjustment_column()
+    {
+        if (!$this->db->field_exists('salary_adjustment', 'users')) {
+            $this->db->query("ALTER TABLE users ADD salary_adjustment DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER gross_salary");
+        }
     }
 
     public function salary_list(){
@@ -627,11 +635,11 @@ class Salary  extends CI_Controller{
         if ($is_reversal) {
             $this->db->set('remaining_amount', 'remaining_amount - ' . $amount, false);
             $debitCredit = 'C';
-            $reason = 'Reversal of minimum salary adjustment for ' . $month . '-' . $year . ' Payroll ID ' . $payroll_id;
+            $reason = 'Reversal of salary adjustment for ' . $month . '-' . $year . ' Payroll ID ' . $payroll_id;
         } else {
             $this->db->set('remaining_amount', 'remaining_amount + ' . $amount, false);
             $debitCredit = 'D';
-            $reason = 'Minimum salary adjustment for ' . $month . '-' . $year . ' Payroll ID ' . $payroll_id;
+            $reason = 'Salary adjustment for ' . $month . '-' . $year . ' Payroll ID ' . $payroll_id;
         }
 
         $this->db->where('id', $pettycash['id']);
@@ -679,7 +687,12 @@ class Salary  extends CI_Controller{
         $deductions      = (float) $this->input->post('deduction_salary');
         $earnings_total  = (float) $this->input->post('earing_salary');
         $tax_salary      = (float) $this->input->post('tax_salary');
-        $minimumSalaryAdjustment = (float) $this->input->post('minimum_salary_adjustment');
+        $employeeSalaryAdjustment = $this->db
+            ->select('salary_adjustment')
+            ->where('user_id', $user_id)
+            ->get('users')
+            ->row_array();
+        $minimumSalaryAdjustment = (float) @$employeeSalaryAdjustment['salary_adjustment'];
 
         $salaryPettycash = $this->db
             ->where('assign_to', $user_id)
@@ -695,6 +708,20 @@ class Salary  extends CI_Controller{
         if ($gross_salary <= 0) {
             $gross_salary = $basic_salary + $earnings_total;
         }
+
+        $payrollMonthDate = date('Y-m-d', strtotime($year . '-' . $month . '-01'));
+        $daysInMonth = (int) date('t', strtotime($payrollMonthDate));
+        if ($daysInMonth <= 0) {
+            $daysInMonth = 30;
+        }
+
+        $countedDays = (float) $this->input->post('total_days');
+        if ($countedDays > $daysInMonth) {
+            $countedDays = $daysInMonth;
+        }
+
+        $earnedBeforeIncentives = ($gross_salary / $daysInMonth) * $countedDays;
+        $earned_salary = round($earnedBeforeIncentives + $earnings_total + $minimumSalaryAdjustment - $deductions - $tax_salary);
     
         $this->db->trans_start();
     
@@ -714,7 +741,7 @@ class Salary  extends CI_Controller{
             $oldMinimumAdjustment = (float) $this->db
                 ->select_sum('amount')
                 ->where('payroll_id', $oldPayrollId)
-                ->where('name', 'Minimum Salary Adjustment')
+                ->where_in('name', array('Minimum Salary Adjustment', 'Salary Adjustment'))
                 ->get('payroll_earn_deducs')
                 ->row()
                 ->amount;
@@ -830,7 +857,7 @@ class Salary  extends CI_Controller{
             if ($minimumSalaryAdjustment > 0) {
                 $this->db->insert('payroll_earn_deducs', array(
                     'payroll_id' => $insertId,
-                    'name'       => 'Minimum Salary Adjustment',
+                    'name'       => 'Salary Adjustment',
                     'type_id'    => '2',
                     'amount'     => $minimumSalaryAdjustment,
                     'created_by' => $this->session->userdata('user_id')
@@ -1005,7 +1032,7 @@ class Salary  extends CI_Controller{
 			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Special%")) as special,
 			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0) as earnings,
 			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
-            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Minimum Salary Adjustment") as minimum_salary_adjustment,
+            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name in ("Minimum Salary Adjustment", "Salary Adjustment")) as minimum_salary_adjustment,
 			users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name');
         $this->db->from('payroll');
         $this->db->join('users','payroll.user_id = users.user_id ','inner');
@@ -1061,7 +1088,7 @@ class Salary  extends CI_Controller{
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Special%")) as special,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0) as earnings,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
-            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Minimum Salary Adjustment") as minimum_salary_adjustment,
+            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name in ("Minimum Salary Adjustment", "Salary Adjustment")) as minimum_salary_adjustment,
             users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name');
         $this->db->from('payroll');
         $this->db->join('users','payroll.user_id = users.user_id ','inner');

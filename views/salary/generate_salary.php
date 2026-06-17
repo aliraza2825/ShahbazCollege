@@ -319,16 +319,10 @@
                                                 <input type="text" class="form-control input-inline " name="tax_salary" id="tax" value="<?php echo @$income_tax ?: 0; ?>" placeholder="Tax" style="width: 100%!important;" readonly>
                                             </div>
                                             <div class="col-md-4" style="margin-bottom: 10px">
-                                                <lable>Minimum Salary Adjustment : </lable>
+                                                <lable>Salary Adjustment : </lable>
                                             </div>
                                             <div class="col-md-8" style="margin-bottom: 10px">
-                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="minimum_salary_adjustment" value="0" placeholder="Minimum Salary Adjustment" style="width: 100%!important;" readonly>
-                                            </div>
-                                            <div class="col-md-4" style="margin-bottom: 10px">
-                                                <lable>Adjustment Target Salary : </lable>
-                                            </div>
-                                            <div class="col-md-8" style="margin-bottom: 10px">
-                                                <input type="text" class="form-control input-inline " id="minimum_salary_target" value="0" placeholder="Adjustment Target Salary" style="width: 100%!important;" readonly>
+                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="minimum_salary_adjustment" value="<?php echo isset($staff->salary_adjustment) ? $staff->salary_adjustment : 0; ?>" placeholder="Salary Adjustment" style="width: 100%!important;" readonly>
                                             </div>
                                             <div class="col-md-4" style="margin-bottom: 10px">
                                                 <lable>Net Salary : </lable>
@@ -380,6 +374,7 @@
 
         var basicSalary = parseFloat("<?php echo isset($staff->salary) && $staff->salary !== '' ? $staff->salary : 0; ?>") || 0;
         var staffGrossSalary = parseFloat("<?php echo isset($staff->gross_salary) && $staff->gross_salary !== '' ? $staff->gross_salary : 0; ?>") || 0;
+        var staffSalaryAdjustment = parseFloat("<?php echo isset($staff->salary_adjustment) && $staff->salary_adjustment !== '' ? $staff->salary_adjustment : 0; ?>") || 0;
     
         var total_days = parseFloat($("#total_days").val()) || 0;
         var monthDays = daysInThisMonth();
@@ -433,13 +428,7 @@
         
         var incentives = total_earnings - allownces;
         var salaryBeforeDeductions = earned_salary + incentives;
-        var minimumSalaryAdjustment = 0;
-        var minimumSalaryTarget = 0;
-
-        if (salaryBeforeDeductions < 40000) {
-            minimumSalaryTarget = Math.floor(Math.random() * 5001) + 40000;
-            minimumSalaryAdjustment = minimumSalaryTarget - salaryBeforeDeductions;
-        }
+        var minimumSalaryAdjustment = staffSalaryAdjustment;
 
         var net_salary = salaryBeforeDeductions + minimumSalaryAdjustment - total_deduction - tax;
         
@@ -458,7 +447,6 @@
         $("#total_deduction").val(total_deduction.toFixed(0));
         $("#final_gross_salary").val(gross_salary.toFixed(0));
         $("#minimum_salary_adjustment").val(minimumSalaryAdjustment.toFixed(0));
-        $("#minimum_salary_target").val(minimumSalaryTarget.toFixed(0));
         $("#net_salary").val(net_salary.toFixed(0));
         $("#earned_salary").val(earned_salary.toFixed(0));
 
