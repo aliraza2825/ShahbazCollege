@@ -15,11 +15,11 @@ $student_fees = $this_student = $this->db->get_where('students', array('student_
 $student_fee_plan = $this->db->get_where('fee_rules',array('fee_rule_id'=>$this_student[0]['plan_id']))->result_array();
 if(count($student_fee_plan)>0)
 {
-    $total_fee = $student_fee_plan[0]['total_fee'];
+    $total_fee = $student_fee_plan[0]['total_fee']+$this_student[0]['extra_added_fee'];
 }
 else
 {
-    $total_fee = $this->db->get_where('fee_rules',array('course_id'=>$student_fees[0]['course_id']))->row()->total_fee;
+    $total_fee = ($this->db->get_where('fee_rules',array('course_id'=>$student_fees[0]['course_id']))->row()->total_fee)+$this_student[0]['extra_added_fee'];
 }
 
 $course = $this->db->get_where('courses', array('course_id'=>$student_fees[0]['course_id']))->result_array();
@@ -41,11 +41,11 @@ else
 
 
 //GET THIS STUDENT DECIDED FEE
-$student_fee = $this_student[0]['total_fee'];
+$student_fee = $this_student[0]['total_fee']+$this_student[0]['extra_added_fee'];
 
 
 //GET FEE ON TIME OF ADMISSION
-$total_fee = $this_student[0]['current_session_fee'];
+$total_fee = $this_student[0]['current_session_fee']+$this_student[0]['extra_added_fee'];
 
 //GET PAYMENTS RULES
 $payment_rules = $this->db->get_where("payment_rules","status = 1 and course_id = '".$this_student[0]['course_id']."'")->result_array();

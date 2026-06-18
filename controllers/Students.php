@@ -6908,11 +6908,12 @@ class Students extends CI_Controller {
     public function update_current_session_fee($student_id)
     {
         $current_session_fee = $this->input->post('current_session_fee');
+        $this_student = $this->db->get_where('students', array('student_id'=>$student_id))->row_array();
     
         if ($student_id && $current_session_fee !== '') {
             $this->db->where('student_id', $student_id);
             $this->db->update('students', array(
-                'current_session_fee' => $current_session_fee
+                'extra_added_fee' => $current_session_fee-$this_student['current_session_fee']
             ));
     
             $this->session->set_userdata('message', 'Current session fee updated successfully.');
