@@ -6904,4 +6904,22 @@ class Students extends CI_Controller {
             echo '</div>';
         }
     }
+    
+    public function update_current_session_fee($student_id)
+    {
+        $current_session_fee = $this->input->post('current_session_fee');
+    
+        if ($student_id && $current_session_fee !== '') {
+            $this->db->where('student_id', $student_id);
+            $this->db->update('students', array(
+                'current_session_fee' => $current_session_fee
+            ));
+    
+            $this->session->set_userdata('message', 'Current session fee updated successfully.');
+        } else {
+            $this->session->set_userdata('error', 'Invalid fee amount.');
+        }
+    
+        redirect($_SERVER['HTTP_REFERER']);
+    }
 }

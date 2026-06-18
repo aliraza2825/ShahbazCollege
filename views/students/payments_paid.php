@@ -87,7 +87,24 @@ function getOrdinal($number)
                     </div>
                     <div class="details">
                         <div class="number">
-                            <?php echo $total_fee;?>
+                            <?php echo $total_fee;
+                            
+                            if($this->session->userdata('role')=='Admin'):
+                            ?>
+                            <button type="button"
+
+                                    class="btn btn-xs btn-default"
+                        
+                                    data-toggle="modal"
+                        
+                                    data-target="#editCurrentSessionFeeModal"
+                        
+                                    style="margin-left:8px;">
+                        
+                                <i class="fa fa-pencil"></i>
+                        
+                            </button>
+                            <?php endif; ?>
                         </div>
                         <div class="desc">
                             Total Fees
@@ -3227,6 +3244,39 @@ function getOrdinal($number)
     </div>
     <div class="modal-footer">
         <button type="button" data-dismiss="modal" class="btn btn-default">Close</button>
+    </div>
+</div>
+
+<div class="modal fade" id="editCurrentSessionFeeModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document" style="width:420px;">
+        <div class="modal-content">
+
+            <form method="post" action="<?php echo site_url('students/update_current_session_fee/'.$this->uri->segment(3)); ?>">
+
+                <div class="modal-header">
+                    <button type="button" class="close" data-dismiss="modal">&times;</button>
+                    <h4 class="modal-title">Edit Total Fees</h4>
+                </div>
+
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Current Session Fee</label>
+                        <input type="number"
+                               name="current_session_fee"
+                               class="form-control"
+                               value="<?php echo $this_student[0]['current_session_fee']; ?>"
+                               required>
+                    </div>
+                </div>
+
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+                    <button type="submit" class="btn btn-primary">Save Fee</button>
+                </div>
+
+            </form>
+
+        </div>
     </div>
 </div>
  
