@@ -105,6 +105,7 @@
                             </div>
                         </div>
                         <div class="portlet-body"  id="checkboxes">
+            <?php if (!empty($minimum_adjustment_report)): ?>
                             <button type="button" class="btn red" id="removeContributionBtn">
                                 Remove Contribution
                             </button>
@@ -113,6 +114,7 @@
                                 Add Expense
                             </button>
                             <br><br>
+            <?php endif; ?>
                             <table class="table table-striped table-bordered table-hover" id="">
                                 <thead>
                                 <tr>
@@ -661,11 +663,13 @@
                         <br />
                         <br />
                         <br />
+                <?php if (!empty($minimum_adjustment_report)): ?>
                         <button type="button" id="cash" class="btn green">Disburse by Cash</button>
                         <button id="loading_button" style="display: none" class="button-tag" type="button">
                             <i class="fata fa fa-spinner fa-spin"></i>Submitting
                         </button>
                         <button type="button" id="bank" class="btn green">Disburse by Bank</button>
+                <?php endif; ?>
                     </div>
                 </form>
             <?php
