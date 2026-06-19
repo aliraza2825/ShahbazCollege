@@ -311,8 +311,6 @@
                                             <div class="col-md-8" style="margin-bottom: 10px">
                                                 <input type="text" class="form-control input-inline " name="deduction_salary" id="total_deduction" placeholder="Deduction" style="width: 100%!important;">
                                             </div>
-                                            
-                                            
                                             <div class="col-md-4" style="margin-bottom: 10px">
                                                 <lable>Tax : </lable>
                                             </div>
@@ -322,16 +320,18 @@
                                             <div class="col-md-4" style="margin-bottom: 10px">
                                                 <lable>Salary Adjustment : </lable>
                                             </div>
-                                            <div class="col-md-8" style="margin-bottom: 10px">
-                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="minimum_salary_adjustment" value="<?php echo isset($staff->salary_adjustment) ? $staff->salary_adjustment : 0; ?>" placeholder="Salary Adjustment" style="width: 100%!important;" readonly>
-                                            </div>
                                             <div class="col-md-4" style="margin-bottom: 10px">
                                                 <lable>Net Salary : </lable>
                                             </div>
                                             <div class="col-md-8" style="margin-bottom: 10px">
                                                 <input type="text" class="form-control input-inline " name="net_salary" id="net_salary" placeholder="Net salary" style="width: 100%!important;">
                                             </div>
-
+                                            <div class="col-md-8" style="margin-bottom: 10px">
+                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="minimum_salary_adjustment" value="<?php echo isset($staff->salary_adjustment) ? $staff->salary_adjustment : 0; ?>" placeholder="Salary Adjustment" style="width: 100%!important;" readonly>
+                                            </div>
+                                            <div class="col-md-8" style="margin-bottom: 10px">
+                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="gross_salary_adjustment" value="0" placeholder="Gross Salary + Adjustment" style="width: 100%!important;" readonly>
+                                            </div>
                                             <div class="col-md-12" style="margin-bottom: 10px; text-align: center">
                                                 <button class=" btn green"  onclick="calculateSalary()" autocomplete="false" type="button"  >CALCULATE SALARY NOW</i></button>
                                             </div>
@@ -431,7 +431,8 @@
         var salaryBeforeDeductions = earned_salary + incentives;
         var minimumSalaryAdjustment = staffSalaryAdjustment;
 
-        var net_salary = salaryBeforeDeductions + minimumSalaryAdjustment - total_deduction - tax;
+        var net_salary = salaryBeforeDeductions - total_deduction - tax;
+        var adj = salaryBeforeDeductions + minimumSalaryAdjustment - total_deduction - tax;
         
         // console.log({
         //     basicSalary: basicSalary,
@@ -450,6 +451,8 @@
         $("#minimum_salary_adjustment").val(minimumSalaryAdjustment.toFixed(0));
         $("#net_salary").val(net_salary.toFixed(0));
         $("#earned_salary").val(earned_salary.toFixed(0));
+
+        $("#gross_salary_adjustment").val(adj.toFixed(0));
 
         togglePettycashAdjustmentError(minimumSalaryAdjustment);
     
