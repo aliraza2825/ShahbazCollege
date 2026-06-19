@@ -142,7 +142,7 @@
                                     </th>
                                     <?php if (!empty($minimum_adjustment_report)): ?>
                                     <th>
-                                        Salary Adjustment
+                                        Salary Special Allowance
                                     </th>
                                     <?php endif; ?>
                                     <th>

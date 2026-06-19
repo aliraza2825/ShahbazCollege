@@ -327,8 +327,9 @@
                                                 <input type="text" class="form-control input-inline " name="net_salary" id="net_salary" placeholder="Net salary" style="width: 100%!important;">
                                             </div>
                                             <div class="col-md-8" style="margin-bottom: 10px">
-                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="minimum_salary_adjustment" value="<?php echo isset($staff->salary_adjustment) ? $staff->salary_adjustment : 0; ?>" placeholder="Salary Adjustment" style="width: 100%!important;" readonly>
+                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="minimum_salary_adjustment" value="<?php echo isset($staff->salary_adjustment) ? $staff->salary_adjustment : 0; ?>" placeholder="Salary Special Allowance" style="width: 100%!important;" readonly>
                                             </div>
+                                            <br>
                                             <div class="col-md-8" style="margin-bottom: 10px">
                                                 <input type="text" class="form-control input-inline " name="gross_salary_adjustment" id="gross_salary_adjustment" value="0" placeholder="Gross Salary + Adjustment" style="width: 100%!important;" readonly>
                                             </div>
