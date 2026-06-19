@@ -22,6 +22,52 @@
             <div class="alert alert-danger"><?php echo $this->session->flashdata('error'); ?></div>
         <?php endif; ?>
 
+        <style>
+            .construction-panel {
+                border: 1px solid #d9e3ea;
+                background: #fff;
+                margin-bottom: 22px;
+            }
+            .construction-panel .portlet-title {
+                border-bottom: 1px solid #eef1f5;
+                padding: 14px 16px 8px;
+            }
+            .construction-panel .caption {
+                font-weight: 600;
+            }
+            .construction-panel .actions {
+                margin-top: -4px;
+            }
+            .construction-add-btn {
+                margin-left: 4px;
+                margin-bottom: 6px;
+            }
+            .construction-tabs {
+                margin-bottom: 0;
+                border-bottom-color: #dfe5ec;
+            }
+            .construction-tabs > li > a {
+                font-weight: 600;
+            }
+            .construction-tab-body {
+                border: 1px solid #dfe5ec;
+                border-top: 0;
+                background: #fff;
+                padding: 16px;
+                min-height: 220px;
+            }
+            .construction-tab-body h4 {
+                margin-top: 0;
+                font-weight: 600;
+            }
+            .construction-panel .table {
+                margin-bottom: 0;
+            }
+            .construction-modal-form label {
+                font-weight: 600;
+            }
+        </style>
+
         <div class="row" style="margin-bottom:15px;">
             <div class="col-md-12">
                 <a class="btn default" href="<?php echo site_url();?>/construction"><i class="fa fa-dashboard"></i> Dashboard</a>
@@ -140,24 +186,11 @@
         <?php endif; ?>
 
         <?php if($section == 'boq'): ?>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Project BOQ / Estimate</div></div>
-                <div class="portlet-body form">
-                    <form method="post" action="<?php echo site_url();?>/construction/save_boq">
-                        <div class="row">
-                            <div class="col-md-3"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div>
-                            <div class="col-md-3"><label>Work Item</label><input class="form-control" name="work_item" required></div>
-                            <div class="col-md-1"><label>Qty</label><input type="number" step="0.01" class="form-control" name="quantity" required></div>
-                            <div class="col-md-1"><label>Unit</label><input class="form-control" name="unit"></div>
-                            <div class="col-md-2"><label>Unit Cost</label><input type="number" step="0.01" class="form-control" name="unit_cost" required></div>
-                            <div class="col-md-2"><label>Estimated Budget</label><input type="number" step="0.01" class="form-control" name="estimated_budget"></div>
-                        </div><br>
-                        <button class="btn green">Save BOQ</button>
-                    </form>
+            <div class="portlet light bordered construction-panel">
+                <div class="portlet-title">
+                    <div class="caption"><i class="fa fa-list font-green"></i> BOQ / Estimate</div>
+                    <div class="actions"><button class="btn green btn-sm" data-toggle="modal" data-target="#boqModal"><i class="fa fa-plus"></i> Add BOQ Item</button></div>
                 </div>
-            </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">BOQ List</div></div>
                 <div class="portlet-body table-responsive">
                     <table class="table table-bordered table-hover">
                         <tr><th>Project</th><th>Work Item</th><th>Qty</th><th>Unit</th><th>Unit Cost</th><th>Total Cost</th><th>Estimated Budget</th></tr>
@@ -175,153 +208,106 @@
                     </table>
                 </div>
             </div>
+            <div class="modal fade" id="boqModal" tabindex="-1" role="dialog">
+                <div class="modal-dialog modal-lg">
+                    <div class="modal-content">
+                        <form method="post" action="<?php echo site_url();?>/construction/save_boq" class="construction-modal-form">
+                            <div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Add BOQ Item</h4></div>
+                            <div class="modal-body">
+                                <div class="row">
+                                    <div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div>
+                                    <div class="col-md-4"><label>Work Item</label><input class="form-control" name="work_item" required></div>
+                                    <div class="col-md-2"><label>Qty</label><input type="number" step="0.01" class="form-control" name="quantity" required></div>
+                                    <div class="col-md-2"><label>Unit</label><input class="form-control" name="unit"></div>
+                                </div><br>
+                                <div class="row">
+                                    <div class="col-md-6"><label>Unit Cost</label><input type="number" step="0.01" class="form-control" name="unit_cost" required></div>
+                                    <div class="col-md-6"><label>Estimated Budget</label><input type="number" step="0.01" class="form-control" name="estimated_budget"></div>
+                                </div>
+                            </div>
+                            <div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save BOQ</button></div>
+                        </form>
+                    </div>
+                </div>
+            </div>
         <?php endif; ?>
 
         <?php if($section == 'work'): ?>
-            <div class="row">
-                <div class="col-md-6">
-                    <div class="portlet box green">
-                        <div class="portlet-title"><div class="caption">Issue Material From Inventory</div></div>
-                        <div class="portlet-body">
-                            <form method="post" action="<?php echo site_url();?>/construction/save_material_issue">
-                                <label>Project</label>
-                                <select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select><br>
-                                <label>Inventory Product</label>
-                                <select class="form-control" name="product_id" required>
-                                    <option value="">Select Product</option>
-                                    <?php foreach($products as $product): ?>
-                                        <option value="<?php echo $product['product_id']; ?>"><?php echo htmlspecialchars($product['product_name'].' | '.$product['campus_name'].' | '.$product['room_name'].' | Stock '.$product['stock_qty'].' | Unit '.$product['estimated_price']); ?></option>
-                                    <?php endforeach; ?>
-                                </select><br>
-                                <div class="row">
-                                    <div class="col-md-4"><label>Quantity</label><input type="number" min="1" class="form-control" name="quantity" required></div>
-                                    <div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="issue_date" value="<?php echo date('Y-m-d'); ?>" required></div>
-                                    <div class="col-md-4"><label>Remarks</label><input class="form-control" name="remarks"></div>
-                                </div><br>
-                                <button class="btn green">Issue Material</button>
-                            </form>
-                        </div>
+            <div class="portlet light bordered construction-panel">
+                <div class="portlet-title">
+                    <div class="caption"><i class="fa fa-tasks font-green"></i> Site Work</div>
+                    <div class="actions">
+                        <button class="btn green btn-sm construction-add-btn" data-target="#materialModal" data-toggle="modal"><i class="fa fa-plus"></i> Material</button>
+                        <button class="btn green btn-sm construction-add-btn" data-target="#labourModal" data-toggle="modal"><i class="fa fa-plus"></i> Labour</button>
+                        <button class="btn green btn-sm construction-add-btn" data-target="#attendanceModal" data-toggle="modal"><i class="fa fa-plus"></i> Attendance</button>
+                        <button class="btn green btn-sm construction-add-btn" data-target="#expenseModal" data-toggle="modal"><i class="fa fa-plus"></i> Expense</button>
+                        <button class="btn green btn-sm construction-add-btn" data-target="#equipmentModal" data-toggle="modal"><i class="fa fa-plus"></i> Equipment</button>
+                        <button class="btn green btn-sm construction-add-btn" data-target="#progressModal" data-toggle="modal"><i class="fa fa-plus"></i> Progress</button>
                     </div>
                 </div>
-                <div class="col-md-6">
-                    <div class="portlet box green">
-                        <div class="portlet-title"><div class="caption">Add Labour</div></div>
-                        <div class="portlet-body">
-                            <form method="post" action="<?php echo site_url();?>/construction/save_labour">
-                                <select class="form-control" name="project_id"><?php echo construction_project_options($projects); ?></select><br>
-                                <div class="row">
-                                    <div class="col-md-6"><input class="form-control" name="labour_name" placeholder="Labour Name" required></div>
-                                    <div class="col-md-6"><input class="form-control" name="designation" placeholder="Designation"></div>
-                                </div><br>
-                                <div class="row">
-                                    <div class="col-md-4"><input class="form-control" name="cnic" placeholder="CNIC"></div>
-                                    <div class="col-md-4"><input class="form-control" name="mobile" placeholder="Mobile"></div>
-                                    <div class="col-md-4"><input type="number" step="0.01" class="form-control" name="daily_wage" placeholder="Daily Wage"></div>
-                                </div><br>
-                                <button class="btn green">Save Labour</button>
-                            </form>
+                <div class="portlet-body">
+                    <ul class="nav nav-tabs construction-tabs">
+                        <li class="active"><a href="#work_material" data-toggle="tab">Material</a></li>
+                        <li><a href="#work_labour" data-toggle="tab">Labour</a></li>
+                        <li><a href="#work_expense" data-toggle="tab">Expenses</a></li>
+                        <li><a href="#work_equipment" data-toggle="tab">Equipment</a></li>
+                        <li><a href="#work_progress" data-toggle="tab">Progress</a></li>
+                    </ul>
+                    <div class="tab-content construction-tab-body">
+                        <div class="tab-pane active" id="work_material">
+                            <div class="table-responsive">
+                                <table class="table table-bordered table-hover">
+                                    <tr><th>Date</th><th>Project</th><th>Material</th><th>Qty</th><th>Cost</th><th>Remarks</th></tr>
+                                    <?php foreach($issues as $row): ?><tr><td><?php echo $row['issue_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['product_name']); ?></td><td><?php echo $row['quantity']; ?></td><td><?php echo round($row['total_cost']); ?></td><td><?php echo htmlspecialchars($row['remarks']); ?></td></tr><?php endforeach; ?>
+                                </table>
+                            </div>
                         </div>
-                    </div>
-                </div>
-            </div>
-            <div class="row">
-                <div class="col-md-6">
-                    <div class="portlet box green">
-                        <div class="portlet-title"><div class="caption">Labour Attendance / Payroll</div></div>
-                        <div class="portlet-body">
-                            <form method="post" action="<?php echo site_url();?>/construction/save_labour_attendance">
-                                <div class="row">
-                                    <div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div>
-                                    <div class="col-md-4"><label>Labour</label><select class="form-control" name="labour_id" required><option value="">Select Labour</option><?php foreach($labours as $labour): ?><option value="<?php echo $labour['id']; ?>"><?php echo htmlspecialchars($labour['labour_name']); ?></option><?php endforeach; ?></select></div>
-                                    <div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="attendance_date" value="<?php echo date('Y-m-d'); ?>" required></div>
-                                </div><br>
-                                <div class="row">
-                                    <div class="col-md-3"><label>Status</label><select class="form-control" name="status"><option>Present</option><option>Absent</option></select></div>
-                                    <div class="col-md-3"><label>Overtime Hrs</label><input type="number" step="0.01" class="form-control" name="overtime_hours"></div>
-                                    <div class="col-md-3"><label>Overtime Amount</label><input type="number" step="0.01" class="form-control" name="overtime_amount"></div>
-                                    <div class="col-md-3"><label>&nbsp;</label><button class="btn green btn-block">Save Attendance</button></div>
+                        <div class="tab-pane" id="work_labour">
+                            <div class="row">
+                                <div class="col-md-5">
+                                    <h4>Labours</h4>
+                                    <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Project</th><th>Name</th><th>Designation</th><th>Daily Wage</th></tr><?php foreach($labours as $row): ?><tr><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['labour_name']); ?></td><td><?php echo htmlspecialchars($row['designation']); ?></td><td><?php echo round($row['daily_wage']); ?></td></tr><?php endforeach; ?></table></div>
                                 </div>
-                            </form>
+                                <div class="col-md-7">
+                                    <h4>Attendance / Payroll</h4>
+                                    <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Date</th><th>Project</th><th>Labour</th><th>Status</th><th>Overtime</th></tr><?php foreach($attendance as $row): ?><tr><td><?php echo $row['attendance_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['labour_name']); ?></td><td><?php echo htmlspecialchars($row['status']); ?></td><td><?php echo round($row['overtime_amount']); ?></td></tr><?php endforeach; ?></table></div>
+                                </div>
+                            </div>
                         </div>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="portlet box green">
-                        <div class="portlet-title"><div class="caption">Site Expense</div></div>
-                        <div class="portlet-body">
-                            <form method="post" enctype="multipart/form-data" action="<?php echo site_url();?>/construction/save_expense">
-                                <div class="row">
-                                    <div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div>
-                                    <div class="col-md-3"><label>Category</label><select class="form-control" name="category"><?php foreach($categories as $category): ?><option><?php echo $category; ?></option><?php endforeach; ?></select></div>
-                                    <div class="col-md-3"><label>Date</label><input type="date" class="form-control" name="expense_date" value="<?php echo date('Y-m-d'); ?>"></div>
-                                    <div class="col-md-2"><label>Amount</label><input type="number" step="0.01" class="form-control" name="amount"></div>
-                                </div><br>
-                                <textarea class="form-control" name="description" placeholder="Description"></textarea><br>
-                                <input type="file" name="attachment"><br><br>
-                                <button class="btn green">Save Expense</button>
-                            </form>
+                        <div class="tab-pane" id="work_expense">
+                            <div class="table-responsive">
+                                <table class="table table-bordered table-hover">
+                                    <tr><th>Date</th><th>Project</th><th>Category</th><th>Amount</th><th>Description</th><th>Attachment</th></tr>
+                                    <?php foreach($expenses as $row): ?><tr><td><?php echo $row['expense_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['category']); ?></td><td><?php echo round($row['amount']); ?></td><td><?php echo htmlspecialchars($row['description']); ?></td><td><?php if($row['attachment']): ?><a target="_blank" href="<?php echo base_url();?>uploads/<?php echo $row['attachment']; ?>">View</a><?php endif; ?></td></tr><?php endforeach; ?>
+                                </table>
+                            </div>
                         </div>
-                    </div>
-                </div>
-            </div>
-            <div class="row">
-                <div class="col-md-6">
-                    <div class="portlet box green">
-                        <div class="portlet-title"><div class="caption">Equipment / Machinery</div></div>
-                        <div class="portlet-body">
-                            <form method="post" action="<?php echo site_url();?>/construction/save_equipment">
-                                <div class="row">
-                                    <div class="col-md-4"><label>Project</label><select class="form-control" name="project_id"><?php echo construction_project_options($projects); ?></select></div>
-                                    <div class="col-md-4"><label>Equipment</label><input class="form-control" name="equipment_name" required></div>
-                                    <div class="col-md-4"><label>Operator</label><input class="form-control" name="operator"></div>
-                                </div><br>
-                                <div class="row">
-                                    <div class="col-md-4"><label>Fuel</label><input type="number" step="0.01" class="form-control" name="fuel_consumption"></div>
-                                    <div class="col-md-4"><label>Maintenance Cost</label><input type="number" step="0.01" class="form-control" name="maintenance_cost"></div>
-                                    <div class="col-md-4"><label>Repair Cost</label><input type="number" step="0.01" class="form-control" name="repair_cost"></div>
-                                </div><br>
-                                <textarea class="form-control" name="usage_history" placeholder="Usage History"></textarea><br>
-                                <button class="btn green">Save Equipment</button>
-                            </form>
+                        <div class="tab-pane" id="work_equipment">
+                            <div class="table-responsive">
+                                <table class="table table-bordered table-hover">
+                                    <tr><th>Project</th><th>Equipment</th><th>Operator</th><th>Fuel</th><th>Maintenance</th><th>Repair</th><th>Usage</th></tr>
+                                    <?php foreach($equipment as $row): ?><tr><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['equipment_name']); ?></td><td><?php echo htmlspecialchars($row['operator']); ?></td><td><?php echo round($row['fuel_consumption']); ?></td><td><?php echo round($row['maintenance_cost']); ?></td><td><?php echo round($row['repair_cost']); ?></td><td><?php echo htmlspecialchars($row['usage_history']); ?></td></tr><?php endforeach; ?>
+                                </table>
+                            </div>
                         </div>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="portlet box green">
-                        <div class="portlet-title"><div class="caption">Work Progress</div></div>
-                        <div class="portlet-body">
-                            <form method="post" action="<?php echo site_url();?>/construction/save_progress">
-                                <div class="row">
-                                    <div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div>
-                                    <div class="col-md-4"><label>Milestone</label><input class="form-control" name="milestone"></div>
-                                    <div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="progress_date" value="<?php echo date('Y-m-d'); ?>"></div>
-                                </div><br>
-                                <div class="row">
-                                    <div class="col-md-3"><label>Foundation %</label><input type="number" step="0.01" class="form-control" name="foundation_percent"></div>
-                                    <div class="col-md-3"><label>Structure %</label><input type="number" step="0.01" class="form-control" name="structure_percent"></div>
-                                    <div class="col-md-3"><label>Finishing %</label><input type="number" step="0.01" class="form-control" name="finishing_percent"></div>
-                                    <div class="col-md-3"><label>Overall %</label><input type="number" step="0.01" class="form-control" name="overall_percent"></div>
-                                </div><br>
-                                <textarea class="form-control" name="remarks" placeholder="Remarks"></textarea><br>
-                                <button class="btn green">Save Progress</button>
-                            </form>
+                        <div class="tab-pane" id="work_progress">
+                            <div class="table-responsive">
+                                <table class="table table-bordered table-hover">
+                                    <tr><th>Date</th><th>Project</th><th>Milestone</th><th>Foundation</th><th>Structure</th><th>Finishing</th><th>Overall</th><th>Remarks</th></tr>
+                                    <?php foreach($progress as $row): ?><tr><td><?php echo $row['progress_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['milestone']); ?></td><td><?php echo $row['foundation_percent']; ?>%</td><td><?php echo $row['structure_percent']; ?>%</td><td><?php echo $row['finishing_percent']; ?>%</td><td><?php echo $row['overall_percent']; ?>%</td><td><?php echo htmlspecialchars($row['remarks']); ?></td></tr><?php endforeach; ?>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Recent Site Work</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Type</th><th>Date</th><th>Project</th><th>Detail</th><th>Amount / Progress</th></tr>
-                        <?php foreach($issues as $row): ?><tr><td>Material</td><td><?php echo $row['issue_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['product_name'].' x '.$row['quantity']); ?></td><td><?php echo round($row['total_cost']); ?></td></tr><?php endforeach; ?>
-                        <?php foreach($attendance as $row): ?><tr><td>Labour</td><td><?php echo $row['attendance_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['labour_name'].' - '.$row['status']); ?></td><td><?php echo round($row['overtime_amount']); ?></td></tr><?php endforeach; ?>
-                        <?php foreach($expenses as $row): ?><tr><td>Expense</td><td><?php echo $row['expense_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['category'].' - '.$row['description']); ?></td><td><?php echo round($row['amount']); ?></td></tr><?php endforeach; ?>
-                        <?php foreach($equipment as $row): ?><tr><td>Equipment</td><td><?php echo substr($row['created_at'], 0, 10); ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['equipment_name'].' - '.$row['operator']); ?></td><td><?php echo round($row['maintenance_cost'] + $row['repair_cost']); ?></td></tr><?php endforeach; ?>
-                        <?php foreach($progress as $row): ?><tr><td>Progress</td><td><?php echo $row['progress_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['milestone']); ?></td><td><?php echo $row['overall_percent']; ?>%</td></tr><?php endforeach; ?>
-                    </table>
-                </div>
-            </div>
+
+            <div class="modal fade" id="materialModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_material_issue"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Issue Material From Inventory</h4></div><div class="modal-body"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select><br><label>Inventory Product</label><select class="form-control" name="product_id" required><option value="">Select Product</option><?php foreach($products as $product): ?><option value="<?php echo $product['product_id']; ?>"><?php echo htmlspecialchars($product['product_name'].' | '.$product['campus_name'].' | '.$product['room_name'].' | Stock '.$product['stock_qty'].' | Unit '.$product['estimated_price']); ?></option><?php endforeach; ?></select><br><div class="row"><div class="col-md-4"><label>Quantity</label><input type="number" min="1" class="form-control" name="quantity" required></div><div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="issue_date" value="<?php echo date('Y-m-d'); ?>" required></div><div class="col-md-4"><label>Remarks</label><input class="form-control" name="remarks"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Issue Material</button></div></form></div></div></div>
+            <div class="modal fade" id="labourModal" tabindex="-1" role="dialog"><div class="modal-dialog"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_labour"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Add Labour</h4></div><div class="modal-body"><label>Project</label><select class="form-control" name="project_id"><?php echo construction_project_options($projects); ?></select><br><label>Labour Name</label><input class="form-control" name="labour_name" required><br><label>Designation</label><input class="form-control" name="designation"><br><div class="row"><div class="col-md-4"><label>CNIC</label><input class="form-control" name="cnic"></div><div class="col-md-4"><label>Mobile</label><input class="form-control" name="mobile"></div><div class="col-md-4"><label>Daily Wage</label><input type="number" step="0.01" class="form-control" name="daily_wage"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Labour</button></div></form></div></div></div>
+            <div class="modal fade" id="attendanceModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_labour_attendance"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Labour Attendance / Payroll</h4></div><div class="modal-body"><div class="row"><div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div><div class="col-md-4"><label>Labour</label><select class="form-control" name="labour_id" required><option value="">Select Labour</option><?php foreach($labours as $labour): ?><option value="<?php echo $labour['id']; ?>"><?php echo htmlspecialchars($labour['labour_name']); ?></option><?php endforeach; ?></select></div><div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="attendance_date" value="<?php echo date('Y-m-d'); ?>" required></div></div><br><div class="row"><div class="col-md-4"><label>Status</label><select class="form-control" name="status"><option>Present</option><option>Absent</option></select></div><div class="col-md-4"><label>Overtime Hrs</label><input type="number" step="0.01" class="form-control" name="overtime_hours"></div><div class="col-md-4"><label>Overtime Amount</label><input type="number" step="0.01" class="form-control" name="overtime_amount"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Attendance</button></div></form></div></div></div>
+            <div class="modal fade" id="expenseModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" enctype="multipart/form-data" action="<?php echo site_url();?>/construction/save_expense"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Site Expense</h4></div><div class="modal-body"><div class="row"><div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div><div class="col-md-3"><label>Category</label><select class="form-control" name="category"><?php foreach($categories as $category): ?><option><?php echo $category; ?></option><?php endforeach; ?></select></div><div class="col-md-3"><label>Date</label><input type="date" class="form-control" name="expense_date" value="<?php echo date('Y-m-d'); ?>"></div><div class="col-md-2"><label>Amount</label><input type="number" step="0.01" class="form-control" name="amount"></div></div><br><label>Description</label><textarea class="form-control" name="description"></textarea><br><input type="file" name="attachment"></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Expense</button></div></form></div></div></div>
+            <div class="modal fade" id="equipmentModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_equipment"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Equipment / Machinery</h4></div><div class="modal-body"><div class="row"><div class="col-md-4"><label>Project</label><select class="form-control" name="project_id"><?php echo construction_project_options($projects); ?></select></div><div class="col-md-4"><label>Equipment</label><input class="form-control" name="equipment_name" required></div><div class="col-md-4"><label>Operator</label><input class="form-control" name="operator"></div></div><br><div class="row"><div class="col-md-4"><label>Fuel</label><input type="number" step="0.01" class="form-control" name="fuel_consumption"></div><div class="col-md-4"><label>Maintenance Cost</label><input type="number" step="0.01" class="form-control" name="maintenance_cost"></div><div class="col-md-4"><label>Repair Cost</label><input type="number" step="0.01" class="form-control" name="repair_cost"></div></div><br><label>Usage History</label><textarea class="form-control" name="usage_history"></textarea></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Equipment</button></div></form></div></div></div>
+            <div class="modal fade" id="progressModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_progress"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Work Progress</h4></div><div class="modal-body"><div class="row"><div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div><div class="col-md-4"><label>Milestone</label><input class="form-control" name="milestone"></div><div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="progress_date" value="<?php echo date('Y-m-d'); ?>"></div></div><br><div class="row"><div class="col-md-3"><label>Foundation %</label><input type="number" step="0.01" class="form-control" name="foundation_percent"></div><div class="col-md-3"><label>Structure %</label><input type="number" step="0.01" class="form-control" name="structure_percent"></div><div class="col-md-3"><label>Finishing %</label><input type="number" step="0.01" class="form-control" name="finishing_percent"></div><div class="col-md-3"><label>Overall %</label><input type="number" step="0.01" class="form-control" name="overall_percent"></div></div><br><label>Remarks</label><textarea class="form-control" name="remarks"></textarea></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Progress</button></div></form></div></div></div>
         <?php endif; ?>
 
         <?php if($section == 'entries'): ?>
@@ -381,58 +367,14 @@
         <?php endif; ?>
 
         <?php if($section == 'contractors'): ?>
-            <div class="row">
-                <div class="col-md-6">
-                    <div class="portlet box green">
-                        <div class="portlet-title"><div class="caption">Add Contractor</div></div>
-                        <div class="portlet-body">
-                            <form method="post" action="<?php echo site_url();?>/construction/save_contractor">
-                                <label>Project</label>
-                                <select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select><br>
-                                <label>Contractor Name</label>
-                                <input class="form-control" name="contractor_name" required><br>
-                                <label>Contact Details</label>
-                                <textarea class="form-control" name="contact_details"></textarea><br>
-                                <div class="row">
-                                    <div class="col-md-6"><label>Contract Amount</label><input type="number" step="0.01" class="form-control" name="contract_amount"></div>
-                                    <div class="col-md-6"><label>Advance Agreed</label><input type="number" step="0.01" class="form-control" name="advance_payment"></div>
-                                </div><br>
-                                <div class="row">
-                                    <div class="col-md-6"><label>Running Bills</label><input type="number" step="0.01" class="form-control" name="running_bills"></div>
-                                    <div class="col-md-6"><label>Final Bill / Done Amount</label><input type="number" step="0.01" class="form-control" name="final_bill"></div>
-                                </div><br>
-                                <button class="btn green">Save Contractor</button>
-                            </form>
-                        </div>
+            <div class="portlet light bordered construction-panel">
+                <div class="portlet-title">
+                    <div class="caption"><i class="fa fa-briefcase font-green"></i> Contractors</div>
+                    <div class="actions">
+                        <button class="btn green btn-sm" data-toggle="modal" data-target="#contractorModal"><i class="fa fa-plus"></i> Add Contractor</button>
+                        <button class="btn green btn-sm" data-toggle="modal" data-target="#contractorPaymentModal"><i class="fa fa-plus"></i> Add Payment</button>
                     </div>
                 </div>
-                <div class="col-md-6">
-                    <div class="portlet box green">
-                        <div class="portlet-title"><div class="caption">Add Contractor Payment</div></div>
-                        <div class="portlet-body">
-                            <form method="post" action="<?php echo site_url();?>/construction/save_contractor_payment">
-                                <label>Contractor</label>
-                                <select class="form-control" name="contractor_id" required>
-                                    <option value="">Select Contractor</option>
-                                    <?php foreach($contractors as $contractor): ?>
-                                        <option value="<?php echo $contractor['id']; ?>"><?php echo htmlspecialchars($contractor['contractor_name'].' - '.$contractor['project_name']); ?></option>
-                                    <?php endforeach; ?>
-                                </select><br>
-                                <div class="row">
-                                    <div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="payment_date" value="<?php echo date('Y-m-d'); ?>" required></div>
-                                    <div class="col-md-4"><label>Amount</label><input type="number" step="0.01" class="form-control" name="amount" required></div>
-                                    <div class="col-md-4"><label>Payment Type</label><select class="form-control" name="payment_type"><option>Advance</option><option>Running Bill</option><option>Final Bill</option></select></div>
-                                </div><br>
-                                <label>Remarks</label>
-                                <textarea class="form-control" name="remarks"></textarea><br>
-                                <button class="btn green">Save Payment</button>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Contractor Summary</div></div>
                 <div class="portlet-body table-responsive">
                     <table class="table table-bordered table-hover">
                         <tr><th>Project</th><th>Contractor</th><th>Contact</th><th>Contract Amount</th><th>Advance Agreed</th><th>Running Bills</th><th>Final / Done Amount</th><th>Paid</th><th>Remaining</th></tr>
@@ -452,8 +394,8 @@
                     </table>
                 </div>
             </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Payment History</div></div>
+            <div class="portlet light bordered construction-panel">
+                <div class="portlet-title"><div class="caption"><i class="fa fa-money font-green"></i> Payment History</div></div>
                 <div class="portlet-body table-responsive">
                     <table class="table table-bordered table-hover">
                         <tr><th>Date</th><th>Project</th><th>Contractor</th><th>Type</th><th>Amount</th><th>Remarks</th></tr>
@@ -470,137 +412,48 @@
                     </table>
                 </div>
             </div>
+            <div class="modal fade" id="contractorModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_contractor" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Add Contractor</h4></div><div class="modal-body"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select><br><div class="row"><div class="col-md-6"><label>Contractor Name</label><input class="form-control" name="contractor_name" required></div><div class="col-md-6"><label>Contact Details</label><input class="form-control" name="contact_details"></div></div><br><div class="row"><div class="col-md-3"><label>Contract Amount</label><input type="number" step="0.01" class="form-control" name="contract_amount"></div><div class="col-md-3"><label>Advance Agreed</label><input type="number" step="0.01" class="form-control" name="advance_payment"></div><div class="col-md-3"><label>Running Bills</label><input type="number" step="0.01" class="form-control" name="running_bills"></div><div class="col-md-3"><label>Final / Done Amount</label><input type="number" step="0.01" class="form-control" name="final_bill"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Contractor</button></div></form></div></div></div>
+            <div class="modal fade" id="contractorPaymentModal" tabindex="-1" role="dialog"><div class="modal-dialog"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_contractor_payment" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Add Contractor Payment</h4></div><div class="modal-body"><label>Contractor</label><select class="form-control" name="contractor_id" required><option value="">Select Contractor</option><?php foreach($contractors as $contractor): ?><option value="<?php echo $contractor['id']; ?>"><?php echo htmlspecialchars($contractor['contractor_name'].' - '.$contractor['project_name']); ?></option><?php endforeach; ?></select><br><div class="row"><div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="payment_date" value="<?php echo date('Y-m-d'); ?>" required></div><div class="col-md-4"><label>Amount</label><input type="number" step="0.01" class="form-control" name="amount" required></div><div class="col-md-4"><label>Payment Type</label><select class="form-control" name="payment_type"><option>Advance</option><option>Running Bill</option><option>Final Bill</option></select></div></div><br><label>Remarks</label><textarea class="form-control" name="remarks"></textarea></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Payment</button></div></form></div></div></div>
         <?php endif; ?>
 
         <?php if($section == 'reports'): ?>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Project Cost Report</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Project</th><th>Budget</th><th>Material</th><th>Labour</th><th>Contractor</th><th>Site Expense</th><th>Equipment</th><th>Actual Cost</th><th>Remaining Budget</th></tr>
-                        <?php foreach($project_costs as $row): ?>
-                            <tr>
-                                <td><?php echo htmlspecialchars($row['project_name']); ?></td>
-                                <td><?php echo round($row['budget']); ?></td>
-                                <td><?php echo round($row['material_cost']); ?></td>
-                                <td><?php echo round($row['labour_cost']); ?></td>
-                                <td><?php echo round($row['contractor_cost']); ?></td>
-                                <td><?php echo round($row['site_expense']); ?></td>
-                                <td><?php echo round($row['equipment_cost']); ?></td>
-                                <td><?php echo round($row['actual_cost']); ?></td>
-                                <td><?php echo round($row['remaining_budget']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </table>
+            <div class="portlet light bordered construction-panel">
+                <div class="portlet-title">
+                    <div class="caption"><i class="fa fa-file font-green"></i> Reports</div>
                 </div>
-            </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Contractor Payment Report</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Project</th><th>Contractor</th><th>Done Amount</th><th>Paid</th><th>Remaining</th></tr>
-                        <?php foreach($contractors as $row): ?>
-                            <tr>
-                                <td><?php echo htmlspecialchars($row['project_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['contractor_name']); ?></td>
-                                <td><?php echo round($row['done_amount']); ?></td>
-                                <td><?php echo round($row['paid_amount']); ?></td>
-                                <td><?php echo round($row['remaining_amount']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </table>
-                </div>
-            </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Material Consumption Report</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Date</th><th>Project</th><th>Material</th><th>Qty</th><th>Cost</th></tr>
-                        <?php foreach($material as $row): ?>
-                            <tr>
-                                <td><?php echo $row['issue_date']; ?></td>
-                                <td><?php echo htmlspecialchars($row['project_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['product_name']); ?></td>
-                                <td><?php echo $row['quantity']; ?></td>
-                                <td><?php echo round($row['total_cost']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </table>
-                </div>
-            </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Labour Report</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Project</th><th>Labour</th><th>Month</th><th>Payable</th><th>Paid</th><th>Remarks</th></tr>
-                        <?php foreach($labour as $row): ?>
-                            <tr>
-                                <td><?php echo htmlspecialchars($row['project_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['labour_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['payroll_month']); ?></td>
-                                <td><?php echo round($row['payable_amount']); ?></td>
-                                <td><?php echo round($row['paid_amount']); ?></td>
-                                <td><?php echo htmlspecialchars($row['remarks']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </table>
-                </div>
-            </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Site Expense Report</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Date</th><th>Project</th><th>Category</th><th>Amount</th><th>Description</th><th>Attachment</th></tr>
-                        <?php foreach($expenses as $row): ?>
-                            <tr>
-                                <td><?php echo $row['expense_date']; ?></td>
-                                <td><?php echo htmlspecialchars($row['project_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['category']); ?></td>
-                                <td><?php echo round($row['amount']); ?></td>
-                                <td><?php echo htmlspecialchars($row['description']); ?></td>
-                                <td><?php if($row['attachment']): ?><a target="_blank" href="<?php echo base_url();?>uploads/<?php echo $row['attachment']; ?>">View</a><?php endif; ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </table>
-                </div>
-            </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Equipment Report</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Project</th><th>Equipment</th><th>Operator</th><th>Fuel</th><th>Maintenance</th><th>Repair</th><th>Usage</th></tr>
-                        <?php foreach($equipment as $row): ?>
-                            <tr>
-                                <td><?php echo htmlspecialchars($row['project_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['equipment_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['operator']); ?></td>
-                                <td><?php echo round($row['fuel_consumption']); ?></td>
-                                <td><?php echo round($row['maintenance_cost']); ?></td>
-                                <td><?php echo round($row['repair_cost']); ?></td>
-                                <td><?php echo htmlspecialchars($row['usage_history']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </table>
-                </div>
-            </div>
-            <div class="portlet box green">
-                <div class="portlet-title"><div class="caption">Project Progress Report</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Date</th><th>Project</th><th>Milestone</th><th>Foundation</th><th>Structure</th><th>Finishing</th><th>Overall</th><th>Remarks</th></tr>
-                        <?php foreach($progress as $row): ?>
-                            <tr>
-                                <td><?php echo $row['progress_date']; ?></td>
-                                <td><?php echo htmlspecialchars($row['project_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['milestone']); ?></td>
-                                <td><?php echo $row['foundation_percent']; ?>%</td>
-                                <td><?php echo $row['structure_percent']; ?>%</td>
-                                <td><?php echo $row['finishing_percent']; ?>%</td>
-                                <td><?php echo $row['overall_percent']; ?>%</td>
-                                <td><?php echo htmlspecialchars($row['remarks']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </table>
+                <div class="portlet-body">
+                    <ul class="nav nav-tabs construction-tabs">
+                        <li class="active"><a href="#report_cost" data-toggle="tab">Project Cost</a></li>
+                        <li><a href="#report_contractor" data-toggle="tab">Contractors</a></li>
+                        <li><a href="#report_material" data-toggle="tab">Materials</a></li>
+                        <li><a href="#report_labour" data-toggle="tab">Labour</a></li>
+                        <li><a href="#report_expense" data-toggle="tab">Expenses</a></li>
+                        <li><a href="#report_equipment" data-toggle="tab">Equipment</a></li>
+                        <li><a href="#report_progress" data-toggle="tab">Progress</a></li>
+                    </ul>
+                    <div class="tab-content construction-tab-body">
+                        <div class="tab-pane active" id="report_cost">
+                            <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Project</th><th>Budget</th><th>Material</th><th>Labour</th><th>Contractor</th><th>Site Expense</th><th>Equipment</th><th>Actual Cost</th><th>Remaining Budget</th></tr><?php foreach($project_costs as $row): ?><tr><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo round($row['budget']); ?></td><td><?php echo round($row['material_cost']); ?></td><td><?php echo round($row['labour_cost']); ?></td><td><?php echo round($row['contractor_cost']); ?></td><td><?php echo round($row['site_expense']); ?></td><td><?php echo round($row['equipment_cost']); ?></td><td><?php echo round($row['actual_cost']); ?></td><td><?php echo round($row['remaining_budget']); ?></td></tr><?php endforeach; ?></table></div>
+                        </div>
+                        <div class="tab-pane" id="report_contractor">
+                            <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Project</th><th>Contractor</th><th>Done Amount</th><th>Paid</th><th>Remaining</th></tr><?php foreach($contractors as $row): ?><tr><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['contractor_name']); ?></td><td><?php echo round($row['done_amount']); ?></td><td><?php echo round($row['paid_amount']); ?></td><td><?php echo round($row['remaining_amount']); ?></td></tr><?php endforeach; ?></table></div>
+                        </div>
+                        <div class="tab-pane" id="report_material">
+                            <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Date</th><th>Project</th><th>Material</th><th>Qty</th><th>Cost</th></tr><?php foreach($material as $row): ?><tr><td><?php echo $row['issue_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['product_name']); ?></td><td><?php echo $row['quantity']; ?></td><td><?php echo round($row['total_cost']); ?></td></tr><?php endforeach; ?></table></div>
+                        </div>
+                        <div class="tab-pane" id="report_labour">
+                            <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Project</th><th>Labour</th><th>Month</th><th>Payable</th><th>Paid</th><th>Remarks</th></tr><?php foreach($labour as $row): ?><tr><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['labour_name']); ?></td><td><?php echo htmlspecialchars($row['payroll_month']); ?></td><td><?php echo round($row['payable_amount']); ?></td><td><?php echo round($row['paid_amount']); ?></td><td><?php echo htmlspecialchars($row['remarks']); ?></td></tr><?php endforeach; ?></table></div>
+                        </div>
+                        <div class="tab-pane" id="report_expense">
+                            <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Date</th><th>Project</th><th>Category</th><th>Amount</th><th>Description</th><th>Attachment</th></tr><?php foreach($expenses as $row): ?><tr><td><?php echo $row['expense_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['category']); ?></td><td><?php echo round($row['amount']); ?></td><td><?php echo htmlspecialchars($row['description']); ?></td><td><?php if($row['attachment']): ?><a target="_blank" href="<?php echo base_url();?>uploads/<?php echo $row['attachment']; ?>">View</a><?php endif; ?></td></tr><?php endforeach; ?></table></div>
+                        </div>
+                        <div class="tab-pane" id="report_equipment">
+                            <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Project</th><th>Equipment</th><th>Operator</th><th>Fuel</th><th>Maintenance</th><th>Repair</th><th>Usage</th></tr><?php foreach($equipment as $row): ?><tr><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['equipment_name']); ?></td><td><?php echo htmlspecialchars($row['operator']); ?></td><td><?php echo round($row['fuel_consumption']); ?></td><td><?php echo round($row['maintenance_cost']); ?></td><td><?php echo round($row['repair_cost']); ?></td><td><?php echo htmlspecialchars($row['usage_history']); ?></td></tr><?php endforeach; ?></table></div>
+                        </div>
+                        <div class="tab-pane" id="report_progress">
+                            <div class="table-responsive"><table class="table table-bordered table-hover"><tr><th>Date</th><th>Project</th><th>Milestone</th><th>Foundation</th><th>Structure</th><th>Finishing</th><th>Overall</th><th>Remarks</th></tr><?php foreach($progress as $row): ?><tr><td><?php echo $row['progress_date']; ?></td><td><?php echo htmlspecialchars($row['project_name']); ?></td><td><?php echo htmlspecialchars($row['milestone']); ?></td><td><?php echo $row['foundation_percent']; ?>%</td><td><?php echo $row['structure_percent']; ?>%</td><td><?php echo $row['finishing_percent']; ?>%</td><td><?php echo $row['overall_percent']; ?>%</td><td><?php echo htmlspecialchars($row['remarks']); ?></td></tr><?php endforeach; ?></table></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         <?php endif; ?>
