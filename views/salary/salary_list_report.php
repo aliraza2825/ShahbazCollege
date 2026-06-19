@@ -99,7 +99,7 @@
                         <div class="portlet-title">
                             <div class="caption">
                                 <i class="fa fa-list"></i>
-                                <?php echo !empty($minimum_adjustment_report) ? 'Salary Adjustment Report' : 'Staff Salary List'; ?>
+                                <?php echo !empty($minimum_adjustment_report) ? 'Salary Disburse Report' : 'Staff Salary List'; ?>
                                 ( <?php echo @$salary[0]['campus_name'];?> ) For The Month of <?php echo $month.' - '.$year ?>
 
                             </div>
