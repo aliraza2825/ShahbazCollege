@@ -10,6 +10,13 @@
         }
     }
     $project_costs = isset($project_costs) ? $project_costs : array();
+    $construction_access = checkUserAccess();
+    if (!function_exists('construction_can')) {
+        function construction_can($field, $access) {
+            $ci =& get_instance();
+            return $ci->session->userdata('role') == 'Admin' || (!empty($access) && isset($access[0][$field]) && (int) $access[0][$field] === 1);
+        }
+    }
 ?>
 <div class="page-content-wrapper">
     <div class="page-content">
@@ -132,12 +139,24 @@
 
         <div class="row" style="margin-bottom:15px;">
             <div class="col-md-12">
+                <?php if(construction_can('construction_dashboard', $construction_access)): ?>
                 <a class="btn default" href="<?php echo site_url();?>/construction"><i class="fa fa-dashboard"></i> Dashboard</a>
+                <?php endif; ?>
+                <?php if(construction_can('construction_projects', $construction_access)): ?>
                 <a class="btn default" href="<?php echo site_url();?>/construction/projects"><i class="fa fa-building"></i> Projects</a>
+                <?php endif; ?>
+                <?php if(construction_can('construction_boq', $construction_access)): ?>
                 <a class="btn default" href="<?php echo site_url();?>/construction/boq"><i class="fa fa-list"></i> BOQ / Estimate</a>
+                <?php endif; ?>
+                <?php if(construction_can('construction_work', $construction_access)): ?>
                 <a class="btn default" href="<?php echo site_url();?>/construction/work"><i class="fa fa-plus"></i> Site Work</a>
+                <?php endif; ?>
+                <?php if(construction_can('construction_contractors', $construction_access)): ?>
                 <a class="btn default" href="<?php echo site_url();?>/construction/contractors"><i class="fa fa-briefcase"></i> Contractors</a>
+                <?php endif; ?>
+                <?php if(construction_can('construction_reports', $construction_access)): ?>
                 <a class="btn default" href="<?php echo site_url();?>/construction/reports"><i class="fa fa-file"></i> Reports</a>
+                <?php endif; ?>
             </div>
         </div>
 
@@ -204,6 +223,7 @@
         <?php endif; ?>
 
         <?php if($section == 'projects'): ?>
+            <?php if(construction_can('construction_add_project', $construction_access)): ?>
             <div class="portlet box green">
                 <div class="portlet-title"><div class="caption">Add Project</div></div>
                 <div class="portlet-body form">
@@ -226,6 +246,7 @@
                     </form>
                 </div>
             </div>
+            <?php endif; ?>
             <div class="portlet box green">
                 <div class="portlet-title"><div class="caption">Projects Summary</div></div>
                 <div class="portlet-body table-responsive">
@@ -251,7 +272,9 @@
             <div class="portlet light bordered construction-panel">
                 <div class="portlet-title">
                     <div class="caption"><i class="fa fa-list font-green"></i> BOQ / Estimate</div>
+                    <?php if(construction_can('construction_add_boq', $construction_access)): ?>
                     <div class="actions"><button class="btn green btn-sm" data-toggle="modal" data-target="#boqModal"><i class="fa fa-plus"></i> Add BOQ Item</button></div>
+                    <?php endif; ?>
                 </div>
                 <div class="portlet-body table-responsive">
                     <table class="table table-bordered table-hover">
@@ -270,6 +293,7 @@
                     </table>
                 </div>
             </div>
+            <?php if(construction_can('construction_add_boq', $construction_access)): ?>
             <div class="modal fade" id="boqModal" tabindex="-1" role="dialog">
                 <div class="modal-dialog modal-lg">
                     <div class="modal-content">
@@ -292,6 +316,7 @@
                     </div>
                 </div>
             </div>
+            <?php endif; ?>
         <?php endif; ?>
 
         <?php if($section == 'work'): ?>
@@ -299,12 +324,24 @@
                 <div class="portlet-title">
                     <div class="caption"><i class="fa fa-tasks font-green"></i> Site Work</div>
                     <div class="actions">
+                        <?php if(construction_can('construction_issue_material', $construction_access)): ?>
                         <button class="btn green btn-sm construction-add-btn" data-target="#materialModal" data-toggle="modal"><i class="fa fa-plus"></i> Material</button>
+                        <?php endif; ?>
+                        <?php if(construction_can('construction_add_labour', $construction_access)): ?>
                         <button class="btn green btn-sm construction-add-btn" data-target="#labourModal" data-toggle="modal"><i class="fa fa-plus"></i> Labour</button>
+                        <?php endif; ?>
+                        <?php if(construction_can('construction_labour_attendance', $construction_access)): ?>
                         <button class="btn green btn-sm construction-add-btn" data-target="#attendanceModal" data-toggle="modal"><i class="fa fa-plus"></i> Attendance</button>
+                        <?php endif; ?>
+                        <?php if(construction_can('construction_site_expense', $construction_access)): ?>
                         <button class="btn green btn-sm construction-add-btn" data-target="#expenseModal" data-toggle="modal"><i class="fa fa-plus"></i> Expense</button>
+                        <?php endif; ?>
+                        <?php if(construction_can('construction_equipment', $construction_access)): ?>
                         <button class="btn green btn-sm construction-add-btn" data-target="#equipmentModal" data-toggle="modal"><i class="fa fa-plus"></i> Equipment</button>
+                        <?php endif; ?>
+                        <?php if(construction_can('construction_progress', $construction_access)): ?>
                         <button class="btn green btn-sm construction-add-btn" data-target="#progressModal" data-toggle="modal"><i class="fa fa-plus"></i> Progress</button>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <div class="portlet-body">
@@ -364,12 +401,24 @@
                 </div>
             </div>
 
+            <?php if(construction_can('construction_issue_material', $construction_access)): ?>
             <div class="modal fade" id="materialModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_material_issue" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Issue Material From Inventory</h4></div><div class="modal-body"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select><br><label>Inventory Product</label><select class="form-control" name="product_id" required><option value="">Select Product</option><?php foreach($products as $product): ?><option value="<?php echo $product['product_id']; ?>"><?php echo htmlspecialchars($product['product_name'].' | '.$product['campus_name'].' | '.$product['room_name'].' | Stock '.$product['stock_qty'].' | Unit '.$product['estimated_price']); ?></option><?php endforeach; ?></select><br><div class="row"><div class="col-md-4"><label>Quantity</label><input type="number" min="1" class="form-control" name="quantity" required></div><div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="issue_date" value="<?php echo date('Y-m-d'); ?>" required></div><div class="col-md-4"><label>Remarks</label><input class="form-control" name="remarks"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Issue Material</button></div></form></div></div></div>
+            <?php endif; ?>
+            <?php if(construction_can('construction_add_labour', $construction_access)): ?>
             <div class="modal fade" id="labourModal" tabindex="-1" role="dialog"><div class="modal-dialog"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_labour" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Add Labour</h4></div><div class="modal-body"><label>Project</label><select class="form-control" name="project_id"><?php echo construction_project_options($projects); ?></select><br><label>Labour Name</label><input class="form-control" name="labour_name" required><br><label>Designation</label><input class="form-control" name="designation"><br><div class="row"><div class="col-md-4"><label>CNIC</label><input class="form-control" name="cnic"></div><div class="col-md-4"><label>Mobile</label><input class="form-control" name="mobile"></div><div class="col-md-4"><label>Daily Wage</label><input type="number" step="0.01" class="form-control" name="daily_wage"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Labour</button></div></form></div></div></div>
+            <?php endif; ?>
+            <?php if(construction_can('construction_labour_attendance', $construction_access)): ?>
             <div class="modal fade" id="attendanceModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_labour_attendance" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Labour Attendance / Payroll</h4></div><div class="modal-body"><div class="row"><div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div><div class="col-md-4"><label>Labour</label><select class="form-control" name="labour_id" required><option value="">Select Labour</option><?php foreach($labours as $labour): ?><option value="<?php echo $labour['id']; ?>"><?php echo htmlspecialchars($labour['labour_name']); ?></option><?php endforeach; ?></select></div><div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="attendance_date" value="<?php echo date('Y-m-d'); ?>" required></div></div><br><div class="row"><div class="col-md-4"><label>Status</label><select class="form-control" name="status"><option>Present</option><option>Absent</option></select></div><div class="col-md-4"><label>Overtime Hrs</label><input type="number" step="0.01" class="form-control" name="overtime_hours"></div><div class="col-md-4"><label>Overtime Amount</label><input type="number" step="0.01" class="form-control" name="overtime_amount"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Attendance</button></div></form></div></div></div>
+            <?php endif; ?>
+            <?php if(construction_can('construction_site_expense', $construction_access)): ?>
             <div class="modal fade" id="expenseModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" enctype="multipart/form-data" action="<?php echo site_url();?>/construction/save_expense" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Site Expense</h4></div><div class="modal-body"><div class="row"><div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div><div class="col-md-3"><label>Category</label><select class="form-control" name="category"><?php foreach($categories as $category): ?><option><?php echo $category; ?></option><?php endforeach; ?></select></div><div class="col-md-3"><label>Date</label><input type="date" class="form-control" name="expense_date" value="<?php echo date('Y-m-d'); ?>"></div><div class="col-md-2"><label>Amount</label><input type="number" step="0.01" class="form-control" name="amount"></div></div><br><label>Description</label><textarea class="form-control" name="description"></textarea><br><input type="file" name="attachment"></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Expense</button></div></form></div></div></div>
+            <?php endif; ?>
+            <?php if(construction_can('construction_equipment', $construction_access)): ?>
             <div class="modal fade" id="equipmentModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_equipment" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Equipment / Machinery</h4></div><div class="modal-body"><div class="row"><div class="col-md-4"><label>Project</label><select class="form-control" name="project_id"><?php echo construction_project_options($projects); ?></select></div><div class="col-md-4"><label>Equipment</label><input class="form-control" name="equipment_name" required></div><div class="col-md-4"><label>Operator</label><input class="form-control" name="operator"></div></div><br><div class="row"><div class="col-md-4"><label>Fuel</label><input type="number" step="0.01" class="form-control" name="fuel_consumption"></div><div class="col-md-4"><label>Maintenance Cost</label><input type="number" step="0.01" class="form-control" name="maintenance_cost"></div><div class="col-md-4"><label>Repair Cost</label><input type="number" step="0.01" class="form-control" name="repair_cost"></div></div><br><label>Usage History</label><textarea class="form-control" name="usage_history"></textarea></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Equipment</button></div></form></div></div></div>
+            <?php endif; ?>
+            <?php if(construction_can('construction_progress', $construction_access)): ?>
             <div class="modal fade" id="progressModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_progress" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Work Progress</h4></div><div class="modal-body"><div class="row"><div class="col-md-4"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select></div><div class="col-md-4"><label>Milestone</label><input class="form-control" name="milestone"></div><div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="progress_date" value="<?php echo date('Y-m-d'); ?>"></div></div><br><div class="row"><div class="col-md-3"><label>Foundation %</label><input type="number" step="0.01" class="form-control" name="foundation_percent"></div><div class="col-md-3"><label>Structure %</label><input type="number" step="0.01" class="form-control" name="structure_percent"></div><div class="col-md-3"><label>Finishing %</label><input type="number" step="0.01" class="form-control" name="finishing_percent"></div><div class="col-md-3"><label>Overall %</label><input type="number" step="0.01" class="form-control" name="overall_percent"></div></div><br><label>Remarks</label><textarea class="form-control" name="remarks"></textarea></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Progress</button></div></form></div></div></div>
+            <?php endif; ?>
         <?php endif; ?>
 
         <?php if($section == 'entries'): ?>
@@ -432,13 +481,15 @@
             <div class="portlet light bordered construction-panel">
                 <div class="portlet-title">
                     <div class="caption"><i class="fa fa-briefcase font-green"></i> Contractors</div>
+                    <?php if(construction_can('construction_add_contractor', $construction_access)): ?>
                     <div class="actions">
                         <button class="btn green btn-sm" data-toggle="modal" data-target="#contractorModal"><i class="fa fa-plus"></i> Add Contractor</button>
                     </div>
+                    <?php endif; ?>
                 </div>
                 <div class="portlet-body table-responsive">
                     <table class="table table-bordered table-hover">
-                        <tr><th>Project</th><th>Contractor</th><th>Contact</th><th>Contract Amount</th><th>Advance Agreed</th><th>Running Bills</th><th>Final / Done Amount</th><th>Paid</th><th>Remaining</th><th>Payments</th></tr>
+                        <tr><th>Project</th><th>Contractor</th><th>Contact</th><th>Contract Amount</th><th>Advance Agreed</th><th>Running Bills</th><th>Final / Done Amount</th><th>Paid</th><th>Remaining</th><?php if(construction_can('construction_contractor_payment', $construction_access)): ?><th>Payments</th><?php endif; ?></tr>
                         <?php foreach($contractors as $row): ?>
                             <tr>
                                 <td><?php echo htmlspecialchars($row['project_name']); ?></td>
@@ -450,13 +501,18 @@
                                 <td><?php echo round($row['done_amount']); ?></td>
                                 <td><?php echo round($row['paid_amount']); ?></td>
                                 <td><?php echo round($row['remaining_amount']); ?></td>
+                                <?php if(construction_can('construction_contractor_payment', $construction_access)): ?>
                                 <td><button class="btn blue btn-xs" data-toggle="modal" data-target="#contractorPaymentModal<?php echo $row['id']; ?>"><i class="fa fa-money"></i> Payments</button></td>
+                                <?php endif; ?>
                             </tr>
                         <?php endforeach; ?>
                     </table>
                 </div>
             </div>
+            <?php if(construction_can('construction_add_contractor', $construction_access)): ?>
             <div class="modal fade" id="contractorModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_contractor" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Add Contractor</h4></div><div class="modal-body"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select><br><div class="row"><div class="col-md-6"><label>Contractor Name</label><input class="form-control" name="contractor_name" required></div><div class="col-md-6"><label>Contact Details</label><input class="form-control" name="contact_details"></div></div><br><div class="row"><div class="col-md-3"><label>Contract Amount</label><input type="number" step="0.01" class="form-control" name="contract_amount"></div><div class="col-md-3"><label>Advance Agreed</label><input type="number" step="0.01" class="form-control" name="advance_payment"></div><div class="col-md-3"><label>Running Bills</label><input type="number" step="0.01" class="form-control" name="running_bills"></div><div class="col-md-3"><label>Final / Done Amount</label><input type="number" step="0.01" class="form-control" name="final_bill"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Contractor</button></div></form></div></div></div>
+            <?php endif; ?>
+            <?php if(construction_can('construction_contractor_payment', $construction_access)): ?>
             <?php foreach($contractors as $contractor): ?>
                 <?php $contractorPayments = isset($payments_by_contractor[$contractor['id']]) ? $payments_by_contractor[$contractor['id']] : array(); ?>
                 <div class="modal fade" id="contractorPaymentModal<?php echo $contractor['id']; ?>" tabindex="-1" role="dialog">
@@ -497,6 +553,7 @@
                     </div>
                 </div>
             <?php endforeach; ?>
+            <?php endif; ?>
         <?php endif; ?>
 
         <?php if($section == 'reports'): ?>

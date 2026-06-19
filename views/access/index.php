@@ -836,6 +836,28 @@
                                         </label>
                                     </div>
                                 </div>
+                                <div class="form-group">
+                                    <label class="col-md-1 control-label"><strong>Construction</strong></label>
+                                    <div class="col-md-11 checkbox-list">
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_sidebar" value="1" <?php if(@$access_values[0]['construction_sidebar']!=NULL){echo 'checked';}?> /> Construction Access</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_dashboard" value="1" <?php if(@$access_values[0]['construction_dashboard']!=NULL){echo 'checked';}?> /> Dashboard</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_projects" value="1" <?php if(@$access_values[0]['construction_projects']!=NULL){echo 'checked';}?> /> Projects</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_add_project" value="1" <?php if(@$access_values[0]['construction_add_project']!=NULL){echo 'checked';}?> /> Add Project</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_boq" value="1" <?php if(@$access_values[0]['construction_boq']!=NULL){echo 'checked';}?> /> BOQ / Estimate</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_add_boq" value="1" <?php if(@$access_values[0]['construction_add_boq']!=NULL){echo 'checked';}?> /> Add BOQ</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_work" value="1" <?php if(@$access_values[0]['construction_work']!=NULL){echo 'checked';}?> /> Site Work</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_issue_material" value="1" <?php if(@$access_values[0]['construction_issue_material']!=NULL){echo 'checked';}?> /> Issue Material</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_add_labour" value="1" <?php if(@$access_values[0]['construction_add_labour']!=NULL){echo 'checked';}?> /> Add Labour</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_labour_attendance" value="1" <?php if(@$access_values[0]['construction_labour_attendance']!=NULL){echo 'checked';}?> /> Labour Attendance</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_site_expense" value="1" <?php if(@$access_values[0]['construction_site_expense']!=NULL){echo 'checked';}?> /> Site Expense</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_equipment" value="1" <?php if(@$access_values[0]['construction_equipment']!=NULL){echo 'checked';}?> /> Equipment</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_progress" value="1" <?php if(@$access_values[0]['construction_progress']!=NULL){echo 'checked';}?> /> Progress</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_contractors" value="1" <?php if(@$access_values[0]['construction_contractors']!=NULL){echo 'checked';}?> /> Contractors</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_add_contractor" value="1" <?php if(@$access_values[0]['construction_add_contractor']!=NULL){echo 'checked';}?> /> Add Contractor</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_contractor_payment" value="1" <?php if(@$access_values[0]['construction_contractor_payment']!=NULL){echo 'checked';}?> /> Contractor Payment</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_reports" value="1" <?php if(@$access_values[0]['construction_reports']!=NULL){echo 'checked';}?> /> Reports</label>
+                                    </div>
+                                </div>
 
                                 <div class="form-group">
                                     <label class="col-md-3 control-label">Inventory Campuses <span class="required">*</span></label>

@@ -7,6 +7,51 @@ class Accesses extends CI_Model {
         $this->load->model('Employee');
     }
 
+    private function constructionAccessFields()
+    {
+        return array(
+            'construction_sidebar',
+            'construction_dashboard',
+            'construction_projects',
+            'construction_add_project',
+            'construction_boq',
+            'construction_add_boq',
+            'construction_work',
+            'construction_issue_material',
+            'construction_add_labour',
+            'construction_labour_attendance',
+            'construction_site_expense',
+            'construction_equipment',
+            'construction_progress',
+            'construction_contractors',
+            'construction_add_contractor',
+            'construction_contractor_payment',
+            'construction_reports'
+        );
+    }
+
+    private function ensureConstructionAccessColumns()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if (!$this->db->table_exists($table)) {
+                continue;
+            }
+            foreach ($this->constructionAccessFields() as $field) {
+                if (!$this->db->field_exists($field, $table)) {
+                    $this->db->query("ALTER TABLE `$table` ADD `$field` TINYINT(1) NULL DEFAULT NULL");
+                }
+            }
+        }
+    }
+
+    private function setConstructionAccessFields()
+    {
+        $this->ensureConstructionAccessColumns();
+        foreach ($this->constructionAccessFields() as $field) {
+            $this->db->set($field, $this->input->post($field));
+        }
+    }
+
     public function getUsers()
     {
         $this->db->select('*');
@@ -873,6 +918,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report',$council_report);
         $this->db->set('council_report_add_information_can_add_fee',$council_report_add_information_can_add_fee);
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
+        $this->setConstructionAccessFields();
         
 
         if($user_id!='')
@@ -1679,6 +1725,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report',$council_report);
         $this->db->set('council_report_add_information_can_add_fee',$council_report_add_information_can_add_fee);
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
+        $this->setConstructionAccessFields();
 
 
         if($user_id!='')

@@ -7,6 +7,14 @@ class Payroll_statutory_rules extends CI_Controller {
     {
         parent::__construct();
         $this->load->model('account');
+        $this->ensure_columns();
+    }
+
+    private function ensure_columns()
+    {
+        if (!$this->db->field_exists('wage_contribution_cap', 'payroll_statutory_rules')) {
+            $this->db->query("ALTER TABLE payroll_statutory_rules ADD wage_contribution_cap DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER calculation_base");
+        }
     }
 
     public function index()
@@ -34,6 +42,7 @@ class Payroll_statutory_rules extends CI_Controller {
             'rule_code'             => $this->input->post('rule_code'),
             'rule_type'             => $this->input->post('rule_type'),
             'calculation_base'      => $this->input->post('calculation_base'),
+            'wage_contribution_cap' => $this->input->post('wage_contribution_cap') ?: 0,
             'status'                => $this->input->post('status'),
             'effective_from'        => $this->input->post('effective_from') ?: NULL,
             'effective_to'          => $this->input->post('effective_to') ?: NULL,

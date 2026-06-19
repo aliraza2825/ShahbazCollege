@@ -1701,6 +1701,7 @@ $myAccess = checkUserAccess();
                         </ul>
                     </li>
 
+                    <?php if(@$myAccess[0]['construction_sidebar']==1 || $this->session->userdata('role')=='Admin'): ?>
                     <li class="<?php if($this->uri->segment(1)=='construction'){echo 'active';}?>">
                         <a href="javascript:;">
                             <i class="fa fa-building"></i>
@@ -1709,15 +1710,27 @@ $myAccess = checkUserAccess();
                             <span class="arrow <?php if($this->uri->segment(1)=='construction'){echo 'open';}?>"></span>
                         </a>
                         <ul class="sub-menu">
+                            <?php if(@$myAccess[0]['construction_dashboard']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction"><i class="fa fa-dashboard"></i> Dashboard</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_projects']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/projects"><i class="icon-plus"></i> Projects</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_boq']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/boq"><i class="fa fa-list"></i> BOQ / Estimate</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_work']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/work"><i class="fa fa-plus"></i> Site Work</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_contractors']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/contractors"><i class="fa fa-briefcase"></i> Contractors</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_reports']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/reports"><i class="fa fa-file"></i> Reports</a></li>
+                            <?php endif; ?>
                         </ul>
                     </li>
-
+                    <?php endif; ?>
                     <li class="<?php if($this->uri->segment(1)=='inventory'){echo 'active';}?>">
                         <a href="javascript:;">
                             <i class="fa fa-barcode"></i>
@@ -4107,9 +4120,7 @@ $myAccess = checkUserAccess();
                     endif;
                     ?>
 
-                    <?php
-                        if(@$myAccess[0]['inventory']==1):
-                    ?>
+                    <?php if(@$myAccess[0]['construction_sidebar']==1 || $this->session->userdata('role')=='Admin'): ?>
                     <li class="<?php if($this->uri->segment(1)=='construction'){echo 'active';}?>">
                         <a href="javascript:;">
                             <i class="fa fa-building"></i>
@@ -4118,14 +4129,30 @@ $myAccess = checkUserAccess();
                             <span class="arrow <?php if($this->uri->segment(1)=='construction'){echo 'open';}?>"></span>
                         </a>
                         <ul class="sub-menu">
+                            <?php if(@$myAccess[0]['construction_dashboard']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction"><i class="fa fa-dashboard"></i> Dashboard</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_projects']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/projects"><i class="icon-plus"></i> Projects</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_boq']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/boq"><i class="fa fa-list"></i> BOQ / Estimate</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_work']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/work"><i class="fa fa-plus"></i> Site Work</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_contractors']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/contractors"><i class="fa fa-briefcase"></i> Contractors</a></li>
+                            <?php endif; ?>
+                            <?php if(@$myAccess[0]['construction_reports']==1 || $this->session->userdata('role')=='Admin'): ?>
                             <li><a href="<?php echo site_url();?>/construction/reports"><i class="fa fa-file"></i> Reports</a></li>
+                            <?php endif; ?>
                         </ul>
                     </li>
+                    <?php endif; ?>
+                    <?php
+                        if(@$myAccess[0]['inventory']==1):
+                    ?>
                     <li class="<?php if($this->uri->segment(1)=='inventory'){echo 'active';}?>">
                         <a href="javascript:;">
                             <i class="fa fa-barcode"></i>

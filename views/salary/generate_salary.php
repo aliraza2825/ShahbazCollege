@@ -242,6 +242,7 @@
                                                     <input type="hidden" name="employer_contribution_name[]" value="<?php echo $contribution['name']; ?>">
                                                     <input type="hidden" name="employer_contribution_rule_id[]" value="<?php echo $contribution['rule_id']; ?>">
                                                     <input type="hidden" name="employer_contribution_slab_id[]" value="<?php echo $contribution['slab_id']; ?>">
+                                                    <input type="hidden" name="employer_contribution_base_salary[]" value="<?php echo isset($contribution['base_salary']) ? $contribution['base_salary'] : 0; ?>">
                                                 </div>
                                             </div>
                                         <?php endforeach; ?>

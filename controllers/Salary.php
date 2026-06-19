@@ -18,6 +18,9 @@ class Salary  extends CI_Controller{
         if (!$this->db->field_exists('apply_statutory_rules', 'users')) {
             $this->db->query("ALTER TABLE users ADD apply_statutory_rules TINYINT(1) NOT NULL DEFAULT 1 AFTER salary_adjustment");
         }
+        if ($this->db->table_exists('payroll_statutory_rules') && !$this->db->field_exists('wage_contribution_cap', 'payroll_statutory_rules')) {
+            $this->db->query("ALTER TABLE payroll_statutory_rules ADD wage_contribution_cap DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER calculation_base");
+        }
     }
 
     private function user_applies_statutory_rules($user_id)
@@ -377,7 +380,7 @@ class Salary  extends CI_Controller{
          */
         $applyStatutoryRules = $this->user_applies_statutory_rules($user_id);
         $statutory = $applyStatutoryRules
-            ? $this->calculate_statutory_contributions($gross_salary, $payroll_date)
+            ? $this->calculate_statutory_contributions($gross_salary, $payroll_date, $basic_salary)
             : array('employee_deductions' => array(), 'employer_contributions' => array());
         
         foreach ($statutory['employee_deductions'] as $deduction) {
@@ -499,7 +502,34 @@ class Salary  extends CI_Controller{
         $this->load->view('inc/footer');
     }
     
-    private function calculate_statutory_contributions($base_salary, $payroll_date)
+    private function statutory_rule_base_salary($rule, $gross_salary, $basic_salary = null, $net_salary = null)
+    {
+        $base = isset($rule['calculation_base']) ? $rule['calculation_base'] : 'gross_salary';
+
+        if ($base === 'basic_salary') {
+            return (float) $basic_salary;
+        }
+
+        if ($base === 'net_salary' && $net_salary !== null) {
+            return (float) $net_salary;
+        }
+
+        return (float) $gross_salary;
+    }
+
+    private function wage_to_pay_contribution($selected_wage, $rule)
+    {
+        $selected_wage = (float) $selected_wage;
+        $cap = isset($rule['wage_contribution_cap']) ? (float) $rule['wage_contribution_cap'] : 0;
+
+        if ($cap > 0 && $selected_wage > $cap) {
+            return $cap;
+        }
+
+        return $selected_wage;
+    }
+
+    private function calculate_statutory_contributions($base_salary, $payroll_date, $basic_salary = null, $net_salary = null)
     {
         $result = array(
             'employee_deductions' => array(),
@@ -520,11 +550,13 @@ class Salary  extends CI_Controller{
             ->result_array();
     
         foreach ($rules as $rule) {
+            $selectedBaseSalary = $this->statutory_rule_base_salary($rule, $base_salary, $basic_salary, $net_salary);
+            $contributionBaseSalary = $this->wage_to_pay_contribution($selectedBaseSalary, $rule);
     
             $this->db->where('rule_id', $rule['id']);
-            $this->db->where('min_salary <=', $base_salary);
+            $this->db->where('min_salary <=', $contributionBaseSalary);
             $this->db->group_start();
-                $this->db->where('max_salary >=', $base_salary);
+                $this->db->where('max_salary >=', $contributionBaseSalary);
                 $this->db->or_where('max_salary IS NULL', null, false);
             $this->db->group_end();
             $this->db->where('status', 1);
@@ -542,7 +574,7 @@ class Salary  extends CI_Controller{
                 $employee_amount = 0;
     
                 if ($slab['employee_calculation_type'] == 'percentage') {
-                    $employee_amount = ($base_salary * $slab['employee_value']) / 100;
+                    $employee_amount = ($contributionBaseSalary * $slab['employee_value']) / 100;
                 } elseif ($slab['employee_calculation_type'] == 'fixed') {
                     $employee_amount = $slab['employee_value'];
                 }
@@ -552,7 +584,8 @@ class Salary  extends CI_Controller{
                         'name' => $rule['rule_name'] . ' Employee Share',
                         'amount' => round($employee_amount, 2),
                         'rule_id' => $rule['id'],
-                        'slab_id' => $slab['id']
+                        'slab_id' => $slab['id'],
+                        'base_salary' => $contributionBaseSalary
                     );
                 }
             }
@@ -562,7 +595,7 @@ class Salary  extends CI_Controller{
                 $employer_amount = 0;
     
                 if ($slab['employer_calculation_type'] == 'percentage') {
-                    $employer_amount = ($base_salary * $slab['employer_value']) / 100;
+                    $employer_amount = ($contributionBaseSalary * $slab['employer_value']) / 100;
                 } elseif ($slab['employer_calculation_type'] == 'fixed') {
                     $employer_amount = $slab['employer_value'];
                 }
@@ -572,7 +605,8 @@ class Salary  extends CI_Controller{
                         'name' => $rule['rule_name'] . ' Employer Share',
                         'amount' => round($employer_amount, 2),
                         'rule_id' => $rule['id'],
-                        'slab_id' => $slab['id']
+                        'slab_id' => $slab['id'],
+                        'base_salary' => $contributionBaseSalary
                     );
                 }
             }
@@ -699,6 +733,7 @@ class Salary  extends CI_Controller{
         $employerAmounts = $this->input->post('employer_contribution_amount') ?: array();
         $employerRuleIds = $this->input->post('employer_contribution_rule_id') ?: array();
         $employerSlabIds = $this->input->post('employer_contribution_slab_id') ?: array();
+        $employerBaseSalaries = $this->input->post('employer_contribution_base_salary') ?: array();
 
         if (!$applyStatutoryRules) {
             $statutoryRuleNames = $this->db
@@ -732,6 +767,7 @@ class Salary  extends CI_Controller{
             $employerAmounts = array();
             $employerRuleIds = array();
             $employerSlabIds = array();
+            $employerBaseSalaries = array();
         }
     
         $basic_salary    = (float) $this->input->post('basic_salary');
@@ -938,6 +974,7 @@ class Salary  extends CI_Controller{
     
                 $ruleId = isset($employerRuleIds[$x]) ? (int) $employerRuleIds[$x] : 0;
                 $slabId = isset($employerSlabIds[$x]) && $employerSlabIds[$x] != '' ? (int) $employerSlabIds[$x] : NULL;
+                $contributionBaseSalary = isset($employerBaseSalaries[$x]) ? (float) $employerBaseSalaries[$x] : $gross_salary;
     
                 $rule = array();
                 if ($ruleId > 0) {
@@ -955,7 +992,7 @@ class Salary  extends CI_Controller{
                     'rule_name'                 => $name,
                     'rule_code'                 => isset($rule['rule_code']) ? $rule['rule_code'] : '',
                     'calculation_base'          => isset($rule['calculation_base']) ? $rule['calculation_base'] : 'gross_salary',
-                    'base_salary'               => $gross_salary,
+                    'base_salary'               => $contributionBaseSalary,
     
                     'employee_applicable'       => 0,
                     'employee_calculation_type' => 'none',

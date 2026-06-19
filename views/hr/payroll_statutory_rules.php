@@ -28,6 +28,7 @@ $myAccess = checkUserAccess();
                                 <th>Code</th>
                                 <th>Type</th>
                                 <th>Base</th>
+                                <th>Wage Contribution Cap</th>
                                 <th>Status</th>
                                 <th>Effective From</th>
                                 <th>Effective To</th>
@@ -41,6 +42,7 @@ $myAccess = checkUserAccess();
                                     <td><?php echo $rule['rule_code']; ?></td>
                                     <td><?php echo ucwords(str_replace('_', ' ', $rule['rule_type'])); ?></td>
                                     <td><?php echo ucwords(str_replace('_', ' ', $rule['calculation_base'])); ?></td>
+                                    <td><?php echo !empty($rule['wage_contribution_cap']) ? round($rule['wage_contribution_cap'], 2) : '-'; ?></td>
                                     <td>
                                         <?php if($rule['status'] == 1): ?>
                                             <span class="label label-success">Active</span>
@@ -129,6 +131,14 @@ $myAccess = checkUserAccess();
                         <option value="basic_salary">Basic Salary</option>
                         <option value="net_salary">Net Salary</option>
                     </select>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="col-md-4 control-label">Wage to Pay Contribution Cap</label>
+                <div class="col-md-8">
+                    <input type="number" step="0.01" name="wage_contribution_cap" id="wage_contribution_cap" class="form-control">
+                    <small>Example: EOBI portal mein 44397. Blank/0 ho to full selected wage use hoga.</small>
                 </div>
             </div>
 
@@ -399,6 +409,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     $('#rule_code').val(data.rule_code);
                     $('#rule_type').val(data.rule_type);
                     $('#calculation_base').val(data.calculation_base);
+                    $('#wage_contribution_cap').val(data.wage_contribution_cap);
                     $('#effective_from').val(data.effective_from);
                     $('#effective_to').val(data.effective_to);
                     $('#rule_status').val(data.status);

@@ -8,6 +8,65 @@ class Construction extends CI_Controller {
         parent::__construct();
         $this->load->library('upload');
         $this->ensure_tables();
+        $this->ensure_access_columns();
+    }
+
+    private function construction_access_fields()
+    {
+        return array(
+            'construction_sidebar',
+            'construction_dashboard',
+            'construction_projects',
+            'construction_add_project',
+            'construction_boq',
+            'construction_add_boq',
+            'construction_work',
+            'construction_issue_material',
+            'construction_add_labour',
+            'construction_labour_attendance',
+            'construction_site_expense',
+            'construction_equipment',
+            'construction_progress',
+            'construction_contractors',
+            'construction_add_contractor',
+            'construction_contractor_payment',
+            'construction_reports'
+        );
+    }
+
+    private function ensure_access_columns()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if (!$this->db->table_exists($table)) {
+                continue;
+            }
+            foreach ($this->construction_access_fields() as $field) {
+                if (!$this->db->field_exists($field, $table)) {
+                    $this->db->query("ALTER TABLE `$table` ADD `$field` TINYINT(1) NULL DEFAULT NULL");
+                }
+            }
+        }
+    }
+
+    private function has_access($field)
+    {
+        if ($this->session->userdata('role') == 'Admin') {
+            return true;
+        }
+
+        $access = checkUserAccess();
+        return !empty($access) && isset($access[0][$field]) && (int) $access[0][$field] === 1;
+    }
+
+    private function require_access($field)
+    {
+        if ($this->has_access($field)) {
+            return true;
+        }
+
+        $this->session->set_flashdata('error', 'You do not have access to this Construction option.');
+        redirect('dashboard');
+        return false;
     }
 
     private function ensure_tables()
@@ -289,6 +348,7 @@ class Construction extends CI_Controller {
 
     public function index()
     {
+        if (!$this->require_access('construction_dashboard')) return;
         $data['total_projects'] = $this->db->count_all('construction_projects');
         $data['total_budget'] = $this->sum_table('construction_projects', 'budget');
         $data['material_cost'] = $this->sum_table('construction_material_issues', 'total_cost');
@@ -323,6 +383,7 @@ class Construction extends CI_Controller {
 
     public function projects()
     {
+        if (!$this->require_access('construction_projects')) return;
         $data['users'] = $this->db->where('status', 1)->order_by('first_name', 'ASC')->get('users')->result_array();
         $data['project_costs'] = $this->project_cost_rows();
         $this->page('projects', $data);
@@ -330,6 +391,7 @@ class Construction extends CI_Controller {
 
     public function save_project()
     {
+        if (!$this->require_access('construction_add_project')) return;
         $id = (int) $this->input->post('id');
         $data = array(
             'project_name' => $this->input->post('project_name'),
@@ -355,6 +417,7 @@ class Construction extends CI_Controller {
 
     public function boq()
     {
+        if (!$this->require_access('construction_boq')) return;
         $data['boq'] = $this->db
             ->select('construction_boq.*, construction_projects.project_name')
             ->join('construction_projects', 'construction_projects.id = construction_boq.project_id', 'left')
@@ -366,6 +429,7 @@ class Construction extends CI_Controller {
 
     public function save_boq()
     {
+        if (!$this->require_access('construction_add_boq')) return;
         $quantity = (float) $this->input->post('quantity');
         $unitCost = (float) $this->input->post('unit_cost');
         $this->db->insert('construction_boq', array(
@@ -384,6 +448,7 @@ class Construction extends CI_Controller {
 
     public function work()
     {
+        if (!$this->require_access('construction_work')) return;
         $data['products'] = $this->available_products();
         $data['issues'] = $this->db
             ->select('construction_material_issues.*, construction_projects.project_name, product_names.product_name')
@@ -463,6 +528,7 @@ class Construction extends CI_Controller {
 
     public function material_issue()
     {
+        if (!$this->require_access('construction_work')) return;
         $data['products'] = $this->available_products();
         $data['issues'] = $this->db
             ->select('construction_material_issues.*, construction_projects.project_name, product_names.product_name')
@@ -542,6 +608,7 @@ class Construction extends CI_Controller {
 
     public function save_material_issue()
     {
+        if (!$this->require_access('construction_issue_material')) return;
         $result = $this->issue_material_to_project(
             (int) $this->input->post('project_id'),
             (int) $this->input->post('product_id'),
@@ -555,6 +622,7 @@ class Construction extends CI_Controller {
 
     public function entries()
     {
+        if (!$this->require_access('construction_work')) return;
         $data['products'] = $this->available_products();
         $data['entries'] = $this->recent_cost_entries(100);
         $this->page('entries', $data);
@@ -562,6 +630,7 @@ class Construction extends CI_Controller {
 
     public function save_entry()
     {
+        if (!$this->require_access('construction_work')) return;
         $type = $this->input->post('entry_type');
         $projectId = (int) $this->input->post('project_id');
         $entryDate = $this->input->post('entry_date') ?: date('Y-m-d');
@@ -603,6 +672,7 @@ class Construction extends CI_Controller {
 
     public function labour()
     {
+        if (!$this->require_access('construction_work')) return;
         $data['labours'] = $this->db
             ->select('construction_labours.*, construction_projects.project_name')
             ->join('construction_projects', 'construction_projects.id = construction_labours.project_id', 'left')
@@ -630,6 +700,7 @@ class Construction extends CI_Controller {
 
     public function save_labour()
     {
+        if (!$this->require_access('construction_add_labour')) return;
         $this->db->insert('construction_labours', array(
             'project_id' => (int) $this->input->post('project_id'),
             'labour_name' => $this->input->post('labour_name'),
@@ -645,6 +716,7 @@ class Construction extends CI_Controller {
 
     public function save_labour_attendance()
     {
+        if (!$this->require_access('construction_labour_attendance')) return;
         $labour = $this->db->get_where('construction_labours', array('id' => (int) $this->input->post('labour_id')))->row_array();
         $this->db->insert('construction_labour_attendance', array(
             'labour_id' => (int) $this->input->post('labour_id'),
@@ -672,6 +744,7 @@ class Construction extends CI_Controller {
 
     public function save_labour_advance()
     {
+        if (!$this->require_access('construction_labour_attendance')) return;
         $this->db->insert('construction_labour_advances', array(
             'labour_id' => (int) $this->input->post('labour_id'),
             'project_id' => (int) $this->input->post('project_id'),
@@ -686,6 +759,7 @@ class Construction extends CI_Controller {
 
     public function contractors()
     {
+        if (!$this->require_access('construction_contractors')) return;
         $data['contractors'] = $this->contractor_summary();
         $payments = $this->db
             ->select('construction_contractor_payments.*, construction_contractors.contractor_name, construction_projects.project_name')
@@ -707,6 +781,7 @@ class Construction extends CI_Controller {
 
     public function save_contractor()
     {
+        if (!$this->require_access('construction_add_contractor')) return;
         $this->db->insert('construction_contractors', array(
             'project_id' => (int) $this->input->post('project_id'),
             'contractor_name' => $this->input->post('contractor_name'),
@@ -723,6 +798,7 @@ class Construction extends CI_Controller {
 
     public function save_contractor_payment()
     {
+        if (!$this->require_access('construction_contractor_payment')) return;
         $contractor = $this->db->get_where('construction_contractors', array('id' => (int) $this->input->post('contractor_id')))->row_array();
         $this->db->insert('construction_contractor_payments', array(
             'contractor_id' => (int) $this->input->post('contractor_id'),
@@ -739,6 +815,7 @@ class Construction extends CI_Controller {
 
     public function expenses()
     {
+        if (!$this->require_access('construction_work')) return;
         $data['categories'] = array('Diesel', 'Transportation', 'Food', 'Security', 'Accommodation', 'Miscellaneous');
         $data['expenses'] = $this->db
             ->select('construction_site_expenses.*, construction_projects.project_name')
@@ -751,6 +828,7 @@ class Construction extends CI_Controller {
 
     public function save_expense()
     {
+        if (!$this->require_access('construction_site_expense')) return;
         $attachment = '';
         if (!empty($_FILES['attachment']['name'])) {
             $config['upload_path'] = 'uploads/';
@@ -777,6 +855,7 @@ class Construction extends CI_Controller {
 
     public function equipment()
     {
+        if (!$this->require_access('construction_work')) return;
         $data['equipment'] = $this->db
             ->select('construction_equipment.*, construction_projects.project_name')
             ->join('construction_projects', 'construction_projects.id = construction_equipment.project_id', 'left')
@@ -788,6 +867,7 @@ class Construction extends CI_Controller {
 
     public function save_equipment()
     {
+        if (!$this->require_access('construction_equipment')) return;
         $this->db->insert('construction_equipment', array(
             'project_id' => (int) $this->input->post('project_id'),
             'equipment_name' => $this->input->post('equipment_name'),
@@ -804,6 +884,7 @@ class Construction extends CI_Controller {
 
     public function progress()
     {
+        if (!$this->require_access('construction_work')) return;
         $data['progress'] = $this->db
             ->select('construction_progress.*, construction_projects.project_name')
             ->join('construction_projects', 'construction_projects.id = construction_progress.project_id', 'left')
@@ -815,6 +896,7 @@ class Construction extends CI_Controller {
 
     public function save_progress()
     {
+        if (!$this->require_access('construction_progress')) return;
         $this->db->insert('construction_progress', array(
             'project_id' => (int) $this->input->post('project_id'),
             'milestone' => $this->input->post('milestone'),
@@ -832,6 +914,7 @@ class Construction extends CI_Controller {
 
     public function reports()
     {
+        if (!$this->require_access('construction_reports')) return;
         $data['project_costs'] = $this->project_cost_rows();
         $data['contractors'] = $this->contractor_summary();
         $data['labour'] = $this->db
