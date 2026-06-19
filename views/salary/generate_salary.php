@@ -330,7 +330,7 @@
                                                 <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="minimum_salary_adjustment" value="<?php echo isset($staff->salary_adjustment) ? $staff->salary_adjustment : 0; ?>" placeholder="Salary Adjustment" style="width: 100%!important;" readonly>
                                             </div>
                                             <div class="col-md-8" style="margin-bottom: 10px">
-                                                <input type="text" class="form-control input-inline " name="minimum_salary_adjustment" id="gross_salary_adjustment" value="0" placeholder="Gross Salary + Adjustment" style="width: 100%!important;" readonly>
+                                                <input type="text" class="form-control input-inline " name="gross_salary_adjustment" id="gross_salary_adjustment" value="0" placeholder="Gross Salary + Adjustment" style="width: 100%!important;" readonly>
                                             </div>
                                             <div class="col-md-12" style="margin-bottom: 10px; text-align: center">
                                                 <button class=" btn green"  onclick="calculateSalary()" autocomplete="false" type="button"  >CALCULATE SALARY NOW</i></button>
