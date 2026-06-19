@@ -375,6 +375,16 @@
                                                     <span class="help-inline"></span>
                                                 </div>
                                             </div>
+                                            <div class="form-group">
+                                                <label class="col-md-3 control-label">Statutory Rules</label>
+                                                <div class="col-md-9">
+                                                    <select class="form-control input-inline input-medium" name="apply_statutory_rules">
+                                                        <option value="1" <?php echo (!isset($teacher['apply_statutory_rules']) || (int) $teacher['apply_statutory_rules'] === 1) ? 'selected' : ''; ?>>Apply</option>
+                                                        <option value="0" <?php echo (isset($teacher['apply_statutory_rules']) && (int) $teacher['apply_statutory_rules'] === 0) ? 'selected' : ''; ?>>Do Not Apply</option>
+                                                    </select>
+                                                    <span class="help-inline"></span>
+                                                </div>
+                                            </div>
                                         </div>
                                         <style>
                                             .ex1 {

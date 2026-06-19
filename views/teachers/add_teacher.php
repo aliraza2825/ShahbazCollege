@@ -258,6 +258,18 @@
                                                 </div>
                                             </div>
                                         </div>
+                                        <div class="col-md-6">
+                                            <div class="form-group">
+                                                <label class="col-md-3 control-label">Statutory Rules</label>
+                                                <div class="col-md-9">
+                                                    <select class="form-control input-inline input-medium" name="apply_statutory_rules">
+                                                        <option value="1" selected>Apply</option>
+                                                        <option value="0">Do Not Apply</option>
+                                                    </select>
+                                                    <span class="help-inline"></span>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div class="row">
                                         <div class="col-md-6">
@@ -418,7 +430,6 @@
             });
         }, false );
     </script>
-
 
 
 

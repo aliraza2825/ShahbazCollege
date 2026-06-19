@@ -6,15 +6,29 @@ class Salary  extends CI_Controller{
     public function __construct()
     {
         parent::__construct();
-        $this->ensure_salary_adjustment_column();
+        $this->ensure_salary_columns();
         //$this->load->library('Email_reader');
     }
 
-    private function ensure_salary_adjustment_column()
+    private function ensure_salary_columns()
     {
         if (!$this->db->field_exists('salary_adjustment', 'users')) {
             $this->db->query("ALTER TABLE users ADD salary_adjustment DECIMAL(10,2) NOT NULL DEFAULT 0 AFTER gross_salary");
         }
+        if (!$this->db->field_exists('apply_statutory_rules', 'users')) {
+            $this->db->query("ALTER TABLE users ADD apply_statutory_rules TINYINT(1) NOT NULL DEFAULT 1 AFTER salary_adjustment");
+        }
+    }
+
+    private function user_applies_statutory_rules($user_id)
+    {
+        $row = $this->db
+            ->select('apply_statutory_rules')
+            ->where('user_id', $user_id)
+            ->get('users')
+            ->row_array();
+
+        return !isset($row['apply_statutory_rules']) || (int) $row['apply_statutory_rules'] === 1;
     }
 
     public function salary_list(){
@@ -361,7 +375,10 @@ class Salary  extends CI_Controller{
          * Abhi calculation gross salary par kar rahe hain.
          * Agar kisi rule ka base basic salary chahiye ho to rule calculation_base se control kar sakte hain.
          */
-        $statutory = $this->calculate_statutory_contributions($gross_salary, $payroll_date);
+        $applyStatutoryRules = $this->user_applies_statutory_rules($user_id);
+        $statutory = $applyStatutoryRules
+            ? $this->calculate_statutory_contributions($gross_salary, $payroll_date)
+            : array('employee_deductions' => array(), 'employer_contributions' => array());
         
         foreach ($statutory['employee_deductions'] as $deduction) {
             array_push($alownce, array(
@@ -372,6 +389,7 @@ class Salary  extends CI_Controller{
         }
         
         $data['employer_contributions'] = $statutory['employer_contributions'];
+        $data['apply_statutory_rules'] = $applyStatutoryRules;
         
         $total_allownce = 0;
 
@@ -675,11 +693,46 @@ class Salary  extends CI_Controller{
         $deduct       = $this->input->post('deductionstype') ?: array();
         $deductamount = $this->input->post('deductionsValue') ?: array();
         $loanallIds   = $this->input->post('loanId') ?: array();
+        $applyStatutoryRules = $this->user_applies_statutory_rules($user_id);
     
         $employerNames   = $this->input->post('employer_contribution_name') ?: array();
         $employerAmounts = $this->input->post('employer_contribution_amount') ?: array();
         $employerRuleIds = $this->input->post('employer_contribution_rule_id') ?: array();
         $employerSlabIds = $this->input->post('employer_contribution_slab_id') ?: array();
+
+        if (!$applyStatutoryRules) {
+            $statutoryRuleNames = $this->db
+                ->select('rule_name')
+                ->where('status', 1)
+                ->get('payroll_statutory_rules')
+                ->result_array();
+            $statutoryNames = array();
+            foreach ($statutoryRuleNames as $ruleName) {
+                $statutoryNames[] = trim($ruleName['rule_name']);
+                $statutoryNames[] = trim($ruleName['rule_name']) . ' Employee Share';
+            }
+
+            $filteredDeduct = array();
+            $filteredDeductAmount = array();
+            $filteredLoanIds = array();
+            for ($x = 0; $x < count($deduct); $x++) {
+                $name = isset($deduct[$x]) ? trim($deduct[$x]) : '';
+                if (in_array($name, $statutoryNames)) {
+                    continue;
+                }
+                $filteredDeduct[] = isset($deduct[$x]) ? $deduct[$x] : '';
+                $filteredDeductAmount[] = isset($deductamount[$x]) ? $deductamount[$x] : 0;
+                $filteredLoanIds[] = isset($loanallIds[$x]) ? $loanallIds[$x] : 0;
+            }
+            $deduct = $filteredDeduct;
+            $deductamount = $filteredDeductAmount;
+            $loanallIds = $filteredLoanIds;
+
+            $employerNames = array();
+            $employerAmounts = array();
+            $employerRuleIds = array();
+            $employerSlabIds = array();
+        }
     
         $basic_salary    = (float) $this->input->post('basic_salary');
         $gross_salary    = (float) $this->input->post('gross_salary');
@@ -687,6 +740,12 @@ class Salary  extends CI_Controller{
         $deductions      = (float) $this->input->post('deduction_salary');
         $earnings_total  = (float) $this->input->post('earing_salary');
         $tax_salary      = (float) $this->input->post('tax_salary');
+        if (!$applyStatutoryRules) {
+            $deductions = 0;
+            foreach ($deductamount as $deductAmount) {
+                $deductions += (float) $deductAmount;
+            }
+        }
         $employeeSalaryAdjustment = $this->db
             ->select('salary_adjustment')
             ->where('user_id', $user_id)
