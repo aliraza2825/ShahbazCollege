@@ -116,7 +116,8 @@
             #expenseModal .modal-dialog,
             #equipmentModal .modal-dialog,
             #progressModal .modal-dialog,
-            #contractorModal .modal-dialog {
+            #contractorModal .modal-dialog,
+            .modal[id^="contractorPaymentModal"] .modal-dialog {
                 width: 900px;
                 max-width: calc(100% - 40px);
                 margin: 30px auto;
@@ -433,12 +434,11 @@
                     <div class="caption"><i class="fa fa-briefcase font-green"></i> Contractors</div>
                     <div class="actions">
                         <button class="btn green btn-sm" data-toggle="modal" data-target="#contractorModal"><i class="fa fa-plus"></i> Add Contractor</button>
-                        <button class="btn green btn-sm" data-toggle="modal" data-target="#contractorPaymentModal"><i class="fa fa-plus"></i> Add Payment</button>
                     </div>
                 </div>
                 <div class="portlet-body table-responsive">
                     <table class="table table-bordered table-hover">
-                        <tr><th>Project</th><th>Contractor</th><th>Contact</th><th>Contract Amount</th><th>Advance Agreed</th><th>Running Bills</th><th>Final / Done Amount</th><th>Paid</th><th>Remaining</th></tr>
+                        <tr><th>Project</th><th>Contractor</th><th>Contact</th><th>Contract Amount</th><th>Advance Agreed</th><th>Running Bills</th><th>Final / Done Amount</th><th>Paid</th><th>Remaining</th><th>Payments</th></tr>
                         <?php foreach($contractors as $row): ?>
                             <tr>
                                 <td><?php echo htmlspecialchars($row['project_name']); ?></td>
@@ -450,31 +450,53 @@
                                 <td><?php echo round($row['done_amount']); ?></td>
                                 <td><?php echo round($row['paid_amount']); ?></td>
                                 <td><?php echo round($row['remaining_amount']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </table>
-                </div>
-            </div>
-            <div class="portlet light bordered construction-panel">
-                <div class="portlet-title"><div class="caption"><i class="fa fa-money font-green"></i> Payment History</div></div>
-                <div class="portlet-body table-responsive">
-                    <table class="table table-bordered table-hover">
-                        <tr><th>Date</th><th>Project</th><th>Contractor</th><th>Type</th><th>Amount</th><th>Remarks</th></tr>
-                        <?php foreach($payments as $row): ?>
-                            <tr>
-                                <td><?php echo $row['payment_date']; ?></td>
-                                <td><?php echo htmlspecialchars($row['project_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['contractor_name']); ?></td>
-                                <td><?php echo htmlspecialchars($row['payment_type']); ?></td>
-                                <td><?php echo round($row['amount']); ?></td>
-                                <td><?php echo htmlspecialchars($row['remarks']); ?></td>
+                                <td><button class="btn blue btn-xs" data-toggle="modal" data-target="#contractorPaymentModal<?php echo $row['id']; ?>"><i class="fa fa-money"></i> Payments</button></td>
                             </tr>
                         <?php endforeach; ?>
                     </table>
                 </div>
             </div>
             <div class="modal fade" id="contractorModal" tabindex="-1" role="dialog"><div class="modal-dialog modal-lg"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_contractor" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Add Contractor</h4></div><div class="modal-body"><label>Project</label><select class="form-control" name="project_id" required><?php echo construction_project_options($projects); ?></select><br><div class="row"><div class="col-md-6"><label>Contractor Name</label><input class="form-control" name="contractor_name" required></div><div class="col-md-6"><label>Contact Details</label><input class="form-control" name="contact_details"></div></div><br><div class="row"><div class="col-md-3"><label>Contract Amount</label><input type="number" step="0.01" class="form-control" name="contract_amount"></div><div class="col-md-3"><label>Advance Agreed</label><input type="number" step="0.01" class="form-control" name="advance_payment"></div><div class="col-md-3"><label>Running Bills</label><input type="number" step="0.01" class="form-control" name="running_bills"></div><div class="col-md-3"><label>Final / Done Amount</label><input type="number" step="0.01" class="form-control" name="final_bill"></div></div></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Contractor</button></div></form></div></div></div>
-            <div class="modal fade" id="contractorPaymentModal" tabindex="-1" role="dialog"><div class="modal-dialog"><div class="modal-content"><form method="post" action="<?php echo site_url();?>/construction/save_contractor_payment" class="construction-modal-form"><div class="modal-header"><button type="button" class="close" data-dismiss="modal"></button><h4 class="modal-title">Add Contractor Payment</h4></div><div class="modal-body"><label>Contractor</label><select class="form-control" name="contractor_id" required><option value="">Select Contractor</option><?php foreach($contractors as $contractor): ?><option value="<?php echo $contractor['id']; ?>"><?php echo htmlspecialchars($contractor['contractor_name'].' - '.$contractor['project_name']); ?></option><?php endforeach; ?></select><br><div class="row"><div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="payment_date" value="<?php echo date('Y-m-d'); ?>" required></div><div class="col-md-4"><label>Amount</label><input type="number" step="0.01" class="form-control" name="amount" required></div><div class="col-md-4"><label>Payment Type</label><select class="form-control" name="payment_type"><option>Advance</option><option>Running Bill</option><option>Final Bill</option></select></div></div><br><label>Remarks</label><textarea class="form-control" name="remarks"></textarea></div><div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Payment</button></div></form></div></div></div>
+            <?php foreach($contractors as $contractor): ?>
+                <?php $contractorPayments = isset($payments_by_contractor[$contractor['id']]) ? $payments_by_contractor[$contractor['id']] : array(); ?>
+                <div class="modal fade" id="contractorPaymentModal<?php echo $contractor['id']; ?>" tabindex="-1" role="dialog">
+                    <div class="modal-dialog modal-lg">
+                        <div class="modal-content">
+                            <form method="post" action="<?php echo site_url();?>/construction/save_contractor_payment" class="construction-modal-form">
+                                <div class="modal-header">
+                                    <button type="button" class="close" data-dismiss="modal"></button>
+                                    <h4 class="modal-title">Payments - <?php echo htmlspecialchars($contractor['contractor_name']); ?></h4>
+                                </div>
+                                <div class="modal-body">
+                                    <input type="hidden" name="contractor_id" value="<?php echo $contractor['id']; ?>">
+                                    <div class="row">
+                                        <div class="col-md-4"><label>Date</label><input type="date" class="form-control" name="payment_date" value="<?php echo date('Y-m-d'); ?>" required></div>
+                                        <div class="col-md-4"><label>Amount</label><input type="number" step="0.01" class="form-control" name="amount" required></div>
+                                        <div class="col-md-4"><label>Payment Type</label><select class="form-control" name="payment_type"><option>Advance</option><option>Running Bill</option><option>Final Bill</option></select></div>
+                                    </div><br>
+                                    <label>Remarks</label>
+                                    <textarea class="form-control" name="remarks"></textarea><br>
+                                    <h4>Payment History</h4>
+                                    <div class="table-responsive">
+                                        <table class="table table-bordered table-hover">
+                                            <tr><th>Date</th><th>Type</th><th>Amount</th><th>Remarks</th></tr>
+                                            <?php foreach($contractorPayments as $payment): ?>
+                                                <tr>
+                                                    <td><?php echo $payment['payment_date']; ?></td>
+                                                    <td><?php echo htmlspecialchars($payment['payment_type']); ?></td>
+                                                    <td><?php echo round($payment['amount']); ?></td>
+                                                    <td><?php echo htmlspecialchars($payment['remarks']); ?></td>
+                                                </tr>
+                                            <?php endforeach; ?>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div class="modal-footer"><button type="button" class="btn default" data-dismiss="modal">Close</button><button class="btn green">Save Payment</button></div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
         <?php endif; ?>
 
         <?php if($section == 'reports'): ?>

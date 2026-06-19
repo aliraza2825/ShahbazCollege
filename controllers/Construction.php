@@ -687,14 +687,21 @@ class Construction extends CI_Controller {
     public function contractors()
     {
         $data['contractors'] = $this->contractor_summary();
-        $data['payments'] = $this->db
+        $payments = $this->db
             ->select('construction_contractor_payments.*, construction_contractors.contractor_name, construction_projects.project_name')
             ->join('construction_contractors', 'construction_contractors.id = construction_contractor_payments.contractor_id', 'left')
             ->join('construction_projects', 'construction_projects.id = construction_contractor_payments.project_id', 'left')
             ->order_by('construction_contractor_payments.id', 'DESC')
-            ->limit(25)
             ->get('construction_contractor_payments')
             ->result_array();
+        $data['payments_by_contractor'] = array();
+        foreach ($payments as $payment) {
+            $contractorId = (int) $payment['contractor_id'];
+            if (!isset($data['payments_by_contractor'][$contractorId])) {
+                $data['payments_by_contractor'][$contractorId] = array();
+            }
+            $data['payments_by_contractor'][$contractorId][] = $payment;
+        }
         $this->page('contractors', $data);
     }
 
