@@ -1112,6 +1112,22 @@
                             </li>
                         </ul>
                     </li>
+                    <li class="<?php if($this->uri->segment(1)=='construction'){echo 'active';}?>">
+                        <a href="javascript:;">
+                            <i class="fa fa-building"></i>
+                            <span class="title">Construction</span>
+                            <span class="selected"></span>
+                            <span class="arrow <?php if($this->uri->segment(1)=='construction'){echo 'open';}?>"></span>
+                        </a>
+                        <ul class="sub-menu">
+                            <li><a href="<?php echo site_url();?>/construction"><i class="fa fa-dashboard"></i> Dashboard</a></li>
+                            <li><a href="<?php echo site_url();?>/construction/projects"><i class="icon-plus"></i> Projects</a></li>
+                            <li><a href="<?php echo site_url();?>/construction/boq"><i class="fa fa-list"></i> BOQ / Estimate</a></li>
+                            <li><a href="<?php echo site_url();?>/construction/work"><i class="fa fa-plus"></i> Site Work</a></li>
+                            <li><a href="<?php echo site_url();?>/construction/contractors"><i class="fa fa-briefcase"></i> Contractors</a></li>
+                            <li><a href="<?php echo site_url();?>/construction/reports"><i class="fa fa-file"></i> Reports</a></li>
+                        </ul>
+                    </li>
                     <li class="<?php if($this->uri->segment(1)=='inventory'){echo 'active';}?>">
                         <a href="javascript:;">
                             <i class="fa fa-barcode"></i>
