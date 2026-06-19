@@ -240,7 +240,7 @@
                                             <?php $earnings+=round($list['new_user_alownce']); ?>
                                         </td>
                                         <td style="text-align: right;">
-                                            <?php echo round($reportSalary);?>
+                                            <?php echo round($list['basic_salary'])+round($list['new_user_alownce']);?>
                                             <?php $grosssals+=round($list['gross_salary']);?>
                                         </td>
                                         <?php if (!empty($minimum_adjustment_report)): ?>
