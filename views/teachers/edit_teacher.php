@@ -460,6 +460,7 @@
                                                 <label class="col-md-3 control-label">Role <span class="required">*</span></label>
                                                 <div class="col-md-9">
                                                     <select class="form-control input-inline input-medium" name="role" required>
+                                                        <option value="Admin" <?php if($teacher['role']=='Admin'){echo 'selected=selected';}?>>Admin</option>
                                                     	<option value="Teacher" <?php if($teacher['role']=='Teacher'){echo 'selected=selected';}?>>Teacher</option>
                                                         <option value="Principal" <?php if($teacher['role']=='Principal'){echo 'selected=selected';}?>>Principal</option>
                                                         <option value="Accountant" <?php if($teacher['role']=='Accountant'){echo 'selected=selected';}?>>Accountant</option>
