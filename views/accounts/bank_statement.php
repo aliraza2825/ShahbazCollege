@@ -223,17 +223,23 @@
                                      echo $closing_rule['trans_id']. ' '.$closing_rule['str_id'].'<br>';
 
                                      if($closing_rule['statement_id'] != '' || $closing_rule['statement_id'] != NULL)
-                                     {
-                                            $this->db->select( 'payments.actual_amount,students.first_name as first_name, students.last_name as last_name, students.mobile as mobile, students.emergency_no as emergency_no,students.cnic as cnic, students.roll_no as roll_no, students.father_name as father_name, classes.name as class_name, campuses.bank_name, courses.course_name as course_name, campuses.account_no, campuses.address, campuses.campus_name, campuses.note, campuses.campus_id,payments.challan_no,payments.paid_date,payments.tid_no,payments.paid_date,payments.paid_challans,payments.contract_id');
-                                            $this->db->from('payments');
-                                            $this->db->join('students', 'students.student_id=payments.student_id', 'inner');
-                                            $this->db->join('classes', 'classes.class_id=students.class_id', 'inner');
-                                            $this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
-                                            $this->db->join('courses', 'courses.course_id=students.course_id', 'left');
-                                            //$this->db->group_by('payments.contract_id');
-                                            $student=$this->db->where_in('payments.statement_id', $closing_rule['statement_id'])->get()->result_array();
+                                     {?>
 
-                                            foreach ($student as $dat_payments):
+                                         <a onclick="untag_bank_payment(<?php echo $i ?>,<?php echo $closing_rule['trans_id'] ?>)">
+                                             <button type="button" class="btn btn-danger"><i class="fa fa-trash"></i> Untag</button>
+                                         </a>
+
+                                         <?php
+                                        $this->db->select( 'payments.actual_amount,students.first_name as first_name, students.last_name as last_name, students.mobile as mobile, students.emergency_no as emergency_no,students.cnic as cnic, students.roll_no as roll_no, students.father_name as father_name, classes.name as class_name, campuses.bank_name, courses.course_name as course_name, campuses.account_no, campuses.address, campuses.campus_name, campuses.note, campuses.campus_id,payments.challan_no,payments.paid_date,payments.tid_no,payments.paid_date,payments.paid_challans,payments.contract_id');
+                                        $this->db->from('payments');
+                                        $this->db->join('students', 'students.student_id=payments.student_id', 'inner');
+                                        $this->db->join('classes', 'classes.class_id=students.class_id', 'inner');
+                                        $this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
+                                        $this->db->join('courses', 'courses.course_id=students.course_id', 'left');
+                                        //$this->db->group_by('payments.contract_id');
+                                        $student=$this->db->where_in('payments.statement_id', $closing_rule['statement_id'])->get()->result_array();
+
+                                        foreach ($student as $dat_payments):
                                                 if($dat_payments['contract_id']==0):
                                          ?>
                                                 <strong>Challan No : </strong><?php if($dat_payments['paid_challans']==''){echo $dat_payments['challan_no'];}else{echo $dat_payments['paid_challans'];}?> <br>
@@ -248,6 +254,7 @@
                                                 <strong>Campus : </strong><?php echo $dat_payments['campus_name'];?> <br>
                                                 <strong>Class : </strong><?php echo $dat_payments['class_name'];?> <br>
                                                 <strong>Course : </strong><?php echo $dat_payments['course_name'];?> <br><br>
+
                                                 <?php
                                                 else:
                                                     //GET CONTRACTOR DETAILS
@@ -280,7 +287,6 @@
                                         <?php
                                                 endif;
                                             endforeach;
-
                                      }
 
                                      elseif ($closing_rule['expense_id'] != '' || $closing_rule['expense_id'] != NULL)
@@ -1378,6 +1384,26 @@
             if (confirm('Are you sure you want to Untag this Bank entry?')) {
                 $.ajax({
                     url: "<?php echo site_url();?>/accounts/untag_bank_entry/" + id,
+                    type: 'GET',
+                    processData: false,
+                    headers: {'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')},
+                    contentType: false,
+                    dataType: 'text',
+                    success: function (data) {
+                        $("#row-" + index).html('');
+                        $("#div-show-" + index).show();
+                    }
+                });
+            }else {
+
+            }
+        }
+
+        function untag_bank_payment(ind,id) {
+            index = ind;
+            if (confirm('Are you sure you want to Untag this Fee entry?')) {
+                $.ajax({
+                    url: "<?php echo site_url();?>/accounts/untag_payment/" + id,
                     type: 'GET',
                     processData: false,
                     headers: {'X-CSRF-TOKEN': $('meta[name="csrf-token"]').attr('content')},

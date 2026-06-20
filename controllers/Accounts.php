@@ -673,6 +673,25 @@ class Accounts extends CI_Controller {
         $this->load->view('inc/footer');
     }
 
+    public function untag_payment($id)
+    {
+        $this->db->where('statement_id', $id);
+        $this->db->update('payments', array(
+            'paid'            => 0,
+            'paid_date'         => NULL,
+            'tid_no'            => NULL,
+            'paid_challans'     => NULL,
+            'merged_challan'   => NULL,
+            'statement_id'      => NULL
+        ));
+
+        $this->db->where('id', $id);
+        $this->db->update('bank_reconciliation_statement', array(
+            'statement_id'  => NULL
+        ));
+        echo "Untagged Successfully";
+    }
+
     public function upload_bank_statement()
     {
         //load the helper
