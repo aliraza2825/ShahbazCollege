@@ -143,7 +143,7 @@ $specialdisc=$specialdisc[0]['special_disc'];
             </tr>
             <tr>
                 <th>Total Fee : </th>
-                <td><?php echo $student[0]['total_fee'];?></td>
+                <td><?php echo $student[0]['total_fee']+$student[0]['extra_added_fee'];?></td>
                 <th><!--Admission Fee : --></th>
                 <td><?php //echo $total_fee->installment_on_admission;?></td>
                 <th><!--Per Month Fee : --></th>
