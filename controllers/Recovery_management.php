@@ -102,8 +102,13 @@ class Recovery_management extends CI_Controller {
 		$campus_id = $this->input->post('campus_id');
 		$department_id = $this->input->post('department_id');
 		$designation_id = $this->input->post('designation_id');
-		
-		$users = $this->db->get_where('users',array('campus_id'=>$campus_id,'department_id'=>$department_id,'designation_id'=>$designation_id,'status'=>'1'))->result_array();
+        $this->db->where('campus_id', $campus_id);
+        $this->db->where('department_id', $department_id);
+        $this->db->where('status', '1');
+        $this->db->where("FIND_IN_SET(".$this->db->escape_str($designation_id).", designation_id) >", 0, false);
+
+        $users = $this->db->get('users')->result_array();
+
 		
 		$html = '';
 		$html .= '<option value="">SELECT USER</option>';
