@@ -983,6 +983,11 @@ $myAccess = checkUserAccess();
                                     <i class="fa fa-money"></i>
                                     Students Fee Problem</a>
                             </li>
+                            <li class="<?php if($this->uri->segment(2)=='discount_report'){echo 'active';}?>">
+                                <a href="<?php echo site_url();?>/reports/discount_report">
+                                    <i class="fa fa-percent"></i>
+                                    Discount Report</a>
+                            </li>
                             <li class="<?php if($this->uri->segment(2)=='all_struckofstudent_report'){echo 'active';}?>">
                                 <a href="<?php echo site_url();?>/students/all_struckofstudent_report">
                                     <i class="icon-list"></i>
@@ -2852,6 +2857,17 @@ $myAccess = checkUserAccess();
                                         <a href="<?php echo site_url();?>/reports/students_fee_problem">
                                             <i class="fa fa-money"></i>
                                             Students Fee Problem</a>
+                                    </li>
+                                <?php
+                                endif;
+                                ?>
+                                <?php
+                                if(@$myAccess[0]['reports_discount_report']==1):
+                                    ?>
+                                    <li class="<?php if($this->uri->segment(2)=='discount_report'){echo 'active';}?>">
+                                        <a href="<?php echo site_url();?>/reports/discount_report">
+                                            <i class="fa fa-percent"></i>
+                                            Discount Report</a>
                                     </li>
                                 <?php
                                 endif;

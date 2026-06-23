@@ -556,6 +556,9 @@
                                                     <input type="checkbox" id="inlineCheckbox1" name="all_struckofstudent_report" value="1" <?php if(@$access_values[0]['all_struckofstudent_report']!=NULL){echo 'checked';}?> /> Struck of Students Report </label>
 
                                                 <label class="checkbox-inline">
+                                                    <input type="checkbox" id="inlineCheckbox1" name="reports_discount_report" value="1" <?php if(@$access_values[0]['reports_discount_report']!=NULL){echo 'checked';}?> /> Discount Report </label>
+
+                                                <label class="checkbox-inline">
                                                     <input type="checkbox" id="inlineCheckbox1" name="session_students_mobile_report" value="1" <?php if(@$access_values[0]['session_students_mobile_report']!=NULL){echo 'checked';}?> /> Students Session Wise Mobile Report </label>
 
                                                 <label class="checkbox-inline">

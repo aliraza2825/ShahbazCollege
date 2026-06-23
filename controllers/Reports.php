@@ -21,6 +21,83 @@ class Reports extends CI_Controller
     {
         parent::__construct();
         $this->load->model('clas');	
+        $this->ensure_discount_report_columns();
+    }
+
+    private function ensure_discount_report_columns()
+    {
+        if ($this->db->table_exists('discounts_approval')) {
+            if (!$this->db->field_exists('approved_by', 'discounts_approval')) {
+                $this->db->query("ALTER TABLE discounts_approval ADD approved_by VARCHAR(255) NULL AFTER created_by");
+            }
+            if (!$this->db->field_exists('approved_at', 'discounts_approval')) {
+                $this->db->query("ALTER TABLE discounts_approval ADD approved_at DATETIME NULL AFTER approved_by");
+            }
+        }
+
+        foreach (array('access_rules', 'access') as $table) {
+            if ($this->db->table_exists($table) && !$this->db->field_exists('reports_discount_report', $table)) {
+                $this->db->query("ALTER TABLE `$table` ADD `reports_discount_report` TINYINT(1) NULL DEFAULT NULL");
+            }
+        }
+    }
+
+    private function can_access_discount_report()
+    {
+        if ($this->session->userdata('role') == 'Admin') {
+            return true;
+        }
+
+        $access = checkUserAccess();
+        return !empty($access) && isset($access[0]['reports_discount_report']) && (int) $access[0]['reports_discount_report'] === 1;
+    }
+
+    public function discount_report()
+    {
+        if (!$this->can_access_discount_report()) {
+            $this->session->set_flashdata('error', 'You do not have access to this report.');
+            redirect('dashboard');
+            return;
+        }
+
+        $fromDate = $this->input->post('from_date') ?: date('Y-m-01');
+        $toDate = $this->input->post('to_date') ?: date('Y-m-d');
+
+        $access = checkUserAccess();
+        $campusIds = @explode(',', $access[0]['campus_ids']);
+
+        $this->db->select('
+            discounts_approval.*,
+            students.first_name,
+            students.last_name,
+            students.roll_no,
+            students.cnic,
+            classes.name as class_name,
+            courses.course_name,
+            campuses.campus_name
+        ');
+        $this->db->from('discounts_approval');
+        $this->db->join('students', 'students.student_id = discounts_approval.student_id', 'left');
+        $this->db->join('classes', 'classes.class_id = students.class_id', 'left');
+        $this->db->join('courses', 'courses.course_id = classes.course_id', 'left');
+        $this->db->join('campuses', 'campuses.campus_id = classes.campus_id', 'left');
+        $this->db->where('discounts_approval.status', 1);
+        $this->db->where('DATE(discounts_approval.created_at) >=', $fromDate);
+        $this->db->where('DATE(discounts_approval.created_at) <=', $toDate);
+
+        if ($this->session->userdata('role') != 'Admin' && !empty($campusIds)) {
+            $this->db->where_in('campuses.campus_id', $campusIds);
+        }
+
+        $this->db->order_by('discounts_approval.created_at', 'DESC');
+        $data['discounts'] = $this->db->get()->result_array();
+        $data['from_date'] = $fromDate;
+        $data['to_date'] = $toDate;
+
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('reports/discount_report', $data);
+        $this->load->view('inc/footer');
     }
 
     public function students_fee_problem()
@@ -1196,7 +1273,6 @@ class Reports extends CI_Controller
         $this->load->view('inc/footer');
     }
 }
-
 
 
 

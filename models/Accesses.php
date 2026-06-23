@@ -52,6 +52,15 @@ class Accesses extends CI_Model {
         }
     }
 
+    private function ensureReportAccessColumns()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if ($this->db->table_exists($table) && !$this->db->field_exists('reports_discount_report', $table)) {
+                $this->db->query("ALTER TABLE `$table` ADD `reports_discount_report` TINYINT(1) NULL DEFAULT NULL");
+            }
+        }
+    }
+
     public function getUsers()
     {
         $this->db->select('*');
@@ -245,6 +254,7 @@ class Accesses extends CI_Model {
         $reports_sidebar = $this->input->post('reports_sidebar');
         $reports_student_fee_problem = $this->input->post('reports_student_fee_problem');
         $all_struckofstudent_report = $this->input->post('all_struckofstudent_report');
+        $reports_discount_report = $this->input->post('reports_discount_report');
         $agent_view_statement = $this->input->post('agent_view_statement');
         $agent_view_statement_coo = $this->input->post('agent_view_statement_coo');
         $student_backup_report = $this->input->post('student_backup_report');
@@ -680,6 +690,8 @@ class Accesses extends CI_Model {
         $this->db->set('reports_sidebar', $reports_sidebar);
         $this->db->set('reports_student_fee_problem', $reports_student_fee_problem);
         $this->db->set('all_struckofstudent_report', $all_struckofstudent_report);
+        $this->ensureReportAccessColumns();
+        $this->db->set('reports_discount_report', $reports_discount_report);
         /*$this->db->set('subject_sidebar', $subject_sidebar);
         $this->db->set('subject_add', $subject_add);
         $this->db->set('subject_all', $subject_all);
@@ -1073,6 +1085,7 @@ class Accesses extends CI_Model {
         $reports_sidebar = $this->input->post('reports_sidebar');
         $reports_student_fee_problem = $this->input->post('reports_student_fee_problem');
         $all_struckofstudent_report = $this->input->post('all_struckofstudent_report');
+        $reports_discount_report = $this->input->post('reports_discount_report');
         $agent_view_statement = $this->input->post('agent_view_statement');
         $agent_view_statement_coo = $this->input->post('agent_view_statement_coo');
         $student_backup_report = $this->input->post('student_backup_report');
@@ -1488,6 +1501,8 @@ class Accesses extends CI_Model {
 
         $this->db->set('reports_sidebar', $reports_sidebar);
         $this->db->set('reports_student_fee_problem', $reports_student_fee_problem);		$this->db->set('all_struckofstudent_report', $all_struckofstudent_report);
+        $this->ensureReportAccessColumns();
+        $this->db->set('reports_discount_report', $reports_discount_report);
 
 
         $this->db->set('student_sidebar', $student_sidebar);

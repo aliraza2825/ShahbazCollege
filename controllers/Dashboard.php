@@ -734,6 +734,13 @@ class Dashboard extends CI_Controller {
 	
 	public function clear_discount_update($discount_id)
     {
+        if (!$this->db->field_exists('approved_by', 'discounts_approval')) {
+            $this->db->query("ALTER TABLE discounts_approval ADD approved_by VARCHAR(255) NULL AFTER created_by");
+        }
+        if (!$this->db->field_exists('approved_at', 'discounts_approval')) {
+            $this->db->query("ALTER TABLE discounts_approval ADD approved_at DATETIME NULL AFTER approved_by");
+        }
+
         $update_request = $this->db->get_where('discounts_approval',
             array('id'=>$discount_id))->result_array();
 
@@ -741,6 +748,8 @@ class Dashboard extends CI_Controller {
 
 
         $this->db->set('status',1);
+        $this->db->set('approved_by', $this->session->userdata('name'));
+        $this->db->set('approved_at', date('Y-m-d H:i:s'));
         $this->db->where(array('id'=>$discount_id));
         $this->db->update('discounts_approval');
 		
