@@ -1599,6 +1599,11 @@ $myAccess = checkUserAccess();
                                     <i class="icon-list"></i>
                                     Accounts</a>
                             </li>
+                            <li class="<?php if($this->uri->segment(2)=='chart_of_accounts'){echo 'active';}?>">
+                                <a href="<?php echo site_url();?>/accounts/chart_of_accounts">
+                                    <i class="fa fa-sitemap"></i>
+                                    Chart of Accounts</a>
+                            </li>
 
                             <li class="<?php if($this->uri->segment(2)==''){echo 'active';}?>">
                                 <a href="<?php echo site_url();?>/accounts">
@@ -2329,6 +2334,11 @@ $myAccess = checkUserAccess();
                                         <a href="<?php echo site_url();?>/accounts/account_details">
                                             <i class="icon-list"></i>
                                             Account Details</a>
+                                    </li>
+                                    <li class="<?php if($this->uri->segment(2)=='chart_of_accounts'){echo 'active';}?>">
+                                        <a href="<?php echo site_url();?>/accounts/chart_of_accounts">
+                                            <i class="fa fa-sitemap"></i>
+                                            Chart of Accounts</a>
                                     </li>
                                 <?php endif;?>
                                 

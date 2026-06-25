@@ -392,6 +392,215 @@ class Accounts extends CI_Controller {
         $this->load->view('inc/footer');
     }
 
+    private function financial_year_range()
+    {
+        $from = $this->input->get('from_date');
+        $to = $this->input->get('to_date');
+
+        if (!$from || !$to) {
+            $year = (int) date('Y');
+            if ((int) date('m') < 7) {
+                $fromYear = $year - 1;
+                $toYear = $year;
+            } else {
+                $fromYear = $year;
+                $toYear = $year + 1;
+            }
+            $from = $fromYear.'-07-01';
+            $to = $toYear.'-06-30';
+        }
+
+        return array($from, $to);
+    }
+
+    private function table_exists_safe($table)
+    {
+        return $this->db->table_exists($table);
+    }
+
+    private function money_row($title, $credit, $debit, $balance, $type, $group, $url = '')
+    {
+        return array(
+            'title' => $title,
+            'credit' => (float) $credit,
+            'debit' => (float) $debit,
+            'balance' => (float) $balance,
+            'type' => $type,
+            'group' => $group,
+            'url' => $url
+        );
+    }
+
+    private function account_activity($accountId, $from, $to)
+    {
+        $activity = array('credit' => 0, 'debit' => 0);
+        if (!$this->table_exists_safe('transactions_history')) {
+            return $activity;
+        }
+
+        $this->db->select("
+            SUM(CASE WHEN debit_credit = 'D' THEN amount ELSE 0 END) as credit_amount,
+            SUM(CASE WHEN debit_credit = 'C' THEN amount ELSE 0 END) as debit_amount
+        ", false);
+        $this->db->where('transaction_account_id', $accountId);
+        $this->db->where('created_at >=', $from.' 00:00:00');
+        $this->db->where('created_at <=', $to.' 23:59:59');
+        $row = $this->db->get('transactions_history')->row_array();
+
+        $activity['credit'] = (float) @$row['credit_amount'];
+        $activity['debit'] = (float) @$row['debit_amount'];
+        return $activity;
+    }
+
+    private function expense_head_name($category, $categories)
+    {
+        $current = $category;
+        while (!empty($current['sub_of']) && isset($categories[$current['sub_of']])) {
+            $current = $categories[$current['sub_of']];
+        }
+        return $current['name'];
+    }
+
+    public function chart_of_accounts()
+    {
+        list($from, $to) = $this->financial_year_range();
+        $data['from_date'] = $from;
+        $data['to_date'] = $to;
+        $data['rows'] = array();
+
+        $totals = array(
+            'credit' => 0,
+            'debit' => 0,
+            'balance' => 0
+        );
+
+        $accounts = $this->db->order_by('type', 'ASC')->order_by('account_title', 'ASC')->get('accounts')->result_array();
+        foreach ($accounts as $account) {
+            $activity = $this->account_activity($account['id'], $from, $to);
+            $group = ((int) $account['type'] === 1) ? 'Main Accounts - Bank' : 'Main Accounts - Cash';
+            $title = trim($account['account_title'].' '.$account['account_name']);
+            $row = $this->money_row($title, $activity['credit'], $activity['debit'], $account['amount'], 'Asset', $group, site_url().'/accounts/cashaccountreport/'.$account['id']);
+            $data['rows'][] = $row;
+            $totals['credit'] += $row['credit'];
+            $totals['debit'] += $row['debit'];
+            $totals['balance'] += $row['balance'];
+        }
+
+        if ($this->table_exists_safe('petty_cash_college_wise')) {
+            $pettyCash = $this->db
+                ->select('petty_cash_college_wise.*, campuses.campus_name, users.first_name, users.last_name')
+                ->join('campuses', 'campuses.campus_id = petty_cash_college_wise.campus_id', 'left')
+                ->join('users', 'users.user_id = petty_cash_college_wise.assign_to', 'left')
+                ->where('petty_cash_college_wise.petty_status', 1)
+                ->order_by('campuses.campus_name', 'ASC')
+                ->get('petty_cash_college_wise')
+                ->result_array();
+            foreach ($pettyCash as $petty) {
+                $credit = (float) @$petty['amount'];
+                $debit = max(0, (float) @$petty['amount'] - (float) @$petty['remaining_amount']);
+                $title = trim($petty['campus_name'].' - '.$petty['first_name'].' '.$petty['last_name']);
+                $row = $this->money_row($title, $credit, $debit, @$petty['remaining_amount'], 'Asset', 'Petty Cash Accounts', site_url().'/pettycash/pettycash_statement/'.$petty['id']);
+                $data['rows'][] = $row;
+                $totals['credit'] += $row['credit'];
+                $totals['debit'] += $row['debit'];
+                $totals['balance'] += $row['balance'];
+            }
+        }
+
+        if ($this->table_exists_safe('payments')) {
+            $this->db->select('SUM(CASE WHEN actual_amount > 0 THEN actual_amount ELSE amount END) as total', false);
+            $this->db->where('paid', 1);
+            $this->db->where('actual_paid_date >=', $from);
+            $this->db->where('actual_paid_date <=', $to);
+            $feeIncome = $this->db->get('payments')->row_array();
+            $row = $this->money_row('Student Fee / Recovery Received', @$feeIncome['total'], 0, @$feeIncome['total'], 'Income', 'Credit / Income');
+            $data['rows'][] = $row;
+            $totals['credit'] += $row['credit'];
+            $totals['balance'] += $row['balance'];
+        }
+
+        if ($this->table_exists_safe('misc_incomes') && $this->table_exists_safe('transactions_history')) {
+            $this->db->select('SUM(misc_incomes.amount) as amount', false);
+            $this->db->from('misc_incomes');
+            $this->db->join('transactions_history', 'transactions_history.misc_id = misc_incomes.id', 'inner');
+            $this->db->where('transactions_history.created_at >=', $from.' 00:00:00');
+            $this->db->where('transactions_history.created_at <=', $to.' 23:59:59');
+            $miscIncome = $this->db->get()->row_array();
+            $row = $this->money_row('Miscellaneous Income', @$miscIncome['amount'], 0, @$miscIncome['amount'], 'Income', 'Credit / Income', site_url().'/accounts/add_misc_income');
+            $data['rows'][] = $row;
+            $totals['credit'] += $row['credit'];
+            $totals['balance'] += $row['balance'];
+        }
+
+        if ($this->table_exists_safe('expense_category') && $this->table_exists_safe('expenses')) {
+            $categoryRows = $this->db->get('expense_category')->result_array();
+            $categories = array();
+            foreach ($categoryRows as $category) {
+                $categories[$category['expense_category_id']] = $category;
+            }
+
+            $this->db->select('expense_category.expense_category_id, expense_category.name, expense_category.sub_of, SUM(expenses.amount) as total_amount');
+            $this->db->from('expenses');
+            $this->db->join('expense_category', 'expense_category.expense_category_id = expenses.expense_category_id', 'left');
+            $this->db->where('expenses.date >=', $from);
+            $this->db->where('expenses.date <=', $to);
+            $this->db->where('expenses.approved_status', 1);
+            $this->db->group_by('expense_category.expense_category_id');
+            $expenseRows = $this->db->get()->result_array();
+
+            $expenseHeads = array();
+            foreach ($expenseRows as $expense) {
+                if (!isset($categories[$expense['expense_category_id']])) {
+                    continue;
+                }
+                $head = $this->expense_head_name($categories[$expense['expense_category_id']], $categories);
+                if (!isset($expenseHeads[$head])) {
+                    $expenseHeads[$head] = 0;
+                }
+                $expenseHeads[$head] += (float) $expense['total_amount'];
+            }
+            ksort($expenseHeads);
+            foreach ($expenseHeads as $head => $amount) {
+                $row = $this->money_row($head, 0, $amount, -$amount, 'Expense', 'Debit / Expense Heads');
+                $data['rows'][] = $row;
+                $totals['debit'] += $row['debit'];
+                $totals['balance'] += $row['balance'];
+            }
+
+            $this->db->select_sum('amount');
+            $this->db->where('date >=', $from);
+            $this->db->where('date <=', $to);
+            $this->db->where('approved_status', 0);
+            $pendingExpense = $this->db->get('expenses')->row_array();
+            if ((float) @$pendingExpense['amount'] > 0) {
+                $row = $this->money_row('Pending / Unapproved Expenses', 0, 0, @$pendingExpense['amount'], 'Liability', 'Liabilities / Payables');
+                $data['rows'][] = $row;
+                $totals['balance'] += $row['balance'];
+            }
+        }
+
+        if ($this->table_exists_safe('loans') && $this->table_exists_safe('loan_plan')) {
+            $loanRow = $this->db->query("
+                SELECT SUM(loan_plan.amount - IFNULL(loan_plan.amount_paid, 0)) as remaining
+                FROM loan_plan
+                INNER JOIN loans ON loans.id = loan_plan.loan_id
+                WHERE loans.status = 1
+            ")->row_array();
+            if ((float) @$loanRow['remaining'] > 0) {
+                $row = $this->money_row('Staff Loans / Advances Receivable', 0, 0, @$loanRow['remaining'], 'Asset', 'Loans / Advances', site_url().'/loans/accounts_loans_list');
+                $data['rows'][] = $row;
+                $totals['balance'] += $row['balance'];
+            }
+        }
+
+        $data['totals'] = $totals;
+
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('accounts/chart_of_accounts', $data);
+        $this->load->view('inc/footer');
+    }
+
     public function add_account()
     {
         $accounttitle = $this->input->post('title');

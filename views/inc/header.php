@@ -218,6 +218,15 @@
 									</a>
 								</li>
                                 <li>
+                                    <a href="<?php echo site_url();?>/accounts/chart_of_accounts">
+                                    <span class="details">
+                                    <span class="label label-sm label-icon label-success">
+                                    <i class="fa fa-sitemap"></i>
+                                    </span>
+                                    Chart of Accounts </span>
+                                    </a>
+                                </li>
+                                <li>
 									<a href="<?php echo site_url();?>/pettycash/index">
 									<span class="details">
 									<span class="label label-sm label-icon label-success">
