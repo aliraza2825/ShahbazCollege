@@ -452,6 +452,58 @@ class Accounts extends CI_Controller {
         return $activity;
     }
 
+    private function account_current_balance($accountId)
+    {
+        if (function_exists('accountCash_balance')) {
+            return (float) accountCash_balance($accountId);
+        }
+
+        $activity = $this->account_activity($accountId, '1970-01-01', date('Y-m-d'));
+        return $activity['credit'] - $activity['debit'];
+    }
+
+    private function bank_statement_balance($accountId)
+    {
+        if (!$this->table_exists_safe('bank_reconciliation_statement')) {
+            return $this->account_current_balance($accountId);
+        }
+
+        $statement = $this->db
+            ->select('balance')
+            ->where('account_id', $accountId)
+            ->where('balance !=', '')
+            ->where('balance IS NOT NULL', null, false)
+            ->order_by('trans_date', 'DESC')
+            ->order_by('id', 'DESC')
+            ->limit(1)
+            ->get('bank_reconciliation_statement')
+            ->row_array();
+
+        if (!isset($statement['balance'])) {
+            return $this->account_current_balance($accountId);
+        }
+
+        return (float) str_replace(',', '', $statement['balance']);
+    }
+
+    private function bank_statement_activity($accountId, $from, $to)
+    {
+        $activity = array('credit' => 0, 'debit' => 0);
+        if (!$this->table_exists_safe('bank_reconciliation_statement')) {
+            return $activity;
+        }
+
+        $this->db->select("SUM(REPLACE(credit, ',', '')) as credit_amount, SUM(REPLACE(debit, ',', '')) as debit_amount", false);
+        $this->db->where('account_id', $accountId);
+        $this->db->where('trans_date >=', $from);
+        $this->db->where('trans_date <=', $to);
+        $row = $this->db->get('bank_reconciliation_statement')->row_array();
+
+        $activity['credit'] = (float) str_replace(',', '', @$row['credit_amount']);
+        $activity['debit'] = (float) str_replace(',', '', @$row['debit_amount']);
+        return $activity;
+    }
+
     private function expense_head_name($category, $categories)
     {
         $current = $category;
@@ -476,10 +528,12 @@ class Accounts extends CI_Controller {
 
         $accounts = $this->db->order_by('type', 'ASC')->order_by('account_title', 'ASC')->get('accounts')->result_array();
         foreach ($accounts as $account) {
-            $activity = $this->account_activity($account['id'], $from, $to);
-            $group = ((int) $account['type'] === 1) ? 'Main Accounts - Bank' : 'Main Accounts - Cash';
+            $isBank = ((int) $account['type'] === 1);
+            $activity = $isBank ? $this->bank_statement_activity($account['id'], $from, $to) : $this->account_activity($account['id'], $from, $to);
+            $group = $isBank ? 'Main Accounts - Bank' : 'Main Accounts - Cash';
             $title = trim($account['account_title'].' '.$account['account_name']);
-            $row = $this->money_row($title, $activity['credit'], $activity['debit'], $account['amount'], 'Asset', $group, site_url().'/accounts/cashaccountreport/'.$account['id']);
+            $balance = $isBank ? $this->bank_statement_balance($account['id']) : $this->account_current_balance($account['id']);
+            $row = $this->money_row($title, $activity['credit'], $activity['debit'], $balance, 'Asset', $group, site_url().'/accounts/cashaccountreport/'.$account['id']);
             $data['rows'][] = $row;
             $totals['credit'] += $row['credit'];
             $totals['debit'] += $row['debit'];
@@ -497,9 +551,10 @@ class Accounts extends CI_Controller {
                 ->result_array();
             foreach ($pettyCash as $petty) {
                 $credit = (float) @$petty['amount'];
-                $debit = max(0, (float) @$petty['amount'] - (float) @$petty['remaining_amount']);
+                $balance = function_exists('pettycash_statement') ? (float) pettycash_statement($petty['id']) : (float) @$petty['remaining_amount'];
+                $debit = max(0, $credit - $balance);
                 $title = trim($petty['campus_name'].' - '.$petty['first_name'].' '.$petty['last_name']);
-                $row = $this->money_row($title, $credit, $debit, @$petty['remaining_amount'], 'Asset', 'Petty Cash Accounts', site_url().'/pettycash/pettycash_statement/'.$petty['id']);
+                $row = $this->money_row($title, $credit, $debit, $balance, 'Asset', 'Petty Cash Accounts', site_url().'/pettycash/pettycash_statement/'.$petty['id']);
                 $data['rows'][] = $row;
                 $totals['credit'] += $row['credit'];
                 $totals['debit'] += $row['debit'];
