@@ -27,6 +27,13 @@ class Students extends CI_Controller {
         $this->load->model('council');
         require_once("vendor/autoload.php");
     }
+
+    private function release_session_lock()
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+    }
     
     public function update_payment_comment(){
         
@@ -822,6 +829,8 @@ class Students extends CI_Controller {
 
         }
         
+
+        $this->release_session_lock();
 
         $this->load->view('inc/header');
         $this->load->view('inc/sidebar');
