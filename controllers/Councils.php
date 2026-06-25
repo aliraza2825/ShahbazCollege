@@ -11,6 +11,13 @@ class Councils extends CI_Controller {
         $this->load->library('user_agent');
         require_once("vendor/autoload.php");
     }
+
+    private function release_session_lock()
+    {
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+    }
     
     public function add_council()
     {
@@ -1055,10 +1062,14 @@ class Councils extends CI_Controller {
     
     public function report_ajax($status = null)
     {
+        $userId = $this->session->userdata('user_id');
+        $role = $this->session->userdata('role');
         $exp_campuses = $this->db->get_where(
             'access',
-            array('user_id' => $this->session->userdata('user_id'))
+            array('user_id' => $userId)
         )->row()->council_report_courses;
+
+        $this->release_session_lock();
     
         $this->db->select('exam_sequence.*,courses.course_name,courses.course_type');
         $this->db->from('exam_sequence');
@@ -1068,7 +1079,7 @@ class Councils extends CI_Controller {
             $this->db->where('exam_sequence.status', $status);
         }
     
-        if ($this->session->userdata('role') != 'Admin' && $exp_campuses != '') {
+        if ($role != 'Admin' && $exp_campuses != '') {
             $this->db->where_in('exam_sequence.course_id', explode(',', $exp_campuses));
         }
     
