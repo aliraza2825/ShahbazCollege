@@ -338,7 +338,8 @@ class Salary  extends CI_Controller{
         ));
         $this->db->group_start();
         $this->db->where('loan_plan.closing_id IS NULL', null, false);
-        $this->db->or_where('loan_plan.closing_id', 0);
+        $this->db->or_where('loan_plan.closing_id', '0');
+        $this->db->or_where('loan_plan.closing_id', '');
         $this->db->group_end();
 
         $this->db->order_by('loan_plan.id','asc');
