@@ -374,6 +374,7 @@ class Salary  extends CI_Controller{
 
         $basic_salary = (float) $data['staff']->salary;
         $gross_salary = (float) $data['staff']->gross_salary;
+        $salary_adjustment = (float) $data['staff']->salary_adjustment;
         
         if ($gross_salary <= 0) {
             $gross_salary = $basic_salary;
@@ -386,7 +387,7 @@ class Salary  extends CI_Controller{
          */
         $applyStatutoryRules = $this->user_applies_statutory_rules($user_id);
         $statutory = $applyStatutoryRules
-            ? $this->calculate_statutory_contributions($gross_salary, $payroll_date, $basic_salary)
+            ? $this->calculate_statutory_contributions(($gross_salary+$salary_adjustment), $payroll_date, $basic_salary)
             : array('employee_deductions' => array(), 'employer_contributions' => array());
         
         foreach ($statutory['employee_deductions'] as $deduction) {
@@ -431,12 +432,26 @@ class Salary  extends CI_Controller{
         if ($user != NULL) {
             $machine_user_id = $user->machine_id;
             foreach ($dates as $key => $date) {
-                $array_date = array("date" => $date, "in_time" => "", "out_time" => "", "status" => "0");
+                $array_date = array(
+                    "date" => $date,
+                    "in_time" => "",
+                    "out_time" => "",
+                    "status" => "0",
+                    "attendance_source" => ""
+                );
                 $qry = 'SELECT * FROM attendence WHERE machine_user_id=' . $machine_user_id . ' AND (time>="' . $date . ' 00:00:00" AND time<"' . $date . ' 23:59:59") ORDER BY time ASC LIMIT 1';
                 $checkin_time = $this->db->query($qry)->result_array();
                 if (count($checkin_time) > 0) {
                     $array_date['in_time'] = @date('h:i:s A', strtotime($checkin_time[0]['time']));
                     $array_date['status'] = "1";
+
+                    $rowMachineId = isset($checkin_time[0]['machine_id']) ? trim((string) $checkin_time[0]['machine_id']) : '';
+                    $rowCreatedBy = isset($checkin_time[0]['created_by']) ? trim((string) $checkin_time[0]['created_by']) : '';
+                    if ($rowMachineId !== '') {
+                        $array_date['attendance_source'] = 'machine';
+                    } elseif ($rowCreatedBy !== '') {
+                        $array_date['attendance_source'] = 'manual';
+                    }
                 } else {
                     $array_date['in_time'] = '';
                     $array_date['status'] = "0";
@@ -486,6 +501,8 @@ class Salary  extends CI_Controller{
         }
 
         $data['present'] = 0;
+        $data['present_machine'] = 0;
+        $data['present_manual'] = 0;
         $data['absent'] = 0;
         $data['leaves'] = 0;
         $data['counted_days'] = cal_days_in_month(CAL_GREGORIAN, date("m", strtotime($data['from_date'])), date("Y", strtotime($data['from_date'])));
@@ -495,10 +512,22 @@ class Salary  extends CI_Controller{
                 $data['absent'] += 1;
             } elseif ($at['status'] == "1" || $at['status'] == "5") {
                 $data['present'] += 1;
+                if ($at['status'] == "1") {
+                    if ($at['attendance_source'] === 'machine') {
+                        $data['present_machine'] += 1;
+                    } elseif ($at['attendance_source'] === 'manual') {
+                        $data['present_manual'] += 1;
+                    }
+                }
             } elseif ($at['status'] == "4") {
                 $data['leaves'] += 1;
             } elseif ($at['status'] == "2") {
                 $data['present'] += 0.5;
+                if ($at['attendance_source'] === 'machine') {
+                    $data['present_machine'] += 0.5;
+                } elseif ($at['attendance_source'] === 'manual') {
+                    $data['present_manual'] += 0.5;
+                }
             }
         }
 
