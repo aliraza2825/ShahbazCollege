@@ -110,19 +110,19 @@
 
                                     <div class=" col-md-4 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Present!">
                                         Present <br>
-                                        <input type="text" class="form-control input-inline " name="presents" value="<?php echo $present; ?>" readonly>
+                                        <input type="text" class="form-control input-inline " name="presents" value="<?php echo $present; ?>" >
                                         <small style="display:block; margin-top: 6px;">
                                             Machine: <?php echo $present_machine; ?> | Manual: <?php echo $present_manual; ?>
                                         </small>
                                     </div>
                                     <div class="col-md-2 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Late!">
-                                        Leaves <br> <input type="text" class="form-control input-inline "  name="total_lates" value="<?php echo $leaves; ?>" readonly>
+                                        Leaves <br> <input type="text" class="form-control input-inline "  name="total_lates" value="<?php echo $leaves; ?>" >
                                     </div>
                                     <div class="col-md-2 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Absent!">
-                                        Absent <br> <input type="text" class="form-control input-inline "  name="total_absents" value="<?php echo $absent; ?>" readonly>
+                                        Absent <br> <input type="text" class="form-control input-inline "  name="total_absents" value="<?php echo $absent; ?>" >
                                     </div>
                                     <div class="col-md-2 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Absent!">
-                                        Counted Days <br> <input type="text" class="form-control input-inline " style="text-align: center; font-weight: bold" name="total_days" id="total_days" value="<?php echo $counted_days-$leaves-$absent ?>" readonly>
+                                        Counted Days <br> <input type="text" class="form-control input-inline " style="text-align: center; font-weight: bold" name="total_days" id="total_days" value="<?php echo $counted_days-$leaves-$absent ?>" >
                                     </div>
                                 </div>
 
