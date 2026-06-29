@@ -709,13 +709,77 @@ class Salary  extends CI_Controller{
             'created_at' => date('Y-m-d H:i:s')
         ));
     }
+
+    private function get_minimum_salary_adjustments_by_payroll($payrollIds)
+    {
+        $payrollIds = array_filter(array_map('intval', (array) $payrollIds));
+        if (empty($payrollIds)) {
+            return array();
+        }
+
+        $minimumAdjustments = $this->db
+            ->select('payroll_id, SUM(amount) AS adjustment_amount')
+            ->where_in('payroll_id', $payrollIds)
+            ->where_in('name', array('Minimum Salary Adjustment', 'Salary Adjustment'))
+            ->group_by('payroll_id')
+            ->get('payroll_earn_deducs')
+            ->result_array();
+
+        $adjustmentByPayroll = array();
+        foreach ($minimumAdjustments as $minimumAdjustment) {
+            $adjustmentByPayroll[(int) $minimumAdjustment['payroll_id']] = (float) $minimumAdjustment['adjustment_amount'];
+        }
+
+        return $adjustmentByPayroll;
+    }
+
+    private function post_minimum_salary_adjustment_for_payroll_rows($payrollRows, $campus_id, $is_reversal = false)
+    {
+        if (empty($payrollRows)) {
+            return;
+        }
+
+        $payrollIds = array();
+        foreach ($payrollRows as $payrollRow) {
+            if (!isset($payrollRow['id'])) {
+                continue;
+            }
+            $payrollIds[] = (int) $payrollRow['id'];
+        }
+
+        $adjustmentByPayroll = $this->get_minimum_salary_adjustments_by_payroll($payrollIds);
+        if (empty($adjustmentByPayroll)) {
+            return;
+        }
+
+        foreach ($payrollRows as $payrollRow) {
+            $payrollId = isset($payrollRow['id']) ? (int) $payrollRow['id'] : 0;
+            if ($payrollId <= 0) {
+                continue;
+            }
+
+            $adjustmentAmount = isset($adjustmentByPayroll[$payrollId]) ? (float) $adjustmentByPayroll[$payrollId] : 0;
+            if ($adjustmentAmount <= 0) {
+                continue;
+            }
+
+            $this->post_minimum_salary_adjustment_to_pettycash(
+                (int) $payrollRow['user_id'],
+                $campus_id,
+                $adjustmentAmount,
+                $payrollRow['payroll_month'],
+                $payrollRow['payroll_year'],
+                $payrollId,
+                $is_reversal
+            );
+        }
+    }
     
     
 
     public function storepayroll()
     {
-        
-        
+
         $user_id   = $this->input->post('user_id');
         $campus_id = $this->input->post('campus_id');
         $month     = $this->input->post('month');
@@ -833,16 +897,9 @@ class Salary  extends CI_Controller{
     
         if ($oldPayroll) {
             $oldPayrollId = $oldPayroll['id'];
-            $oldMinimumAdjustment = (float) $this->db
-                ->select_sum('amount')
-                ->where('payroll_id', $oldPayrollId)
-                ->where_in('name', array('Minimum Salary Adjustment', 'Salary Adjustment'))
-                ->get('payroll_earn_deducs')
-                ->row()
-                ->amount;
-
-            if ($oldMinimumAdjustment > 0) {
-                $this->post_minimum_salary_adjustment_to_pettycash($user_id, $campus_id, $oldMinimumAdjustment, $month, $year, $oldPayrollId, true);
+            $oldPayrollWasDisbursed = !empty($oldPayroll['expense_id']) && isset($oldPayroll['disburse_through']) && $oldPayroll['disburse_through'] !== 'pending';
+            if ($oldPayrollWasDisbursed) {
+                $this->post_minimum_salary_adjustment_for_payroll_rows(array($oldPayroll), $campus_id, true);
             }
     
             $this->db->where('payroll_id', $oldPayrollId)->delete('payroll_earn_deducs');
@@ -1055,9 +1112,6 @@ class Salary  extends CI_Controller{
                 }
             }
 
-            if ($minimumSalaryAdjustment > 0) {
-                $this->post_minimum_salary_adjustment_to_pettycash($user_id, $campus_id, $minimumSalaryAdjustment, $month, $year, $insertId);
-            }
         }
     
         $this->db->trans_complete();
@@ -1224,6 +1278,19 @@ class Salary  extends CI_Controller{
 
         //$year = date("Y", strtotime("-1 months"));
         $payroll = $this->db->get_where('payroll',"payroll_month = '$month' and payroll_year = '$year' and user_id = '$user_id'")->row();
+        if (!$payroll) {
+            redirect('salary/salary_list');
+            return;
+        }
+
+        if (!empty($payroll->expense_id) && isset($payroll->disburse_through) && $payroll->disburse_through !== 'pending') {
+            $this->post_minimum_salary_adjustment_for_payroll_rows(array(array(
+                'id' => $payroll->id,
+                'user_id' => $payroll->user_id,
+                'payroll_month' => $payroll->payroll_month,
+                'payroll_year' => $payroll->payroll_year,
+            )), $payroll->campus_id, true);
+        }
 
         $this->db->set('amount_paid',"0");
         $this->db->set('paid_at',null);
@@ -1238,6 +1305,16 @@ class Salary  extends CI_Controller{
     }
 
     public function delete_expense($exp_id){
+        $payrollRows = $this->db
+            ->select('id, user_id, payroll_month, payroll_year, campus_id')
+            ->where('expense_id', $exp_id)
+            ->get('payroll')
+            ->result_array();
+
+        if (!empty($payrollRows)) {
+            $this->post_minimum_salary_adjustment_for_payroll_rows($payrollRows, $payrollRows[0]['campus_id'], true);
+        }
+
         $this->db->set('disburse_through', 'pending');
         $this->db->set('expense_id', NULL);
         $this->db->where('expense_id', $exp_id);
@@ -1256,6 +1333,7 @@ class Salary  extends CI_Controller{
     {
 
         $payroll_ids=$this->input->post('payroll_ids');
+        $payrollIdList = array_filter(array_map('intval', explode(',', (string) $payroll_ids)));
         $type=$this->input->post('type');
         $month=$this->input->post('month');
         $year=$this->input->post('year');
@@ -1280,8 +1358,18 @@ class Salary  extends CI_Controller{
             $insert_id = $this->db->insert_id();
             $this->db->set("disburse_through",$type);
             $this->db->set("expense_id",$insert_id);
-            $this->db->where_in("id",explode(",",$payroll_ids));
+            $this->db->where_in("id",$payrollIdList);
             $this->db->update("payroll");
+
+            if (!empty($payrollIdList)) {
+                $payrollRows = $this->db
+                    ->select('id, user_id, payroll_month, payroll_year')
+                    ->where_in('id', $payrollIdList)
+                    ->get('payroll')
+                    ->result_array();
+
+                $this->post_minimum_salary_adjustment_for_payroll_rows($payrollRows, $campus);
+            }
 
             $data = array(
                 'success' => 'Salary posted',

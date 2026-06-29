@@ -418,10 +418,11 @@ class Accounts extends CI_Controller {
         return $this->db->table_exists($table);
     }
 
-    private function money_row($title, $credit, $debit, $balance, $type, $group, $url = '')
+    private function money_row($title, $credit, $debit, $balance, $type, $group, $url = '', $opening = 0)
     {
         return array(
             'title' => $title,
+            'opening' => (float) $opening,
             'credit' => (float) $credit,
             'debit' => (float) $debit,
             'balance' => (float) $balance,
@@ -452,20 +453,50 @@ class Accounts extends CI_Controller {
         return $activity;
     }
 
-    private function account_current_balance($accountId)
+    private function account_opening_balance($accountId, $from)
     {
-        if (function_exists('accountCash_balance')) {
+        if (!$this->table_exists_safe('transactions_history')) {
+            return 0;
+        }
+
+        $this->db->select('SUM(CASE WHEN debit_credit = "D" THEN amount ELSE 0 END) as debit_amount, SUM(CASE WHEN debit_credit = "C" THEN amount ELSE 0 END) as credit_amount', false);
+        $this->db->where('transaction_account_id', $accountId);
+        $this->db->where('created_at <', $from.' 00:00:00');
+        $row = $this->db->get('transactions_history')->row_array();
+
+        return (float) @$row['debit_amount'] - (float) @$row['credit_amount'];
+    }
+
+    private function account_current_balance($accountId, $to = null)
+    {
+        if ($to === null && function_exists('accountCash_balance')) {
             return (float) accountCash_balance($accountId);
         }
 
-        $activity = $this->account_activity($accountId, '1970-01-01', date('Y-m-d'));
+        $to = $to ?: date('Y-m-d');
+        $activity = $this->account_activity($accountId, '1970-01-01', $to);
         return $activity['credit'] - $activity['debit'];
     }
 
-    private function bank_statement_balance($accountId)
+    private function bank_statement_opening_balance($accountId, $from, $to)
     {
         if (!$this->table_exists_safe('bank_reconciliation_statement')) {
-            return $this->account_current_balance($accountId);
+            return $this->account_opening_balance($accountId, $from);
+        }
+
+        $firstStatement = $this->db
+            ->select('balance, debit, credit')
+            ->where('account_id', $accountId)
+            ->where('trans_date >=', $from)
+            ->where('trans_date <=', $to)
+            ->order_by('trans_date', 'ASC')
+            ->order_by('id', 'ASC')
+            ->limit(1)
+            ->get('bank_reconciliation_statement')
+            ->row_array();
+
+        if (isset($firstStatement['balance'])) {
+            return ((float) str_replace(',', '', $firstStatement['balance']) + (float) str_replace(',', '', $firstStatement['debit'])) - (float) str_replace(',', '', $firstStatement['credit']);
         }
 
         $statement = $this->db
@@ -473,6 +504,7 @@ class Accounts extends CI_Controller {
             ->where('account_id', $accountId)
             ->where('balance !=', '')
             ->where('balance IS NOT NULL', null, false)
+            ->where('trans_date <', $from)
             ->order_by('trans_date', 'DESC')
             ->order_by('id', 'DESC')
             ->limit(1)
@@ -480,7 +512,32 @@ class Accounts extends CI_Controller {
             ->row_array();
 
         if (!isset($statement['balance'])) {
-            return $this->account_current_balance($accountId);
+            return 0;
+        }
+
+        return (float) str_replace(',', '', $statement['balance']);
+    }
+
+    private function bank_statement_balance_as_of($accountId, $to)
+    {
+        if (!$this->table_exists_safe('bank_reconciliation_statement')) {
+            return $this->account_current_balance($accountId, $to);
+        }
+
+        $statement = $this->db
+            ->select('balance')
+            ->where('account_id', $accountId)
+            ->where('balance !=', '')
+            ->where('balance IS NOT NULL', null, false)
+            ->where('trans_date <=', $to)
+            ->order_by('trans_date', 'DESC')
+            ->order_by('id', 'DESC')
+            ->limit(1)
+            ->get('bank_reconciliation_statement')
+            ->row_array();
+
+        if (!isset($statement['balance'])) {
+            return 0;
         }
 
         return (float) str_replace(',', '', $statement['balance']);
@@ -493,14 +550,96 @@ class Accounts extends CI_Controller {
             return $activity;
         }
 
-        $this->db->select("SUM(REPLACE(credit, ',', '')) as credit_amount, SUM(REPLACE(debit, ',', '')) as debit_amount", false);
+        $this->db->select('description, trans_date, credit, debit');
         $this->db->where('account_id', $accountId);
         $this->db->where('trans_date >=', $from);
         $this->db->where('trans_date <=', $to);
-        $row = $this->db->get('bank_reconciliation_statement')->row_array();
+        $this->db->group_by('description,trans_date,credit,debit');
+        $rows = $this->db->get('bank_reconciliation_statement')->result_array();
 
-        $activity['credit'] = (float) str_replace(',', '', @$row['credit_amount']);
-        $activity['debit'] = (float) str_replace(',', '', @$row['debit_amount']);
+        foreach ($rows as $row) {
+            $activity['credit'] += (float) str_replace(',', '', @$row['credit']);
+            $activity['debit'] += (float) str_replace(',', '', @$row['debit']);
+        }
+        return $activity;
+    }
+
+    private function petty_cash_balance_as_of($petty, $date)
+    {
+        $balance = (float) @$petty['opening_balance'];
+        $end = $date.' 23:59:59';
+        $givenDate = @$petty['given_date'] ?: '1970-01-01';
+
+        if ($this->table_exists_safe('expenses')) {
+            $this->db->select_sum('amount');
+            $this->db->where('add_by_id', $petty['assign_to']);
+            $this->db->where('actual_date >=', $givenDate);
+            $this->db->where('actual_date <=', $end);
+            $this->db->where('paid_type', 'cash');
+            $this->db->where('expense_id NOT IN (select expense_id from bank_reconciliation_statement where expense_id IS NOT NULL)', null, false);
+            $expense = $this->db->get('expenses')->row_array();
+            $balance -= (float) @$expense['amount'];
+        }
+
+        if ($this->table_exists_safe('cash_reversal')) {
+            $this->db->select_sum('cash_reversal.amount', 'amount');
+            $this->db->from('cash_reversal');
+            $this->db->join('expenses', 'expenses.expense_id = cash_reversal.expense_id');
+            $this->db->where('expenses.add_by_id', $petty['assign_to']);
+            $this->db->where('cash_reversal.created_at >=', $givenDate.' 00:00:00');
+            $this->db->where('cash_reversal.created_at <=', $end);
+            $reversal = $this->db->get()->row_array();
+            $balance += (float) @$reversal['amount'];
+        }
+
+        if ($this->table_exists_safe('petty_cash_history')) {
+            $this->db->select('SUM(CASE WHEN debit_credit = "D" THEN amount_given ELSE 0 END) as debit_amount, SUM(CASE WHEN debit_credit = "C" THEN amount_given ELSE 0 END) as credit_amount', false);
+            $this->db->where('transaction_pettycash_account', $petty['id']);
+            $this->db->where('created_at <=', $end);
+            $history = $this->db->get('petty_cash_history')->row_array();
+            $balance += (float) @$history['debit_amount'];
+            $balance -= (float) @$history['credit_amount'];
+        }
+
+        return $balance;
+    }
+
+    private function petty_cash_activity($petty, $from, $to)
+    {
+        $activity = array('credit' => 0, 'debit' => 0);
+
+        if ($this->table_exists_safe('petty_cash_history')) {
+            $this->db->select('SUM(CASE WHEN debit_credit = "D" THEN amount_given ELSE 0 END) as credit_amount, SUM(CASE WHEN debit_credit = "C" THEN amount_given ELSE 0 END) as debit_amount', false);
+            $this->db->where('transaction_pettycash_account', $petty['id']);
+            $this->db->where('created_at >=', $from.' 00:00:00');
+            $this->db->where('created_at <=', $to.' 23:59:59');
+            $history = $this->db->get('petty_cash_history')->row_array();
+            $activity['credit'] += (float) @$history['credit_amount'];
+            $activity['debit'] += (float) @$history['debit_amount'];
+        }
+
+        if ($this->table_exists_safe('expenses')) {
+            $this->db->select_sum('amount');
+            $this->db->where('add_by_id', $petty['assign_to']);
+            $this->db->where('actual_date >=', $from.' 00:00:00');
+            $this->db->where('actual_date <=', $to.' 23:59:59');
+            $this->db->where('paid_type', 'cash');
+            $this->db->where('expense_id NOT IN (select expense_id from bank_reconciliation_statement where expense_id IS NOT NULL)', null, false);
+            $expense = $this->db->get('expenses')->row_array();
+            $activity['debit'] += (float) @$expense['amount'];
+        }
+
+        if ($this->table_exists_safe('cash_reversal')) {
+            $this->db->select_sum('cash_reversal.amount', 'amount');
+            $this->db->from('cash_reversal');
+            $this->db->join('expenses', 'expenses.expense_id = cash_reversal.expense_id');
+            $this->db->where('expenses.add_by_id', $petty['assign_to']);
+            $this->db->where('cash_reversal.created_at >=', $from.' 00:00:00');
+            $this->db->where('cash_reversal.created_at <=', $to.' 23:59:59');
+            $reversal = $this->db->get()->row_array();
+            $activity['credit'] += (float) @$reversal['amount'];
+        }
+
         return $activity;
     }
 
@@ -521,6 +660,7 @@ class Accounts extends CI_Controller {
         $data['rows'] = array();
 
         $totals = array(
+            'opening' => 0,
             'credit' => 0,
             'debit' => 0,
             'balance' => 0
@@ -532,9 +672,20 @@ class Accounts extends CI_Controller {
             $activity = $isBank ? $this->bank_statement_activity($account['id'], $from, $to) : $this->account_activity($account['id'], $from, $to);
             $group = $isBank ? 'Main Accounts - Bank' : 'Main Accounts - Cash';
             $title = trim($account['account_title'].' '.$account['account_name']);
-            $balance = $isBank ? $this->bank_statement_balance($account['id']) : $this->account_current_balance($account['id']);
-            $row = $this->money_row($title, $activity['credit'], $activity['debit'], $balance, 'Asset', $group, site_url().'/accounts/cashaccountreport/'.$account['id']);
+            if ($isBank) {
+                $balance = $this->bank_statement_balance_as_of($account['id'], $to);
+                $opening = $balance - $activity['credit'] + $activity['debit'];
+                if ($opening < 0) {
+                    $activity['debit'] += abs($opening);
+                    $opening = 0;
+                }
+            } else {
+                $opening = $this->account_opening_balance($account['id'], $from);
+                $balance = $opening + $activity['credit'] - $activity['debit'];
+            }
+            $row = $this->money_row($title, $activity['credit'], $activity['debit'], $balance, 'Asset', $group, site_url().'/accounts/cashaccountreport/'.$account['id'], $opening);
             $data['rows'][] = $row;
+            $totals['opening'] += $row['opening'];
             $totals['credit'] += $row['credit'];
             $totals['debit'] += $row['debit'];
             $totals['balance'] += $row['balance'];
@@ -550,12 +701,14 @@ class Accounts extends CI_Controller {
                 ->get('petty_cash_college_wise')
                 ->result_array();
             foreach ($pettyCash as $petty) {
-                $credit = (float) @$petty['amount'];
-                $balance = function_exists('pettycash_statement') ? (float) pettycash_statement($petty['id']) : (float) @$petty['remaining_amount'];
-                $debit = max(0, $credit - $balance);
+                $openingDate = date('Y-m-d', strtotime($from.' -1 day'));
+                $opening = $this->petty_cash_balance_as_of($petty, $openingDate);
+                $activity = $this->petty_cash_activity($petty, $from, $to);
+                $balance = $opening + $activity['credit'] - $activity['debit'];
                 $title = trim($petty['campus_name'].' - '.$petty['first_name'].' '.$petty['last_name']);
-                $row = $this->money_row($title, $credit, $debit, $balance, 'Asset', 'Petty Cash Accounts', site_url().'/pettycash/pettycash_statement/'.$petty['id']);
+                $row = $this->money_row($title, $activity['credit'], $activity['debit'], $balance, 'Asset', 'Petty Cash Accounts', site_url().'/pettycash/pettycash_statement/'.$petty['id'], $opening);
                 $data['rows'][] = $row;
+                $totals['opening'] += $row['opening'];
                 $totals['credit'] += $row['credit'];
                 $totals['debit'] += $row['debit'];
                 $totals['balance'] += $row['balance'];
@@ -616,7 +769,7 @@ class Accounts extends CI_Controller {
             }
             ksort($expenseHeads);
             foreach ($expenseHeads as $head => $amount) {
-                $row = $this->money_row($head, 0, $amount, -$amount, 'Expense', 'Debit / Expense Heads');
+                $row = $this->money_row($head, 0, $amount, $amount, 'Expense', 'Debit / Expense Heads');
                 $data['rows'][] = $row;
                 $totals['debit'] += $row['debit'];
                 $totals['balance'] += $row['balance'];
@@ -628,8 +781,9 @@ class Accounts extends CI_Controller {
             $this->db->where('approved_status', 0);
             $pendingExpense = $this->db->get('expenses')->row_array();
             if ((float) @$pendingExpense['amount'] > 0) {
-                $row = $this->money_row('Pending / Unapproved Expenses', 0, 0, @$pendingExpense['amount'], 'Liability', 'Liabilities / Payables');
+                $row = $this->money_row('Pending / Unapproved Expenses', 0, 0, @$pendingExpense['amount'], 'Liability', 'Liabilities / Payables', '', @$pendingExpense['amount']);
                 $data['rows'][] = $row;
+                $totals['opening'] += $row['opening'];
                 $totals['balance'] += $row['balance'];
             }
         }
@@ -642,8 +796,9 @@ class Accounts extends CI_Controller {
                 WHERE loans.status = 1
             ")->row_array();
             if ((float) @$loanRow['remaining'] > 0) {
-                $row = $this->money_row('Staff Loans / Advances Receivable', 0, 0, @$loanRow['remaining'], 'Asset', 'Loans / Advances', site_url().'/loans/accounts_loans_list');
+                $row = $this->money_row('Staff Loans / Advances Receivable', 0, 0, @$loanRow['remaining'], 'Asset', 'Loans / Advances', site_url().'/loans/accounts_loans_list', @$loanRow['remaining']);
                 $data['rows'][] = $row;
+                $totals['opening'] += $row['opening'];
                 $totals['balance'] += $row['balance'];
             }
         }
