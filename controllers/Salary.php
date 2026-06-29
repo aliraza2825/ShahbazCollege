@@ -355,11 +355,16 @@ class Salary  extends CI_Controller{
         $this->db->select('loan_plan.id as installment_id,loan_plan.*,loans.* ');
         $this->db->from('loans');
         $this->db->join('loan_plan', 'loan_plan.loan_id=loans.id', 'INNER');
-        $this->db->where(array('loans.status' => "1",
+        $this->db->where(array(
+            'loans.status' => "1",
             'loan_plan.due_date <=' => $needed,
-            'loan_plan.amount_paid <=' => '0',
+            'loan_plan.amount_paid <=' => 0,
             'loans.user_id' => $user_id
         ));
+        $this->db->group_start();
+        $this->db->where('loan_plan.closing_id IS NULL', null, false);
+        $this->db->or_where('loan_plan.closing_id', 0);
+        $this->db->group_end();
 
         $this->db->order_by('loan_plan.id', 'asc');
         $data['loan'] = $this->db->get()->result_array();
