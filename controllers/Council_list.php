@@ -43,6 +43,429 @@ class Council_list extends CI_Controller {
 		$this->load->view('council_list/fee_detail', $data);
 		$this->load->view('inc/footer');
 	}
+
+	private function council_fee_export_headers()
+	{
+		return array(
+			'Student ID',
+			'Roll #',
+			'CNIC No.',
+			'Name & Father Name',
+			'Postal Address',
+			'Student Mobile Number',
+			'Board Name',
+			'Institute Contact Number',
+			'Total Fee',
+			'Fee Decided Current Time',
+			'Total Fee Submitted',
+			'Remaining Fee Payable At Current Time',
+			'Unpaid Installments AT Cuurent Time',
+			'Fee Detail Paid',
+			'Fee Detail Unpaid',
+			'Percentage Fee Receive',
+			'Percentage Paid Installments According to Decision',
+			'Renew Installments',
+			'Course Name',
+			'Cast',
+			'Qualification',
+			'Campus',
+			'Date of Birth',
+			'Email',
+			'City',
+			'Student Card',
+			'Gender',
+			'Religion',
+			'Class',
+			'Registration Date',
+			'System Registration Date',
+			'Blood Group',
+			'Books',
+			'Emergency Number',
+			'Section',
+			'Student Type',
+			'Shift',
+			'Pharmacy Coucil Data',
+			'Document Links',
+			'Machine ID'
+		);
+	}
+
+	private function sanitize_export_label($text, $default)
+	{
+		$text = trim((string) $text);
+		if ($text === '') {
+			return $default;
+		}
+
+		$text = preg_replace('/[^A-Za-z0-9\-_]+/', '-', $text);
+		$text = trim($text, '-');
+		return $text !== '' ? $text : $default;
+	}
+
+	private function resolve_council_fee_export_labels($class_id, $course_id, $campus_id)
+	{
+		$class_name = 'All-Classes';
+		$course_name = 'All-Courses';
+		$campus_name = 'All-Campuses';
+
+		if ($class_id !== '') {
+			$classRow = $this->db->get_where('classes', array('class_id' => $class_id))->row_array();
+			$class_name = $this->sanitize_export_label(isset($classRow['name']) ? $classRow['name'] : '', 'All-Classes');
+		}
+
+		if ($course_id !== '') {
+			$courseRow = $this->db->get_where('courses', array('course_id' => $course_id))->row_array();
+			$course_name = $this->sanitize_export_label(isset($courseRow['course_name']) ? $courseRow['course_name'] : '', 'All-Courses');
+		}
+
+		if ($campus_id !== '') {
+			$campusRow = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
+			$campus_name = $this->sanitize_export_label(isset($campusRow['campus_name']) ? $campusRow['campus_name'] : '', 'All-Campuses');
+		}
+
+		return array(
+			'class_name' => $class_name,
+			'course_name' => $course_name,
+			'campus_name' => $campus_name
+		);
+	}
+
+	private function council_fee_export_directory()
+	{
+		return FCPATH . 'downloads/council_exports';
+	}
+
+	private function council_fee_export_state_path($token)
+	{
+		return $this->council_fee_export_directory() . '/' . $token . '.json';
+	}
+
+	private function read_council_fee_export_state($token)
+	{
+		$statePath = $this->council_fee_export_state_path($token);
+		if (!is_file($statePath)) {
+			return null;
+		}
+
+		$state = json_decode((string) @file_get_contents($statePath), true);
+		if (!is_array($state)) {
+			return null;
+		}
+
+		return $state;
+	}
+
+	private function write_council_fee_export_state($token, $state)
+	{
+		$statePath = $this->council_fee_export_state_path($token);
+		@file_put_contents($statePath, json_encode($state));
+	}
+
+	private function council_fee_export_row($student)
+	{
+		$totalStudentFee = $this->council->getTotalFeeDetail($student['student_id']);
+		$totalFeeAmount = isset($totalStudentFee[0]['amount']) ? (float) $totalStudentFee[0]['amount'] : 0;
+		array_push($student, $totalFeeAmount);
+
+		$studentFeeDecidedCurrentTime = $this->council->getFeeDecidedCurrentTime($student['student_id']);
+		$feeDecidedAmount = isset($studentFeeDecidedCurrentTime[0]['amount']) ? (float) $studentFeeDecidedCurrentTime[0]['amount'] : 0;
+		array_push($student, $feeDecidedAmount);
+
+		$totalStudentPaidFee = (float) $this->council->getTotalPaidFeeDetail($student['student_id']);
+		array_push($student, $totalStudentPaidFee);
+		array_push($student, $feeDecidedAmount - $totalStudentPaidFee);
+
+		$studentUnpaidFeeCurrentTime = $this->council->getUnpaidFeeDetailCurrentTime($student['student_id']);
+		array_push($student, count($studentUnpaidFeeCurrentTime));
+
+		$studentPaidFee = $this->council->getPaidFeeDetail($student['student_id']);
+		$feeHTML = '';
+		foreach($studentPaidFee as $feeStatus)
+		{
+			$feeHTML.= 'Rs '.$feeStatus['actual_amount'].' paid on '.$feeStatus['actual_paid_date'];
+			$feeHTML.= ' | ';
+		}
+		array_push($student, $feeHTML);
+
+		$studentUnpaidFee = $this->council->getUnpaidFeeDetail($student['student_id']);
+		$feeHTML = '';
+		foreach($studentUnpaidFee as $feeStatus)
+		{
+			$feeHTML.= 'Fee '.$feeStatus['amount'].' not paid on '.$feeStatus['dead_line'];
+			$feeHTML.= ' | ';
+		}
+		array_push($student, $feeHTML);
+
+		if($totalStudentPaidFee==0 || $totalFeeAmount==0)
+		{
+			array_push($student, 'N/A');
+		}
+		else
+		{
+			array_push($student, round($totalStudentPaidFee/$totalFeeAmount*100,2));
+		}
+
+		if($totalStudentPaidFee==0 || $feeDecidedAmount==0)
+		{
+			array_push($student, 'N/A');
+		}
+		else
+		{
+			array_push($student, round($totalStudentPaidFee/$feeDecidedAmount*100,2));
+		}
+
+		$renewInstallments = $this->council->renewInstallments($student['student_id']);
+		array_push($student, count($renewInstallments));
+
+		$course_name = $this->council->getCourseName($student['student_id']);
+		array_push($student, isset($course_name[0]['course_name']) ? $course_name[0]['course_name'] : '');
+
+		$studentData = $this->council->getStudentData($student['student_id']);
+		$studentDataRow = isset($studentData[0]) ? $studentData[0] : array();
+		array_push($student, isset($studentDataRow['caste']) ? $studentDataRow['caste'] : '');
+		array_push($student, isset($studentDataRow['qualification']) ? $studentDataRow['qualification'] : '');
+
+		$campus = $this->council->getCampusName($student['student_id']);
+		array_push($student, isset($campus[0]['campus_name']) ? $campus[0]['campus_name'] : '');
+
+		array_push($student, isset($studentDataRow['date_of_birth']) ? $studentDataRow['date_of_birth'] : '');
+		array_push($student, isset($studentDataRow['email']) ? $studentDataRow['email'] : '');
+		array_push($student, isset($studentDataRow['city']) ? $studentDataRow['city'] : '');
+
+		$student_card = (isset($studentDataRow['student_card']) && $studentDataRow['student_card']==1) ? 'Yes' : 'No';
+		array_push($student, $student_card);
+
+		array_push($student, isset($studentDataRow['gender']) ? $studentDataRow['gender'] : '');
+		array_push($student, isset($studentDataRow['religion']) ? $studentDataRow['religion'] : '');
+
+		$class = $this->council->getClassName($student['student_id']);
+		array_push($student, isset($class[0]['name']) ? $class[0]['name'] : '');
+
+		array_push($student, isset($studentDataRow['registration_date']) ? $studentDataRow['registration_date'] : '');
+		array_push($student, isset($studentDataRow['entry_date']) ? $studentDataRow['entry_date'] : '');
+		array_push($student, isset($studentDataRow['blood_group']) ? $studentDataRow['blood_group'] : '');
+
+		$book_1 = (isset($studentDataRow['books_1']) && $studentDataRow['books_1']==1) ? '1st Year Book : Taken' : '1st Year Book : Not Taken';
+		$book_2 = (isset($studentDataRow['books_2']) && $studentDataRow['books_2']==1) ? '2nd Year Book : Taken' : '2nd Year Book : Not Taken';
+		array_push($student, $book_1.' '.$book_2);
+
+		array_push($student, isset($studentDataRow['emergency_no']) ? $studentDataRow['emergency_no'] : '');
+		array_push($student, isset($studentDataRow['section']) ? $studentDataRow['section'] : '');
+		array_push($student, isset($studentDataRow['study_type']) ? $studentDataRow['study_type'] : '');
+		array_push($student, isset($studentDataRow['shift']) ? $studentDataRow['shift'] : '');
+
+		$pharmacy_data = $this->council->getStudentResultRemarksForExcelSheet(isset($studentDataRow['cnic']) ? $studentDataRow['cnic'] : '');
+		array_push($student, $pharmacy_data);
+
+		$documents = $this->council->getStudentDocuments($student['student_id']);
+		array_push($student, $documents);
+
+		$machine_id = $this->council->getMachineID($student['student_id']);
+		array_push($student, isset($machine_id[0]['machine_id']) ? $machine_id[0]['machine_id'] : '');
+
+		return array_values($student);
+	}
+
+	public function start_council_fee_export()
+	{
+		$class_id = trim((string) $this->input->post('class_id'));
+		$course_id = trim((string) $this->input->post('course_id'));
+		$campus_id = trim((string) $this->input->post('campus_id'));
+
+		$total = $this->council->countCouncilFeeStudents($class_id, $course_id, $campus_id, true);
+		if ($total <= 0) {
+			return $this->output
+				->set_content_type('application/json')
+				->set_output(json_encode(array(
+					'success' => false,
+					'message' => 'No students found for selected filters.'
+				)));
+		}
+
+		$labels = $this->resolve_council_fee_export_labels($class_id, $course_id, $campus_id);
+		if (function_exists('random_bytes')) {
+			$token = bin2hex(random_bytes(16));
+		} else {
+			$token = md5(uniqid((string) mt_rand(), true));
+		}
+		$filename = $labels['campus_name'].'_'.$labels['course_name'].'_'.$labels['class_name'].'_'.date('Y-m-d_H-i-s').'.csv';
+
+		$directory = $this->council_fee_export_directory();
+		if (!is_dir($directory)) {
+			@mkdir($directory, 0775, true);
+		}
+
+		$csvPath = $directory . '/' . $token . '.csv';
+		$fp = @fopen($csvPath, 'w');
+		if (!$fp) {
+			return $this->output
+				->set_content_type('application/json')
+				->set_output(json_encode(array(
+					'success' => false,
+					'message' => 'Could not create export file on server.'
+				)));
+		}
+
+		fputcsv($fp, $this->council_fee_export_headers());
+		fclose($fp);
+
+		$state = array(
+			'token' => $token,
+			'status' => 'processing',
+			'class_id' => $class_id,
+			'course_id' => $course_id,
+			'campus_id' => $campus_id,
+			'total' => $total,
+			'processed' => 0,
+			'chunk_size' => 20,
+			'file_path' => $csvPath,
+			'download_name' => $filename,
+			'created_at' => date('Y-m-d H:i:s')
+		);
+		$this->write_council_fee_export_state($token, $state);
+
+		return $this->output
+			->set_content_type('application/json')
+			->set_output(json_encode(array(
+				'success' => true,
+				'token' => $token,
+				'total' => $total,
+				'processed' => 0,
+				'download_url' => site_url('council_list/download_council_fee_export/' . $token)
+			)));
+	}
+
+	public function process_council_fee_export()
+	{
+		$token = trim((string) $this->input->post('token'));
+		if ($token === '' || !preg_match('/^[a-f0-9]{32}$/', $token)) {
+			return $this->output
+				->set_content_type('application/json')
+				->set_output(json_encode(array(
+					'success' => false,
+					'message' => 'Invalid export token.'
+				)));
+		}
+
+		$state = $this->read_council_fee_export_state($token);
+		if (!$state) {
+			return $this->output
+				->set_content_type('application/json')
+				->set_output(json_encode(array(
+					'success' => false,
+					'message' => 'Export session not found.'
+				)));
+		}
+
+		if ($state['status'] === 'completed') {
+			return $this->output
+				->set_content_type('application/json')
+				->set_output(json_encode(array(
+					'success' => true,
+					'completed' => true,
+					'processed' => (int) $state['processed'],
+					'total' => (int) $state['total'],
+					'download_url' => site_url('council_list/download_council_fee_export/' . $token)
+				)));
+		}
+
+		$offset = (int) $state['processed'];
+		$limit = isset($state['chunk_size']) ? (int) $state['chunk_size'] : 20;
+		if ($limit <= 0) {
+			$limit = 20;
+		}
+
+		$students = $this->council->getCouncilFeeStudentsChunk(
+			$state['class_id'],
+			$state['course_id'],
+			$state['campus_id'],
+			$limit,
+			$offset,
+			true
+		);
+
+		$fp = @fopen($state['file_path'], 'a');
+		if (!$fp) {
+			return $this->output
+				->set_content_type('application/json')
+				->set_output(json_encode(array(
+					'success' => false,
+					'message' => 'Could not write export file.'
+				)));
+		}
+
+		foreach ($students as $student) {
+			fputcsv($fp, $this->council_fee_export_row($student));
+		}
+		fclose($fp);
+
+		if (empty($students)) {
+			$state['processed'] = (int) $state['total'];
+			$state['status'] = 'completed';
+			$state['completed_at'] = date('Y-m-d H:i:s');
+			$this->write_council_fee_export_state($token, $state);
+
+			return $this->output
+				->set_content_type('application/json')
+				->set_output(json_encode(array(
+					'success' => true,
+					'completed' => true,
+					'processed' => (int) $state['processed'],
+					'total' => (int) $state['total'],
+					'download_url' => site_url('council_list/download_council_fee_export/' . $token)
+				)));
+		}
+
+		$state['processed'] = $offset + count($students);
+		if ($state['processed'] >= (int) $state['total']) {
+			$state['processed'] = (int) $state['total'];
+			$state['status'] = 'completed';
+			$state['completed_at'] = date('Y-m-d H:i:s');
+		}
+		$this->write_council_fee_export_state($token, $state);
+
+		$completed = ($state['status'] === 'completed');
+		return $this->output
+			->set_content_type('application/json')
+			->set_output(json_encode(array(
+				'success' => true,
+				'completed' => $completed,
+				'processed' => (int) $state['processed'],
+				'total' => (int) $state['total'],
+				'download_url' => site_url('council_list/download_council_fee_export/' . $token)
+			)));
+	}
+
+	public function download_council_fee_export($token = '')
+	{
+		$token = trim((string) $token);
+		if ($token === '' || !preg_match('/^[a-f0-9]{32}$/', $token)) {
+			show_error('Invalid export token.', 400);
+			return;
+		}
+
+		$state = $this->read_council_fee_export_state($token);
+		if (!$state || !isset($state['status']) || $state['status'] !== 'completed') {
+			show_error('Export is not ready yet.', 404);
+			return;
+		}
+
+		$filePath = isset($state['file_path']) ? $state['file_path'] : '';
+		if ($filePath === '' || !is_file($filePath)) {
+			show_error('Export file not found.', 404);
+			return;
+		}
+
+		$downloadName = isset($state['download_name']) && $state['download_name'] !== '' ? $state['download_name'] : 'council-fee-export.csv';
+
+		header('Content-Type: text/csv');
+		header('Content-Disposition: attachment; filename="'.$downloadName.'"');
+		header('Content-Length: ' . filesize($filePath));
+		header('Pragma: no-cache');
+		header('Expires: 0');
+		readfile($filePath);
+		exit;
+	}
 	
 	public function create()
 	{
@@ -152,6 +575,16 @@ class Council_list extends CI_Controller {
 
 	public function create_council_fee()
 	{
+		@ini_set('max_execution_time', '0');
+		@set_time_limit(0);
+		@ini_set('memory_limit', '1024M');
+		@ini_set('zlib.output_compression', '0');
+		@ini_set('output_buffering', 'off');
+		@ignore_user_abort(true);
+		if (function_exists('apache_setenv')) {
+			@apache_setenv('no-gzip', '1');
+		}
+
 		$class_id = trim((string) $this->input->post('class_id'));
 		$course_id = trim((string) $this->input->post('course_id'));
 		$campus_id = trim((string) $this->input->post('campus_id'));
@@ -255,8 +688,14 @@ class Council_list extends CI_Controller {
 			header('Content-Disposition: attachment; filename='.$filename);
 			header('Pragma: no-cache');
 			header('Expires: 0');
+			header('X-Accel-Buffering: no');
 			// Write mysql headers to csv
 			fputcsv($fp, $headers);
+			if (function_exists('ob_flush')) {
+				@ob_flush();
+			}
+			@flush();
+
 			$row_tally = 0;
 			// Write mysql rows to csv
 			foreach($result as $student)
@@ -392,6 +831,13 @@ class Council_list extends CI_Controller {
 				
 				$row_tally++;
 				fputcsv($fp, array_values($student));
+				if (($row_tally % 25) === 0) {
+					@fflush($fp);
+					if (function_exists('ob_flush')) {
+						@ob_flush();
+					}
+					@flush();
+				}
 			}
 			
 			fclose($fp);
