@@ -161,47 +161,143 @@ class Council_list extends CI_Controller {
 		@file_put_contents($statePath, json_encode($state));
 	}
 
-	private function council_fee_export_row($student)
+	private function council_fee_prepare_batch_maps($students)
 	{
-		$totalStudentFee = $this->council->getTotalFeeDetail($student['student_id']);
-		$totalFeeAmount = isset($totalStudentFee[0]['amount']) ? (float) $totalStudentFee[0]['amount'] : 0;
-		array_push($student, $totalFeeAmount);
+		$maps = array(
+			'total_fee' => array(),
+			'fee_decided' => array(),
+			'total_paid' => array(),
+			'unpaid_current_count' => array(),
+			'paid_detail' => array(),
+			'unpaid_detail' => array(),
+			'renew_count' => array(),
+			'documents' => array(),
+			'pharmacy' => array()
+		);
 
-		$studentFeeDecidedCurrentTime = $this->council->getFeeDecidedCurrentTime($student['student_id']);
-		$feeDecidedAmount = isset($studentFeeDecidedCurrentTime[0]['amount']) ? (float) $studentFeeDecidedCurrentTime[0]['amount'] : 0;
-		array_push($student, $feeDecidedAmount);
-
-		$studentPaidFee = $this->council->getPaidFeeDetail($student['student_id']);
-		$totalStudentPaidFee = 0;
-		$feeHTML = '';
-		foreach($studentPaidFee as $feeStatus)
-		{
-			$totalStudentPaidFee += (float) $feeStatus['actual_amount'];
-			$feeHTML.= 'Rs '.$feeStatus['actual_amount'].' paid on '.$feeStatus['actual_paid_date'];
-			$feeHTML.= ' | ';
+		if (empty($students)) {
+			return $maps;
 		}
-		array_push($student, $totalStudentPaidFee);
-		array_push($student, $feeDecidedAmount - $totalStudentPaidFee);
 
-		$today = date('Y-m-d');
-		$unpaidCurrentCount = 0;
-		$studentUnpaidFee = $this->council->getUnpaidFeeDetail($student['student_id']);
-		foreach ($studentUnpaidFee as $feeStatus) {
-			if (isset($feeStatus['dead_line']) && $feeStatus['dead_line'] < $today) {
-				$unpaidCurrentCount++;
+		$studentIds = array();
+		$cnics = array();
+		foreach ($students as $student) {
+			$studentIds[] = (int) $student['student_id'];
+			if (!empty($student['cnic'])) {
+				$cnics[] = $student['cnic'];
 			}
 		}
-		array_push($student, $unpaidCurrentCount);
 
-		array_push($student, $feeHTML);
-
-		$feeHTML = '';
-		foreach($studentUnpaidFee as $feeStatus)
-		{
-			$feeHTML.= 'Fee '.$feeStatus['amount'].' not paid on '.$feeStatus['dead_line'];
-			$feeHTML.= ' | ';
+		$studentIds = array_values(array_unique(array_filter($studentIds)));
+		$cnics = array_values(array_unique(array_filter($cnics)));
+		if (empty($studentIds)) {
+			return $maps;
 		}
-		array_push($student, $feeHTML);
+
+		$payments = $this->db
+			->select('id, student_id, amount, actual_amount, dead_line, actual_paid_date, paid, merged_challan')
+			->where_in('student_id', $studentIds)
+			->order_by('dead_line', 'ASC')
+			->get('payments')
+			->result_array();
+
+		$today = date('Y-m-d');
+		$mergedPaidSeen = array();
+		foreach ($payments as $payment) {
+			$sid = (int) $payment['student_id'];
+			$maps['total_fee'][$sid] = (isset($maps['total_fee'][$sid]) ? $maps['total_fee'][$sid] : 0) + (float) $payment['amount'];
+
+			if (!empty($payment['dead_line']) && $payment['dead_line'] < $today) {
+				$maps['fee_decided'][$sid] = (isset($maps['fee_decided'][$sid]) ? $maps['fee_decided'][$sid] : 0) + (float) $payment['amount'];
+			}
+
+			if ((int) $payment['paid'] === 0) {
+				if (!empty($payment['dead_line']) && $payment['dead_line'] < $today) {
+					$maps['unpaid_current_count'][$sid] = (isset($maps['unpaid_current_count'][$sid]) ? $maps['unpaid_current_count'][$sid] : 0) + 1;
+				}
+				$maps['unpaid_detail'][$sid][] = 'Fee '.$payment['amount'].' not paid on '.$payment['dead_line'];
+				continue;
+			}
+
+			$merged = isset($payment['merged_challan']) ? trim((string) $payment['merged_challan']) : '';
+			if ($merged !== '') {
+				$mergedKey = $sid.'|'.$merged;
+				$actualAmount = (float) $payment['actual_amount'];
+				if ($actualAmount <= 0 || isset($mergedPaidSeen[$mergedKey])) {
+					continue;
+				}
+				$mergedPaidSeen[$mergedKey] = 1;
+			}
+
+			$maps['total_paid'][$sid] = (isset($maps['total_paid'][$sid]) ? $maps['total_paid'][$sid] : 0) + (float) $payment['actual_amount'];
+			$maps['paid_detail'][$sid][] = 'Rs '.$payment['actual_amount'].' paid on '.$payment['actual_paid_date'];
+		}
+
+		$renewRows = $this->db
+			->select('payments.student_id, COUNT(fees_remarks.id) as renew_count', false)
+			->from('fees_remarks')
+			->join('payments', 'payments.id=fees_remarks.fee_id', 'inner')
+			->where_in('payments.student_id', $studentIds)
+			->group_by('payments.student_id')
+			->get()
+			->result_array();
+		foreach ($renewRows as $renewRow) {
+			$maps['renew_count'][(int) $renewRow['student_id']] = (int) $renewRow['renew_count'];
+		}
+
+		$documents = $this->db
+			->select('student_id, type, upload_image, online_image, image')
+			->where_in('student_id', $studentIds)
+			->get('student_documents')
+			->result_array();
+		foreach ($documents as $document) {
+			$sid = (int) $document['student_id'];
+			if ((int) $document['upload_image'] === 1) {
+				$maps['documents'][$sid][] = $document['type'].' = '.$document['online_image'];
+			} else {
+				$maps['documents'][$sid][] = $document['type'].' = '.base_url().'uploads/'.$document['image'];
+			}
+		}
+
+		if (!empty($cnics)) {
+			$pharmacyRows = $this->db
+				->select('cnic, class, council_exam_no, roll_no, date, result_remarks, result_update_date')
+				->where_in('cnic', $cnics)
+				->get('punjab_council_roll_number')
+				->result_array();
+			foreach ($pharmacyRows as $pharmacyRow) {
+				$cnic = $pharmacyRow['cnic'];
+				$class = ((int) $pharmacyRow['class'] === 1) ? '1st Year' : '2nd Year';
+				$part = 'Class : '.$class;
+				$part .= ' | Exam Number : '.$pharmacyRow['council_exam_no'];
+				$part .= ' | Roll Number : '.$pharmacyRow['roll_no'];
+				$part .= ' | Roll Number Upload Date : '.date('Y-m-d', strtotime($pharmacyRow['date']));
+				if (!empty($pharmacyRow['result_remarks'])) {
+					$part .= ' | Result Upload Date : '.date('Y-m-d', strtotime($pharmacyRow['result_update_date']));
+					$part .= ' | Result Remarks : '.$pharmacyRow['result_remarks'];
+				}
+				$maps['pharmacy'][$cnic][] = $part;
+			}
+		}
+
+		return $maps;
+	}
+
+	private function council_fee_export_row($student, $maps = array())
+	{
+		$studentId = (int) $student['student_id'];
+		$totalFeeAmount = isset($maps['total_fee'][$studentId]) ? (float) $maps['total_fee'][$studentId] : 0;
+		array_push($student, $totalFeeAmount);
+
+		$feeDecidedAmount = isset($maps['fee_decided'][$studentId]) ? (float) $maps['fee_decided'][$studentId] : 0;
+		array_push($student, $feeDecidedAmount);
+
+		$totalStudentPaidFee = isset($maps['total_paid'][$studentId]) ? (float) $maps['total_paid'][$studentId] : 0;
+		array_push($student, $totalStudentPaidFee);
+		array_push($student, $feeDecidedAmount - $totalStudentPaidFee);
+		array_push($student, isset($maps['unpaid_current_count'][$studentId]) ? (int) $maps['unpaid_current_count'][$studentId] : 0);
+		array_push($student, !empty($maps['paid_detail'][$studentId]) ? implode(' | ', $maps['paid_detail'][$studentId]).' | ' : '');
+		array_push($student, !empty($maps['unpaid_detail'][$studentId]) ? implode(' | ', $maps['unpaid_detail'][$studentId]).' | ' : '');
 
 		if($totalStudentPaidFee==0 || $totalFeeAmount==0)
 		{
@@ -221,8 +317,7 @@ class Council_list extends CI_Controller {
 			array_push($student, round($totalStudentPaidFee/$feeDecidedAmount*100,2));
 		}
 
-		$renewInstallments = $this->council->renewInstallments($student['student_id']);
-		array_push($student, count($renewInstallments));
+		array_push($student, isset($maps['renew_count'][$studentId]) ? (int) $maps['renew_count'][$studentId] : 0);
 
 		array_push($student, isset($student['export_course_name']) ? $student['export_course_name'] : '');
 		array_push($student, isset($student['caste']) ? $student['caste'] : '');
@@ -251,11 +346,9 @@ class Council_list extends CI_Controller {
 		array_push($student, isset($student['study_type']) ? $student['study_type'] : '');
 		array_push($student, isset($student['shift']) ? $student['shift'] : '');
 
-		$pharmacy_data = $this->council->getStudentResultRemarksForExcelSheet(isset($student['cnic']) ? $student['cnic'] : '');
-		array_push($student, $pharmacy_data);
-
-		$documents = $this->council->getStudentDocuments($student['student_id']);
-		array_push($student, $documents);
+		$cnic = isset($student['cnic']) ? $student['cnic'] : '';
+		array_push($student, !empty($maps['pharmacy'][$cnic]) ? implode(' --- ', $maps['pharmacy'][$cnic]).' --- ' : '');
+		array_push($student, !empty($maps['documents'][$studentId]) ? implode(' | ', $maps['documents'][$studentId]).' | ' : '');
 
 		array_push($student, isset($student['export_machine_id']) ? $student['export_machine_id'] : '');
 
@@ -390,8 +483,9 @@ class Council_list extends CI_Controller {
 				)));
 		}
 
+		$maps = $this->council_fee_prepare_batch_maps($students);
 		foreach ($students as $student) {
-			fputcsv($fp, $this->council_fee_export_row($student));
+			fputcsv($fp, $this->council_fee_export_row($student, $maps));
 		}
 		fclose($fp);
 
