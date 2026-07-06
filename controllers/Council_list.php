@@ -234,7 +234,7 @@ class Council_list extends CI_Controller {
 		}
 
 		$renewRows = $this->db
-			->select('payments.student_id, COUNT(fees_remarks.id) as renew_count', false)
+			->select('payments.student_id, COUNT(*) as renew_count', false)
 			->from('fees_remarks')
 			->join('payments', 'payments.id=fees_remarks.fee_id', 'inner')
 			->where_in('payments.student_id', $studentIds)
