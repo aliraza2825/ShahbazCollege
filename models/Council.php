@@ -26,9 +26,12 @@ class Council extends CI_Model {
 
 	public function getCouncilFeeStudents($class_id = '', $course_id = '', $campus_id = '', $include_inactive = true)
 	{
-		$this->db->select('students.student_id, students.roll_no, students.cnic, CONCAT(students.first_name," ", students.last_name, " S/O ", students.father_name) as name, students.address, students.mobile, students.board, 03158042977 as institute', false);
+		$this->db->select('students.student_id, students.roll_no, students.cnic, CONCAT(students.first_name," ", students.last_name, " S/O ", students.father_name) as name, students.address, students.mobile, students.board, 03158042977 as institute, students.caste, students.qualification, students.date_of_birth, students.email, students.city, students.student_card, students.gender, students.religion, students.registration_date, students.entry_date, students.blood_group, students.books_1, students.books_2, students.emergency_no, students.section, students.study_type, students.shift, courses.course_name as export_course_name, campuses.campus_name as export_campus_name, classes.name as export_class_name, machine_data.machine_id as export_machine_id', false);
 		$this->db->from('students');
 		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
+		$this->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'left');
+		$this->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id AND machine_data.type="student"', 'left');
 
 		if ($class_id !== '') {
 			$this->db->where('students.class_id', $class_id);
@@ -78,9 +81,12 @@ class Council extends CI_Model {
 
 	public function getCouncilFeeStudentsChunk($class_id = '', $course_id = '', $campus_id = '', $limit = 100, $offset = 0, $include_inactive = true)
 	{
-		$this->db->select('students.student_id, students.roll_no, students.cnic, CONCAT(students.first_name," ", students.last_name, " S/O ", students.father_name) as name, students.address, students.mobile, students.board, 03158042977 as institute', false);
+		$this->db->select('students.student_id, students.roll_no, students.cnic, CONCAT(students.first_name," ", students.last_name, " S/O ", students.father_name) as name, students.address, students.mobile, students.board, 03158042977 as institute, students.caste, students.qualification, students.date_of_birth, students.email, students.city, students.student_card, students.gender, students.religion, students.registration_date, students.entry_date, students.blood_group, students.books_1, students.books_2, students.emergency_no, students.section, students.study_type, students.shift, courses.course_name as export_course_name, campuses.campus_name as export_campus_name, classes.name as export_class_name, machine_data.machine_id as export_machine_id', false);
 		$this->db->from('students');
 		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
+		$this->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'left');
+		$this->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id AND machine_data.type="student"', 'left');
 
 		if ($class_id !== '') {
 			$this->db->where('students.class_id', $class_id);

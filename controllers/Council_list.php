@@ -171,23 +171,30 @@ class Council_list extends CI_Controller {
 		$feeDecidedAmount = isset($studentFeeDecidedCurrentTime[0]['amount']) ? (float) $studentFeeDecidedCurrentTime[0]['amount'] : 0;
 		array_push($student, $feeDecidedAmount);
 
-		$totalStudentPaidFee = (float) $this->council->getTotalPaidFeeDetail($student['student_id']);
-		array_push($student, $totalStudentPaidFee);
-		array_push($student, $feeDecidedAmount - $totalStudentPaidFee);
-
-		$studentUnpaidFeeCurrentTime = $this->council->getUnpaidFeeDetailCurrentTime($student['student_id']);
-		array_push($student, count($studentUnpaidFeeCurrentTime));
-
 		$studentPaidFee = $this->council->getPaidFeeDetail($student['student_id']);
+		$totalStudentPaidFee = 0;
 		$feeHTML = '';
 		foreach($studentPaidFee as $feeStatus)
 		{
+			$totalStudentPaidFee += (float) $feeStatus['actual_amount'];
 			$feeHTML.= 'Rs '.$feeStatus['actual_amount'].' paid on '.$feeStatus['actual_paid_date'];
 			$feeHTML.= ' | ';
 		}
+		array_push($student, $totalStudentPaidFee);
+		array_push($student, $feeDecidedAmount - $totalStudentPaidFee);
+
+		$today = date('Y-m-d');
+		$unpaidCurrentCount = 0;
+		$studentUnpaidFee = $this->council->getUnpaidFeeDetail($student['student_id']);
+		foreach ($studentUnpaidFee as $feeStatus) {
+			if (isset($feeStatus['dead_line']) && $feeStatus['dead_line'] < $today) {
+				$unpaidCurrentCount++;
+			}
+		}
+		array_push($student, $unpaidCurrentCount);
+
 		array_push($student, $feeHTML);
 
-		$studentUnpaidFee = $this->council->getUnpaidFeeDetail($student['student_id']);
 		$feeHTML = '';
 		foreach($studentUnpaidFee as $feeStatus)
 		{
@@ -217,51 +224,40 @@ class Council_list extends CI_Controller {
 		$renewInstallments = $this->council->renewInstallments($student['student_id']);
 		array_push($student, count($renewInstallments));
 
-		$course_name = $this->council->getCourseName($student['student_id']);
-		array_push($student, isset($course_name[0]['course_name']) ? $course_name[0]['course_name'] : '');
+		array_push($student, isset($student['export_course_name']) ? $student['export_course_name'] : '');
+		array_push($student, isset($student['caste']) ? $student['caste'] : '');
+		array_push($student, isset($student['qualification']) ? $student['qualification'] : '');
+		array_push($student, isset($student['export_campus_name']) ? $student['export_campus_name'] : '');
+		array_push($student, isset($student['date_of_birth']) ? $student['date_of_birth'] : '');
+		array_push($student, isset($student['email']) ? $student['email'] : '');
+		array_push($student, isset($student['city']) ? $student['city'] : '');
 
-		$studentData = $this->council->getStudentData($student['student_id']);
-		$studentDataRow = isset($studentData[0]) ? $studentData[0] : array();
-		array_push($student, isset($studentDataRow['caste']) ? $studentDataRow['caste'] : '');
-		array_push($student, isset($studentDataRow['qualification']) ? $studentDataRow['qualification'] : '');
-
-		$campus = $this->council->getCampusName($student['student_id']);
-		array_push($student, isset($campus[0]['campus_name']) ? $campus[0]['campus_name'] : '');
-
-		array_push($student, isset($studentDataRow['date_of_birth']) ? $studentDataRow['date_of_birth'] : '');
-		array_push($student, isset($studentDataRow['email']) ? $studentDataRow['email'] : '');
-		array_push($student, isset($studentDataRow['city']) ? $studentDataRow['city'] : '');
-
-		$student_card = (isset($studentDataRow['student_card']) && $studentDataRow['student_card']==1) ? 'Yes' : 'No';
+		$student_card = (isset($student['student_card']) && $student['student_card']==1) ? 'Yes' : 'No';
 		array_push($student, $student_card);
 
-		array_push($student, isset($studentDataRow['gender']) ? $studentDataRow['gender'] : '');
-		array_push($student, isset($studentDataRow['religion']) ? $studentDataRow['religion'] : '');
+		array_push($student, isset($student['gender']) ? $student['gender'] : '');
+		array_push($student, isset($student['religion']) ? $student['religion'] : '');
+		array_push($student, isset($student['export_class_name']) ? $student['export_class_name'] : '');
+		array_push($student, isset($student['registration_date']) ? $student['registration_date'] : '');
+		array_push($student, isset($student['entry_date']) ? $student['entry_date'] : '');
+		array_push($student, isset($student['blood_group']) ? $student['blood_group'] : '');
 
-		$class = $this->council->getClassName($student['student_id']);
-		array_push($student, isset($class[0]['name']) ? $class[0]['name'] : '');
-
-		array_push($student, isset($studentDataRow['registration_date']) ? $studentDataRow['registration_date'] : '');
-		array_push($student, isset($studentDataRow['entry_date']) ? $studentDataRow['entry_date'] : '');
-		array_push($student, isset($studentDataRow['blood_group']) ? $studentDataRow['blood_group'] : '');
-
-		$book_1 = (isset($studentDataRow['books_1']) && $studentDataRow['books_1']==1) ? '1st Year Book : Taken' : '1st Year Book : Not Taken';
-		$book_2 = (isset($studentDataRow['books_2']) && $studentDataRow['books_2']==1) ? '2nd Year Book : Taken' : '2nd Year Book : Not Taken';
+		$book_1 = (isset($student['books_1']) && $student['books_1']==1) ? '1st Year Book : Taken' : '1st Year Book : Not Taken';
+		$book_2 = (isset($student['books_2']) && $student['books_2']==1) ? '2nd Year Book : Taken' : '2nd Year Book : Not Taken';
 		array_push($student, $book_1.' '.$book_2);
 
-		array_push($student, isset($studentDataRow['emergency_no']) ? $studentDataRow['emergency_no'] : '');
-		array_push($student, isset($studentDataRow['section']) ? $studentDataRow['section'] : '');
-		array_push($student, isset($studentDataRow['study_type']) ? $studentDataRow['study_type'] : '');
-		array_push($student, isset($studentDataRow['shift']) ? $studentDataRow['shift'] : '');
+		array_push($student, isset($student['emergency_no']) ? $student['emergency_no'] : '');
+		array_push($student, isset($student['section']) ? $student['section'] : '');
+		array_push($student, isset($student['study_type']) ? $student['study_type'] : '');
+		array_push($student, isset($student['shift']) ? $student['shift'] : '');
 
-		$pharmacy_data = $this->council->getStudentResultRemarksForExcelSheet(isset($studentDataRow['cnic']) ? $studentDataRow['cnic'] : '');
+		$pharmacy_data = $this->council->getStudentResultRemarksForExcelSheet(isset($student['cnic']) ? $student['cnic'] : '');
 		array_push($student, $pharmacy_data);
 
 		$documents = $this->council->getStudentDocuments($student['student_id']);
 		array_push($student, $documents);
 
-		$machine_id = $this->council->getMachineID($student['student_id']);
-		array_push($student, isset($machine_id[0]['machine_id']) ? $machine_id[0]['machine_id'] : '');
+		array_push($student, isset($student['export_machine_id']) ? $student['export_machine_id'] : '');
 
 		return array_values($student);
 	}
@@ -317,7 +313,7 @@ class Council_list extends CI_Controller {
 			'campus_id' => $campus_id,
 			'total' => $total,
 			'processed' => 0,
-			'chunk_size' => 20,
+			'chunk_size' => 60,
 			'file_path' => $csvPath,
 			'download_name' => $filename,
 			'created_at' => date('Y-m-d H:i:s')

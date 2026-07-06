@@ -203,7 +203,7 @@
                             return;
                         }
 
-                        setTimeout(function () { processChunk(token); }, 50);
+                        setTimeout(function () { processChunk(token); }, 10);
                     },
                     function () {
                         retryCount++;
