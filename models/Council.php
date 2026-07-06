@@ -24,6 +24,34 @@ class Council extends CI_Model {
 		return $query;
 	}
 
+	public function getCouncilFeeStudents($class_id = '', $course_id = '', $campus_id = '', $include_inactive = true)
+	{
+		$this->db->select('students.student_id, students.roll_no, students.cnic, CONCAT(students.first_name," ", students.last_name, " S/O ", students.father_name) as name, students.address, students.mobile, students.board, 03158042977 as institute', false);
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+
+		if ($class_id !== '') {
+			$this->db->where('students.class_id', $class_id);
+		}
+
+		if ($course_id !== '') {
+			$this->db->where('students.course_id', $course_id);
+		}
+
+		if ($campus_id !== '') {
+			$this->db->where('classes.campus_id', $campus_id);
+		}
+
+		if (!$include_inactive) {
+			$this->db->where('students.status', 1);
+		}
+
+		$this->db->order_by('CAST(students.roll_no as SIGNED INTEGER)', 'ASC', false);
+		$this->db->order_by('students.student_id', 'ASC');
+
+		return $this->db->get()->result_array();
+	}
+
 	public function getClassStudent($class_id)
 	{
 		$this->db->select('students.student_id,campuses.campus_name,courses.course_name,classes.name,students.status,students.roll_no,students.cnic,students.gender,students.first_name,students.last_name,students.father_name,CONCAT(students.first_name," ", students.last_name, " S/O ", students.father_name),students.address,students.mobile,students.emergency_no,students.board,03158042977 as institute');

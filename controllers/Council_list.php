@@ -35,6 +35,7 @@ class Council_list extends CI_Controller {
 	public function fee_detail()
 	{
 		$data['campuses'] = $this->clas->getCampuses();
+		$data['courses'] = $this->clas->getCourses();
 		//$data['classes'] = $this->council->getClasses();
 		
 		$this->load->view('inc/header');
@@ -151,13 +152,46 @@ class Council_list extends CI_Controller {
 
 	public function create_council_fee()
 	{
-		$class_id = $this->input->post('class_id');
-		$result = $this->council->getClassStudents($class_id);
-		
-		$class_name = $this->db->get_where('classes',array('class_id'=>$class_id))->row()->name;
+		$class_id = trim((string) $this->input->post('class_id'));
+		$course_id = trim((string) $this->input->post('course_id'));
+		$campus_id = trim((string) $this->input->post('campus_id'));
+		$result = $this->council->getCouncilFeeStudents($class_id, $course_id, $campus_id, true);
+
+		if (empty($result)) {
+			$this->session->set_flashdata('error', 'No students found for selected filters.');
+			redirect(site_url('council_list/fee_detail'));
+			return;
+		}
+
+		$class_name = 'All-Classes';
+		$course_name = 'All-Courses';
+		$campus_name = 'All-Campuses';
+
+		if ($class_id !== '') {
+			$classRow = $this->db->get_where('classes', array('class_id' => $class_id))->row_array();
+			if (!empty($classRow['name'])) {
+				$class_name = preg_replace('/[^A-Za-z0-9\-_]+/', '-', trim($classRow['name']));
+			}
+		}
+
+		if ($course_id !== '') {
+			$courseRow = $this->db->get_where('courses', array('course_id' => $course_id))->row_array();
+			if (!empty($courseRow['course_name'])) {
+				$course_name = preg_replace('/[^A-Za-z0-9\-_]+/', '-', trim($courseRow['course_name']));
+			}
+		}
+
+		if ($campus_id !== '') {
+			$campusRow = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
+			if (!empty($campusRow['campus_name'])) {
+				$campus_name = preg_replace('/[^A-Za-z0-9\-_]+/', '-', trim($campusRow['campus_name']));
+			}
+		}
 		
 		// Clear any previous output
-		ob_end_clean();
+		if (ob_get_level() > 0) {
+			ob_end_clean();
+		}
 		// I assume you already have your $result
 		$num_fields = count($result);
 		//Headings
@@ -211,7 +245,7 @@ class Council_list extends CI_Controller {
 		}
 		
 		// Filename with current date
-		$filename = $class_name.'.csv';
+		$filename = $campus_name.'_'.$course_name.'_'.$class_name.'_'.date('Y-m-d').'.csv';
 		
 		// Open php output stream and write headers
 		//$fp = fopen(APPPATH . 'councilbackup/'.$filename, 'wb');
@@ -221,7 +255,6 @@ class Council_list extends CI_Controller {
 			header('Content-Disposition: attachment; filename='.$filename);
 			header('Pragma: no-cache');
 			header('Expires: 0');
-			echo "List of Students \n\n";
 			// Write mysql headers to csv
 			fputcsv($fp, $headers);
 			$row_tally = 0;

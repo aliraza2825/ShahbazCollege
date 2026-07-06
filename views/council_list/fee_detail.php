@@ -54,7 +54,7 @@
                                         </div>
                                     </div>
 									<div class="form-group">
-                                        <label class="col-md-3 control-label">Course <span class="required">*</span></label>
+                                        <label class="col-md-3 control-label">Course</label>
                                         <div class="col-md-5">
                                             <select class="form-control course_id" name="course_id">
                                                 <option value="">ALL COURSE</option>
@@ -71,9 +71,10 @@
 							
 									<div class="class">
 										<div class="form-group">
-											<label class="col-md-3 control-label">Class <span class="required">*</span></label>
+											<label class="col-md-3 control-label">Class</label>
 											<div class="col-md-5">
 												<select class="form-control classes" name="class_id">
+                                                    <option value="">ALL CLASSES</option>
 												</select>
 												<!--<span class="help-inline"></span>-->
 											</div>
