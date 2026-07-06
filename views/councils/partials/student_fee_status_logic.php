@@ -214,7 +214,9 @@ if (!empty($roll_number_and_result['result_remarks'])) {
             }
         }
 
-    } elseif (stripos($remarks, 'fail') !== false || stripos($remarks, 'absent') !== false) {
+    }
+
+    elseif (stripos($remarks, 'fail') !== false || stripos($remarks, 'absent') !== false) {
 
         echo "Fail in Exam No ".$current_exam.' of '.getOrdinal($current_exam_sequence['class']).' '.$is_year.'<br><br>';
 
@@ -228,6 +230,7 @@ if (!empty($roll_number_and_result['result_remarks'])) {
         }
 
         $this->db->where('status', 'Active');
+        $this->db->order_by('first_year', 'ASC');
         $next_exam = $this->db->get('exam_sequence')->row_array();
 
         if ($next_exam) {
@@ -339,7 +342,8 @@ if (!empty($roll_number_and_result['result_remarks'])) {
                 }
             }
 
-        } else {
+        }
+        else {
 
             $student_has_error = true;
             $bulk_fee_has_errors = true;
@@ -443,7 +447,9 @@ if (!empty($roll_number_and_result['result_remarks'])) {
             }
         }
 
-    } else {
+    }
+
+    else {
         echo "-";
     }
 
