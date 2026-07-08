@@ -324,7 +324,7 @@
                                             endif;?>
                                         </td>
                                         <td style="text-align: right;">
-                                            <?php echo round(number_format($presentDaysSalary)) + $incentiveAmount; ?>
+                                            <?php echo (number_format($presentDaysSalary + $incentiveAmount)); ?>
                                         </td>
                                         <!--<td>
                                             <?php //echo $list['special'];?>
