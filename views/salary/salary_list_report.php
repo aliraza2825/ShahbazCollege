@@ -135,7 +135,9 @@
                             </div>
                         </div>
                         <div class="portlet-body"  id="checkboxes">
-            <?php if (!empty($minimum_adjustment_report)): ?>
+            <?php
+                        if ($iscampus == 'true'):
+            if (!empty($minimum_adjustment_report)): ?>
                             <button type="button" class="btn red" id="removeContributionBtn">
                                 Remove Contribution
                             </button>
@@ -144,7 +146,9 @@
                                 Add Expense
                             </button>
                             <br><br>
-            <?php endif; ?>
+            <?php
+            endif;
+            endif; ?>
                             <table class="table table-striped table-bordered table-hover" id="">
                                 <thead>
                                 <tr>
