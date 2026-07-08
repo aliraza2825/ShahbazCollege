@@ -95,12 +95,42 @@
             <div class="row" style="margin-top: 20px">
                 <div class="col-md-12" id="printtable">
                     <!-- BEGIN EXAMPLE TABLE PORTLET-->
+                    <?php
+                    $selectedCampusId = trim((string) $this->input->post('campus_id'));
+                    $showCampusWiseTables = ($selectedCampusId === '' || $selectedCampusId === '0');
+                    $campusSalaryGroups = array();
+
+                    if ($showCampusWiseTables) {
+                        foreach ($salary as $salaryRow) {
+                            $campusKey = (string) $salaryRow['campus_id'];
+                            if (!isset($campusSalaryGroups[$campusKey])) {
+                                $campusSalaryGroups[$campusKey] = array(
+                                    'campus_name' => $salaryRow['campus_name'],
+                                    'salary_rows' => array()
+                                );
+                            }
+                            $campusSalaryGroups[$campusKey]['salary_rows'][] = $salaryRow;
+                        }
+                    } else {
+                        $campusSalaryGroups[] = array(
+                            'campus_name' => @$salary[0]['campus_name'],
+                            'salary_rows' => $salary
+                        );
+                    }
+
+                    $global_row_index = 0;
+                    foreach ($campusSalaryGroups as $campusGroup):
+                        $campus_salary_list = $campusGroup['salary_rows'];
+                        if (empty($campus_salary_list)) {
+                            continue;
+                        }
+                    ?>
                     <div class="portlet box grey-cascade">
                         <div class="portlet-title">
                             <div class="caption">
                                 <i class="fa fa-list"></i>
                                 <?php echo !empty($minimum_adjustment_report) ? 'Salary Disburse Report' : 'Staff Salary List'; ?>
-                                ( <?php echo @$salary[0]['campus_name'];?> ) For The Month of <?php echo $month.' - '.$year ?>
+                                ( <?php echo $campusGroup['campus_name'];?> ) For The Month of <?php echo $month.' - '.$year ?>
 
                             </div>
                         </div>
@@ -156,6 +186,9 @@
 									<th>
                                         Incentive
                                     </th>
+                                    <th>
+                                        Earned + Incentive
+                                    </th>
                                     <!--<th>
                                         Bonus
                                     </th>-->
@@ -196,9 +229,18 @@
                                 </thead>
                                 <tr>
                                     <?php
-                                    $i=0;
+                                    $tableRowNo = 1;
+                                    $tableGross = 0;
+                                    $tableEarnings = 0;
+                                    $tableGrossSals = 0;
+                                    $tableMinimumAdjustmentTotal = 0;
+                                    $tableUserAlownce = 0;
+                                    $tableDeductions = 0;
+                                    $tableAdvance = 0;
+                                    $tableLoan = 0;
+                                    $tableEarnedSalary = 0;
                                     $thisMonthTotalBasicSalary=0;
-                                    foreach($salary as $list):
+                                    foreach($campus_salary_list as $list):
                                         $minimumAdjustment = !empty($minimum_adjustment_report) ? (float) @$list['minimum_salary_adjustment'] : 0;
                                         $baseSalaryWithAllowance = (float) $list['basic_salary'] + (float) $list['new_user_alownce'];
                                         $reportSalary = $baseSalaryWithAllowance + $minimumAdjustment;
@@ -210,7 +252,7 @@
                                         <?php if($list['disburse_through'] == "pending"):
                                             $pending+=$list['earned_salary'];
                                             ?>
-                                            <input type="checkbox"  class="selection "  onchange="getselected()" name="selection" value="<?php echo $i;?>" />
+                                            <input type="checkbox"  class="selection "  onchange="getselected()" name="selection" value="<?php echo $global_row_index;?>" />
                                         <?php endif;
                                             if($list['disburse_through'] == "cash")
                                                 $cash+=$list['earned_salary'];
@@ -219,7 +261,7 @@
                                                 $bank+=$list['earned_salary'];
 
                                         ?>
-                                            <?php echo $i+1;?>
+                                            <?php echo $tableRowNo;?>
                                         </td>
                                         <td>
                                             <?php echo $list['campus_name'];?>
@@ -235,20 +277,20 @@
                                         </td>
 										<td style="text-align: right;">
                                             <?php echo round($list['basic_salary']);?>
-                                            <?php $gross+=round($list['basic_salary']); ?>
+                                            <?php $tableGross+=round($list['basic_salary']); ?>
                                         </td>
 										<td style="text-align: right;">
                                             <?php echo $list['new_user_alownce'];?>
-                                            <?php $earnings+=round($list['new_user_alownce']); ?>
+                                            <?php $tableEarnings+=round($list['new_user_alownce']); ?>
                                         </td>
                                         <td style="text-align: right;">
                                             <?php echo round($list['basic_salary'])+round($list['new_user_alownce']);?>
-                                            <?php $grosssals+=round($list['gross_salary']);?>
+                                            <?php $tableGrossSals+=round($list['gross_salary']);?>
                                         </td>
                                         <?php if (!empty($minimum_adjustment_report)): ?>
                                         <td style="text-align: right;">
                                             <?php echo round($minimumAdjustment); ?>
-                                            <?php $minimumAdjustmentTotal += round($minimumAdjustment); ?>
+                                            <?php $tableMinimumAdjustmentTotal += round($minimumAdjustment); ?>
                                         </td>
                                         <?php endif; ?>
                                         <td style="text-align: right;">
@@ -268,12 +310,17 @@
 										<td style="text-align: right;">
                                             <?php
                                             $otherEarnings = $list['earnings'] - $list['new_user_alownce'];
+                                            $incentiveAmount = 0;
                                             if ($otherEarnings > 0):
-                                                echo round($otherEarnings);?>
-                                                <?php $user_alownce+=round($otherEarnings);
+                                                $incentiveAmount = round($otherEarnings);
+                                                echo $incentiveAmount;?>
+                                                <?php $tableUserAlownce += $incentiveAmount;
                                                 else:
                                                 echo "0";
                                             endif;?>
+                                        </td>
+                                        <td style="text-align: right;">
+                                            <?php echo round($list['earned_salary']) + $incentiveAmount; ?>
                                         </td>
                                         <!--<td>
                                             <?php //echo $list['special'];?>
@@ -284,18 +331,18 @@
                                         </td>-->
                                         <td style="text-align: right;">
                                             <?php echo round($list['deductions']-$list['advance']-$list['loan']);?>
-                                            <?php $deductions+=round($list['deductions']-$list['advance']-$list['loan']);?>
+                                            <?php $tableDeductions+=round($list['deductions']-$list['advance']-$list['loan']);?>
                                         </td>
                                         <!--<td>
 
                                         </td>-->
                                         <td style="text-align: right;">
                                             <?php echo $list['advance'];?>
-                                            <?php $advance+=$list['advance'];?>
+                                            <?php $tableAdvance+=$list['advance'];?>
                                         </td>
                                         <td style="text-align: right;">
                                             <?php echo $list['loan'];?>
-                                            <?php $loan+=$list['loan']; ?>
+                                            <?php $tableLoan+=$list['loan']; ?>
                                         </td>
                                         <td>
                                             <?php echo $list['tax']; ?>
@@ -309,7 +356,7 @@
 //										}else{
 											echo $list['earned_salary'];
 //										}?>
-                                            <?php $earnedsalary+=$list['earned_salary']; ?>
+                                            <?php $tableEarnedSalary+=$list['earned_salary']; ?>
                                         </td>
                                         <td>
                                             <?php echo strtoupper($list['disburse_through']);?>
@@ -351,7 +398,8 @@
                                         <!--</td>-->
                                     </tr>
                                     <?php
-                                    $i++;
+                                    $tableRowNo++;
+                                    $global_row_index++;
                                 endforeach;
                                 ?>
                                 <tr>
@@ -373,39 +421,42 @@
 
                                     </th>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php echo $gross ?>
+                                        <?php echo $tableGross ?>
                                     </th>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php echo $earnings ?>
+                                        <?php echo $tableEarnings ?>
                                     </th>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php echo $grosssals ?>
+                                        <?php echo $tableGrossSals ?>
                                     </th>
                                     <?php if (!empty($minimum_adjustment_report)): ?>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php echo $minimumAdjustmentTotal; ?>
+                                        <?php echo $tableMinimumAdjustmentTotal; ?>
                                     </th>
                                     <?php endif; ?>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php //echo $user_alownce ?>
+                                        <?php //echo $tableUserAlownce ?>
                                     </th>
                                     <th>
                                         <?php echo number_format($thisMonthTotalBasicSalary);//$specials ?>
                                     </th>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php echo $user_alownce;//$user_alownce+$grosssals ?>
+                                        <?php echo $tableUserAlownce;//$tableUserAlownce+$tableGrossSals ?>
                                     </th>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php echo $deductions; ?>
+                                        <?php echo round($tableEarnedSalary) + $tableUserAlownce; ?>
                                     </th>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php echo $advance ?>
+                                        <?php echo $tableDeductions; ?>
                                     </th>
                                     <th style = "font-weight:bold; text-align: right;">
-                                        <?php echo $loan ?>
+                                        <?php echo $tableAdvance ?>
                                     </th>
                                     <th style = "font-weight:bold; text-align: right;">
-                                    <?php echo $earnedsalary ?>
+                                        <?php echo $tableLoan ?>
+                                    </th>
+                                    <th style = "font-weight:bold; text-align: right;">
+                                    <?php echo $tableEarnedSalary ?>
                                 </th>
                                 </tr>
 
@@ -415,6 +466,7 @@
 
                     </div>
                     <!-- END EXAMPLE TABLE PORTLET-->
+                    <?php endforeach; ?>
                 </div>
             </div>
 
