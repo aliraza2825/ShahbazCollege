@@ -6,6 +6,60 @@
         font-size: 11px!important;
     }
 </style>
+<?php
+$display_income_tax = (float) (@$income_tax ?: 0);
+if ($display_income_tax <= 0) {
+    $monthlyTaxableSalaryFallback = (float) @$staff->gross_salary;
+    if ($monthlyTaxableSalaryFallback <= 0) {
+        $monthlyTaxableSalaryFallback = (float) @$staff->salary;
+    }
+
+    if ($monthlyTaxableSalaryFallback > 0) {
+        $payrollDateForTax = !empty($to_date) ? $to_date : date('Y-m-d');
+
+        $taxYearFallback = $this->db
+            ->where('start_date <=', $payrollDateForTax)
+            ->where('end_date >=', $payrollDateForTax)
+            ->where('status', 1)
+            ->get('payroll_tax_years')
+            ->row_array();
+
+        if (!$taxYearFallback) {
+            $today = date('Y-m-d');
+            $taxYearFallback = $this->db
+                ->where('start_date <=', $today)
+                ->where('end_date >=', $today)
+                ->where('status', 1)
+                ->get('payroll_tax_years')
+                ->row_array();
+        }
+
+        if ($taxYearFallback) {
+            $annualIncomeFallback = $monthlyTaxableSalaryFallback * 12;
+
+            $this->db->where('tax_year_id', $taxYearFallback['id']);
+            $this->db->where('min_annual_income <=', $annualIncomeFallback);
+            $this->db->group_start();
+            $this->db->where('max_annual_income >=', $annualIncomeFallback);
+            $this->db->or_where('max_annual_income IS NULL', null, false);
+            $this->db->group_end();
+            $this->db->where('status', 1);
+
+            $taxSlabFallback = $this->db
+                ->get('payroll_income_tax_slabs')
+                ->row_array();
+
+            if ($taxSlabFallback) {
+                $annualTaxFallback = $taxSlabFallback['fixed_tax'] + (($annualIncomeFallback - $taxSlabFallback['taxable_amount_above']) * $taxSlabFallback['tax_percentage'] / 100);
+                if ($annualTaxFallback < 0) {
+                    $annualTaxFallback = 0;
+                }
+                $display_income_tax = round($annualTaxFallback / 12, 2);
+            }
+        }
+    }
+}
+?>
 <!-- BEGIN CONTENT -->
 <div class="page-content-wrapper">
     <div class="page-content">
@@ -318,7 +372,7 @@
                                                 <lable>Tax : </lable>
                                             </div>
                                             <div class="col-md-8" style="margin-bottom: 10px">
-                                                <input type="text" class="form-control input-inline " name="tax_salary" id="tax" value="<?php echo @$income_tax ?: 0; ?>" placeholder="Tax" style="width: 100%!important;" readonly>
+                                                <input type="text" class="form-control input-inline " name="tax_salary" id="tax" value="<?php echo $display_income_tax; ?>" placeholder="Tax" style="width: 100%!important;" readonly>
                                             </div>
                                             <div class="col-md-4" style="margin-bottom: 10px">
                                                 <lable>Salary Adjustment : </lable>
@@ -417,7 +471,7 @@
             total_deduction += parseFloat(deductionsValue[j].value) || 0;
         }
     
-        var monthlyTax = parseFloat("<?php echo isset($income_tax) && $income_tax !== '' ? $income_tax : 0; ?>") || 0;
+        var monthlyTax = parseFloat("<?php echo $display_income_tax; ?>") || 0;
     
         var gross_salary = basicSalary + allownces;
 
