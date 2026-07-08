@@ -421,6 +421,7 @@ class Salary  extends CI_Controller{
         $strDateFrom = $data['from_date'];
         $strDateTo = $data['to_date'];
         $dates = $this->createDateRangeArray($strDateFrom, $strDateTo);
+        print_r($dates);
 
         $this->db->select('machine_data.*');
         $this->db->from('machine_data');
@@ -428,6 +429,7 @@ class Salary  extends CI_Controller{
         $this->db->where(array('users.status' => 1, 'users.user_id' => $user_id));
         $user = $this->db->get()->row();
         $my_attendances = array();
+        print_r($user->machine_id);
 
         if ($user != NULL) {
             $machine_user_id = $user->machine_id;
@@ -441,6 +443,8 @@ class Salary  extends CI_Controller{
                 );
                 $qry = 'SELECT * FROM attendence WHERE machine_user_id=' . $machine_user_id . ' AND (time>="' . $date . ' 00:00:00" AND time<"' . $date . ' 23:59:59") ORDER BY time ASC LIMIT 1';
                 $checkin_time = $this->db->query($qry)->result_array();
+
+                print_r($checkin_time);
                 if (count($checkin_time) > 0) {
                     $array_date['in_time'] = @date('h:i:s A', strtotime($checkin_time[0]['time']));
                     $array_date['status'] = "1";
@@ -456,6 +460,7 @@ class Salary  extends CI_Controller{
                     $array_date['in_time'] = '';
                     $array_date['status'] = "0";
                 }
+                print_r($array_date);
 
                 $qry = 'SELECT * FROM attendence WHERE machine_user_id=' . $machine_user_id . ' AND (time>="' . $date . ' 00:00:00.00" AND time<"' . $date . ' 23:59:59.999") ORDER BY time DESC LIMIT 1';
                 $checkout_time = $this->db->query($qry)->result_array();
@@ -471,6 +476,8 @@ class Salary  extends CI_Controller{
                 }
                 $Day = date('l', strtotime($date));
                 $status = $this->db->get_where("staff_timing", "staff_id = '$user_id' and day = '$Day'")->result_array();
+
+                print_r($status);
 
                 if (count($status) > 0 && $array_date['in_time'] != "") {
                     if (strtotime($array_date['in_time']) < strtotime($status[0]['half_day_on']))
@@ -497,6 +504,8 @@ class Salary  extends CI_Controller{
 
                 }
                 array_push($my_attendances, $array_date);
+
+                exit();
             }
         }
 
