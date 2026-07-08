@@ -324,7 +324,7 @@
                                             endif;?>
                                         </td>
                                         <td style="text-align: right;">
-                                            <?php echo round($list['earned_salary']) + $incentiveAmount; ?>
+                                            <?php echo round(number_format($presentDaysSalary)) + $incentiveAmount; ?>
                                         </td>
                                         <!--<td>
                                             <?php //echo $list['special'];?>
@@ -459,9 +459,10 @@
                                     <th style = "font-weight:bold; text-align: right;">
                                         <?php echo $tableLoan ?>
                                     </th>
+                                    <th style = "font-weight:bold; text-align: right;"></th>
                                     <th style = "font-weight:bold; text-align: right;">
                                     <?php echo $tableEarnedSalary ?>
-                                </th>
+                                    </th>
                                 </tr>
 
                                 </tbody>
