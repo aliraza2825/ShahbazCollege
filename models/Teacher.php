@@ -108,6 +108,16 @@ class Teacher extends CI_Model {
 	
 	public function checkUserTiming($user_id)
 	{
+        $user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+        $staffTypeId = isset($user['staff_type_id']) ? (int) $user['staff_type_id'] : 0;
+
+        if ($this->db->field_exists('staff_type_id', 'staff_timing') && $staffTypeId > 0) {
+            return $this->db
+                ->where('staff_type_id', $staffTypeId)
+                ->get('staff_timing')
+                ->result_array();
+        }
+
 		$query = $this->db->get_where('staff_timing', array('staff_id'=>$user_id))->result_array();
 		return $query;
 	}
@@ -132,21 +142,37 @@ class Teacher extends CI_Model {
 	
 	public function updateTeacherTiming($data, $user_id)
 	{
+        $user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+        $staffTypeId = isset($user['staff_type_id']) ? (int) $user['staff_type_id'] : 0;
+
 		$count = count($data['checkin_time']);
 		for($i=0; $i<$count; $i++)
 		{
-			$checkStaffEntry = $this->db->get_where('staff_timing', array('staff_id'=>$user_id, 'day'=>$data['day'][$i]))->result_array();
+            if ($this->db->field_exists('staff_type_id', 'staff_timing') && $staffTypeId > 0) {
+                $checkStaffEntry = $this->db->get_where('staff_timing', array('staff_type_id' => $staffTypeId, 'day' => $data['day'][$i]))->result_array();
+            } else {
+			    $checkStaffEntry = $this->db->get_where('staff_timing', array('staff_id'=>$user_id, 'day'=>$data['day'][$i]))->result_array();
+            }
 			
 			$this->db->set('day', $data['day'][$i]);
 			$this->db->set('checkin_timing', $data['checkin_time'][$i]);
 			$this->db->set('checkout_timing', $data['checkout_time'][$i]);
 			$this->db->set('half_day_on', $data['half_day_on'][$i]);
 			$this->db->set('full_day_on', $data['full_day_on'][$i]);
-			$this->db->set('staff_id', $user_id);
+            if ($this->db->field_exists('staff_type_id', 'staff_timing') && $staffTypeId > 0) {
+                $this->db->set('staff_type_id', $staffTypeId);
+                $this->db->set('staff_id', 0);
+            } else {
+			    $this->db->set('staff_id', $user_id);
+            }
 			
 			if(count($checkStaffEntry)>0)
 			{
-				$this->db->where(array('day'=>$data['day'][$i], 'staff_id'=>$user_id));
+                if ($this->db->field_exists('staff_type_id', 'staff_timing') && $staffTypeId > 0) {
+                    $this->db->where(array('day' => $data['day'][$i], 'staff_type_id' => $staffTypeId));
+                } else {
+				    $this->db->where(array('day'=>$data['day'][$i], 'staff_id'=>$user_id));
+                }
 				$this->db->update('staff_timing');
 			}
 			else

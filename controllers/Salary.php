@@ -21,6 +21,9 @@ class Salary  extends CI_Controller{
         if ($this->db->table_exists('payroll_statutory_rules') && !$this->db->field_exists('wage_contribution_cap', 'payroll_statutory_rules')) {
             $this->db->query("ALTER TABLE payroll_statutory_rules ADD wage_contribution_cap DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER calculation_base");
         }
+        if ($this->db->table_exists('staff_timing') && !$this->db->field_exists('staff_type_id', 'staff_timing')) {
+            $this->db->query("ALTER TABLE staff_timing ADD staff_type_id INT NULL AFTER staff_id");
+        }
     }
 
     private function user_applies_statutory_rules($user_id)
@@ -32,6 +35,56 @@ class Salary  extends CI_Controller{
             ->row_array();
 
         return !isset($row['apply_statutory_rules']) || (int) $row['apply_statutory_rules'] === 1;
+    }
+
+    private function get_staff_day_timing($user_id, $day)
+    {
+        $timing = $this->db
+            ->where('staff_id', $user_id)
+            ->where('day', $day)
+            ->get('staff_timing')
+            ->row_array();
+
+        if ($timing) {
+            return $timing;
+        }
+
+        if (!$this->db->field_exists('staff_type_id', 'staff_timing')) {
+            return array();
+        }
+
+        $user = $this->db
+            ->select('staff_type_id')
+            ->where('user_id', $user_id)
+            ->get('users')
+            ->row_array();
+
+        $staffTypeId = isset($user['staff_type_id']) ? (int) $user['staff_type_id'] : 0;
+        if ($staffTypeId <= 0) {
+            return array();
+        }
+
+        return $this->db
+            ->where('staff_type_id', $staffTypeId)
+            ->where('day', $day)
+            ->get('staff_timing')
+            ->row_array();
+    }
+
+    private function is_off_day_timing($timing)
+    {
+        if (empty($timing)) {
+            return false;
+        }
+
+        $checkinTiming = isset($timing['checkin_timing']) ? trim((string) $timing['checkin_timing']) : '';
+        $checkoutTiming = isset($timing['checkout_timing']) ? trim((string) $timing['checkout_timing']) : '';
+
+        if (strtoupper($checkinTiming) === 'OFF' || strtoupper($checkoutTiming) === 'OFF') {
+            return true;
+        }
+
+        return $checkinTiming === '00:00:00' || $checkoutTiming === '00:00:00';
     }
 
     public function salary_list(){
@@ -470,12 +523,12 @@ class Salary  extends CI_Controller{
                     $array_date['out_time'] = '';
                 }
                 $Day = date('l', strtotime($date));
-                $status = $this->db->get_where("staff_timing", "staff_id = '$user_id' and day = '$Day'")->result_array();
+                $status = $this->get_staff_day_timing($user_id, $Day);
 
-                if (count($status) > 0 && $array_date['in_time'] != "") {
-                    if (strtotime($array_date['in_time']) < strtotime($status[0]['half_day_on']))
+                if (!empty($status) && $array_date['in_time'] != "") {
+                    if (strtotime($array_date['in_time']) < strtotime($status['half_day_on']))
                         $array_date['status'] = "1";
-                    elseif (strtotime($array_date['in_time']) < strtotime($status[0]['full_day_on']))
+                    elseif (strtotime($array_date['in_time']) < strtotime($status['full_day_on']))
                         $array_date['status'] = "2";
                     else
                         $array_date['status'] = "3";
@@ -489,10 +542,8 @@ class Salary  extends CI_Controller{
                     if (count($event) > 0) {
                         $array_date['status'] = "4";
                     }
-                    if (count($status) > 0) {
-                        if ($status[0]['checkin_timing'] == '00:00:00') {
-                            $array_date['status'] = "5";
-                        }
+                    if (!empty($status) && $this->is_off_day_timing($status)) {
+                        $array_date['status'] = "5";
                     }
 
                 }

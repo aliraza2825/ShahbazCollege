@@ -171,7 +171,11 @@
                                     <?php
                                     	if($this->session->userdata('role')=='Admin' || @$myAccess[0]['staff_attendence']==1):
 									?>
-                                    <a href="<?php echo site_url().'/teachers/check_timing/'.$teacher['user_id'];?>" class="btn yellow"><i class="fa fa-clock-o" title="Check Timing"></i></a>
+                                    <?php if(!empty($teacher['staff_type_id'])): ?>
+                                    <a href="<?php echo site_url().'/staff_type/staff_timing/'.$teacher['staff_type_id'];?>" class="btn yellow"><i class="fa fa-clock-o" title="Check Timing"></i></a>
+                                    <?php else: ?>
+                                    <button type="button" class="btn yellow disabled" title="Staff Type Missing"><i class="fa fa-clock-o"></i></button>
+                                    <?php endif; ?>
                                     <?php
                                     	endif;
 									?>

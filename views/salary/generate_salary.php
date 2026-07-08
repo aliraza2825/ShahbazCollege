@@ -162,9 +162,9 @@ if ($display_income_tax <= 0) {
                                         <strong>Attandance</strong>
                                     </div>
 
-                                    <div class=" col-md-4 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Present!" readonly>
+                                    <div class=" col-md-4 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Present!" >
                                         Present <br>
-                                        <input type="text" class="form-control input-inline " name="presents" value="<?php echo $present; ?>" >
+                                        <input type="text" class="form-control input-inline " name="presents" value="<?php echo $present; ?>" readonly>
                                         <small style="display:block; margin-top: 6px;">
                                             Machine: <?php echo $present_machine; ?> | Manual: <?php echo $present_manual; ?>
                                         </small>

@@ -9,7 +9,65 @@ class AdminApi extends CI_Controller {
         $this->load->model('student');
         $this->load->library('upload');
         $this->load->model('account');
+        $this->ensure_staff_timing_columns();
         require_once("vendor/autoload.php");
+    }
+
+    private function ensure_staff_timing_columns()
+    {
+        if ($this->db->table_exists('staff_timing') && !$this->db->field_exists('staff_type_id', 'staff_timing')) {
+            $this->db->query("ALTER TABLE staff_timing ADD staff_type_id INT NULL AFTER staff_id");
+        }
+    }
+
+    private function get_staff_day_timing($user_id, $day)
+    {
+        $timing = $this->db
+            ->where('staff_id', $user_id)
+            ->where('day', $day)
+            ->get('staff_timing')
+            ->row_array();
+
+        if ($timing) {
+            return $timing;
+        }
+
+        if (!$this->db->field_exists('staff_type_id', 'staff_timing')) {
+            return array();
+        }
+
+        $user = $this->db
+            ->select('staff_type_id')
+            ->where('user_id', $user_id)
+            ->get('users')
+            ->row_array();
+
+        $staffTypeId = isset($user['staff_type_id']) ? (int) $user['staff_type_id'] : 0;
+        if ($staffTypeId <= 0) {
+            return array();
+        }
+
+        return $this->db
+            ->where('staff_type_id', $staffTypeId)
+            ->where('day', $day)
+            ->get('staff_timing')
+            ->row_array();
+    }
+
+    private function is_off_day_timing($timing)
+    {
+        if (empty($timing)) {
+            return false;
+        }
+
+        $checkinTiming = isset($timing['checkin_timing']) ? trim((string) $timing['checkin_timing']) : '';
+        $checkoutTiming = isset($timing['checkout_timing']) ? trim((string) $timing['checkout_timing']) : '';
+
+        if (strtoupper($checkinTiming) === 'OFF' || strtoupper($checkoutTiming) === 'OFF') {
+            return true;
+        }
+
+        return $checkinTiming === '00:00:00' || $checkoutTiming === '00:00:00';
     }
 
     public function Login(){
@@ -2423,12 +2481,12 @@ WHERE user_id = '".$user_id."' GROUP BY time";
                     $array_date['out_time']= '';
                 }
                 $Day = date('l', strtotime($date));
-                $status = $this->db->get_where("staff_timing","staff_id = '$user_id' and day = '$Day'")->result_array();
+                $status = $this->get_staff_day_timing($user_id, $Day);
 
-                if (count($status) > 0 && $array_date['in_time'] != "") {
-                    if (strtotime($array_date['in_time']) < strtotime($status[0]['half_day_on']))
+                if (!empty($status) && $array_date['in_time'] != "") {
+                    if (strtotime($array_date['in_time']) < strtotime($status['half_day_on']))
                         $array_date['status'] = "1";
-                    elseif (strtotime($array_date['in_time']) < strtotime($status[0]['full_day_on']))
+                    elseif (strtotime($array_date['in_time']) < strtotime($status['full_day_on']))
                         $array_date['status'] = "2";
                     else
                         $array_date['status'] = "3";
@@ -2442,10 +2500,8 @@ WHERE user_id = '".$user_id."' GROUP BY time";
                     if (count($event)>0) {
                         $array_date['status'] = "4";
                     }
-                    if (count($status) > 0) {
-                        if ($status[0]['checkin_timing'] == '00:00:00') {
-                            $array_date['status'] = "5";
-                        }
+                    if (!empty($status) && $this->is_off_day_timing($status)) {
+                        $array_date['status'] = "5";
                     }
 
                 }

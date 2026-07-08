@@ -1140,8 +1140,15 @@ function getSalary($date, $day, $user_id, $this_day_checkin ,$this_day_checkout,
     //GET SALARY
     $salary = $ci->db->get_where('users', array('user_id'=>$user_id))->row()->salary;
     //GET CHECKIN CHECKOUT TIMING
-    $day_checkin_timing = $ci->db->get_where('staff_timing', array('staff_id'=>$user_id,'day'=>$day))->row()->checkin_timing;
-    $day_checkout_timing = $ci->db->get_where('staff_timing', array('staff_id'=>$user_id,'day'=>$day))->row()->checkout_timing;
+    $timingRow = $ci->db->get_where('staff_timing', array('staff_id'=>$user_id,'day'=>$day))->row_array();
+    if (!$timingRow && $ci->db->field_exists('staff_type_id', 'staff_timing')) {
+        $staffTypeId = (int) @$ci->db->get_where('users', array('user_id' => $user_id))->row()->staff_type_id;
+        if ($staffTypeId > 0) {
+            $timingRow = $ci->db->get_where('staff_timing', array('staff_type_id' => $staffTypeId, 'day' => $day))->row_array();
+        }
+    }
+    $day_checkin_timing = isset($timingRow['checkin_timing']) ? $timingRow['checkin_timing'] : '00:00:00';
+    $day_checkout_timing = isset($timingRow['checkout_timing']) ? $timingRow['checkout_timing'] : '00:00:00';
 
     //CHECK CHECKIN CHECKOUT TIMING EXISTS OR NOT
     if(count($day_checkin_timing)<=0)

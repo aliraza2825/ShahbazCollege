@@ -455,21 +455,33 @@ class Teachers extends CI_Controller {
 	
 	public function check_timing($user_id)
 	{
-		$data['users'] = $this->teacher->editTeacher($user_id);
-		$data['timings'] = $this->teacher->checkUserTiming($user_id);
-		
-		$this->load->view('inc/header');
-		$this->load->view('inc/sidebar');
-		$this->load->view('teachers/check_timing', $data);
-		$this->load->view('inc/footer');
+		$user = $this->teacher->getTeacher($user_id);
+        if (count($user) <= 0) {
+            show_404();
+        }
+
+        $staffTypeId = (int) @$user[0]['staff_type_id'];
+        if ($staffTypeId <= 0) {
+            $this->session->set_flashdata('error', 'Please set staff type first to manage timing.');
+            redirect('teachers/all_teachers');
+        }
+
+        redirect('staff_type/staff_timing/'.$staffTypeId);
 	}
 	
 	public function update_timing($user_id)
 	{
-		$data = $this->input->post();
-		$this->teacher->updateTeacherTiming($data, $user_id);
-		$this->session->set_flashdata('message', 'User Timing Updated Successfully.');
-		redirect('teachers/check_timing/'.$user_id);
+		$user = $this->teacher->getTeacher($user_id);
+        if (count($user) <= 0) {
+            show_404();
+        }
+        $staffTypeId = (int) @$user[0]['staff_type_id'];
+        if ($staffTypeId <= 0) {
+            $this->session->set_flashdata('error', 'Please set staff type first to manage timing.');
+            redirect('teachers/all_teachers');
+        }
+
+        redirect('staff_type/staff_timing/'.$staffTypeId);
 	}
 	
 	public function contact_for_fee()

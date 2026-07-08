@@ -34,6 +34,9 @@
 								<th>
 									 Staff Type Name
 								</th>
+                                <th>
+                                     Timing
+                                </th>
 								<th>
 									 Action
 								</th>
@@ -54,7 +57,15 @@
 								<td>
 									<?php echo $staff_type['staff_type_name']?>
 								</td>
+                                <td>
+                                    <?php if(isset($timing_map[$staff_type['staff_type_id']]) && $timing_map[$staff_type['staff_type_id']] > 0): ?>
+                                        <span class="label label-success">Configured</span>
+                                    <?php else: ?>
+                                        <span class="label label-warning">Not Set</span>
+                                    <?php endif; ?>
+                                </td>
 								<td>
+                                    <a href="<?php echo site_url().'/staff_type/staff_timing/'.$staff_type['staff_type_id'];?>" title="Timing" class="btn yellow"><i class="fa fa-clock-o"></i></a>
                                     <a href="<?php echo site_url().'/staff_type/edit_staff_type/'.$staff_type['staff_type_id'];?>" title="Edit" class="btn blue"><i class="fa fa-edit"></i></a>
                                     <a onclick="return confirm('Are you sure you want to delete this Staff Type?')" href="<?php echo site_url().'/staff_type/delete/'.$staff_type['staff_type_id'];?>" title="Delete" class="btn red"><i class="fa fa-trash"></i></a>
 								</td>
