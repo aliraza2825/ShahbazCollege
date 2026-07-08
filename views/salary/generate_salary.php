@@ -108,7 +108,7 @@
                                         <strong>Attandance</strong>
                                     </div>
 
-                                    <div class=" col-md-4 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Present!">
+                                    <div class=" col-md-4 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Present!" readonly>
                                         Present <br>
                                         <input type="text" class="form-control input-inline " name="presents" value="<?php echo $present; ?>" >
                                         <small style="display:block; margin-top: 6px;">
@@ -116,13 +116,13 @@
                                         </small>
                                     </div>
                                     <div class="col-md-2 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Late!">
-                                        Leaves <br> <input type="text" class="form-control input-inline "  name="total_lates" value="<?php echo $leaves; ?>" >
+                                        Leaves <br> <input type="text" class="form-control input-inline "  name="total_lates" value="<?php echo $leaves; ?>" readonly>
                                     </div>
                                     <div class="col-md-2 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Absent!">
-                                        Absent <br> <input type="text" class="form-control input-inline "  name="total_absents" value="<?php echo $absent; ?>" >
+                                        Absent <br> <input type="text" class="form-control input-inline "  name="total_absents" value="<?php echo $absent; ?>" readonly>
                                     </div>
                                     <div class="col-md-2 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Absent!">
-                                        Counted Days <br> <input type="text" class="form-control input-inline " style="text-align: center; font-weight: bold" name="total_days" id="total_days" value="<?php echo $counted_days-$leaves-$absent ?>" >
+                                        Counted Days <br> <input type="text" class="form-control input-inline " style="text-align: center; font-weight: bold" name="total_days" id="total_days" value="<?php echo $counted_days-$leaves-$absent ?>" readonly>
                                     </div>
                                 </div>
 
@@ -415,7 +415,7 @@
             total_deduction += parseFloat(deductionsValue[j].value) || 0;
         }
     
-        var tax = parseFloat($("#tax").val()) || 0;
+        var monthlyTax = parseFloat($("#tax").val()) || 0;
     
         var gross_salary = basicSalary + allownces;
 
@@ -433,6 +433,15 @@
         
         var incentives = total_earnings - allownces;
         var salaryBeforeDeductions = earned_salary + incentives;
+        var taxableBase = basicSalary + allownces;
+        var adjustedTax = 0;
+        if (taxableBase > 0) {
+            adjustedTax = (monthlyTax * salaryBeforeDeductions) / taxableBase;
+        }
+        if (!adjustedTax || adjustedTax < 0) {
+            adjustedTax = 0;
+        }
+        var tax = adjustedTax;
         var minimumSalaryAdjustment = staffSalaryAdjustment;
 
         var net_salary = salaryBeforeDeductions - total_deduction - tax;
@@ -455,6 +464,7 @@
         $("#minimum_salary_adjustment").val(minimumSalaryAdjustment.toFixed(0));
         $("#net_salary").val(net_salary.toFixed(0));
         $("#earned_salary").val(earned_salary.toFixed(0));
+        $("#tax").val(tax.toFixed(0));
 
         $("#gross_salary_adjustment").val(adj.toFixed(0));
 
