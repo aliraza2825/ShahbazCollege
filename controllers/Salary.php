@@ -1218,7 +1218,7 @@ class Salary  extends CI_Controller{
 			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0) as earnings,
 			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name in ("Minimum Salary Adjustment", "Salary Adjustment")) as minimum_salary_adjustment,
-			users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name');
+			users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name,campuses.campus_id');
         $this->db->from('payroll');
         $this->db->join('users','payroll.user_id = users.user_id ','inner');
         $this->db->join('campuses','users.campus_id = campuses.campus_id ','inner');
@@ -1274,7 +1274,7 @@ class Salary  extends CI_Controller{
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0) as earnings,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name in ("Minimum Salary Adjustment", "Salary Adjustment")) as minimum_salary_adjustment,
-            users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name');
+            users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name,campuses.campus_id');
         $this->db->from('payroll');
         $this->db->join('users','payroll.user_id = users.user_id ','inner');
         $this->db->join('campuses','users.campus_id = campuses.campus_id ','inner');
