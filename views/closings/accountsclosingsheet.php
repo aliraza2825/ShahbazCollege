@@ -307,27 +307,20 @@ $myAccess = checkUserAccess();
                                                             }
                                                         }
                                                         else  { ?>
-                                                            <form class="form-horizontal" enctype="multipart/form-data" role="form" method="post" action="<?php echo site_url();?>/closing/verify_closing_now">
+                                                            <form class="form-horizontal verify-cash-direct-form" data-closing-id="<?php echo $expense['id']; ?>" role="form" method="post" action="<?php echo site_url();?>/closing/verify_closing_now">
                                                                 <div class="form-body">
-
-
                                                                     <div class="form-group">
                                                                         <label class="col-md-3 control-label">Received Amount</label>
                                                                         <div class="col-md-9">
-                                                                            <input type="hidden"  name="amount" id="cash_amount" class="form-control mobile" minlength="4" value="<?php echo $expense['closed_amount']; ?>"/>
-
+                                                                            <input type="hidden" name="amount" class="form-control mobile" value="<?php echo $expense['closed_amount']; ?>"/>
                                                                         </div>
                                                                     </div>
-
                                                                 </div>
-
                                                                 <div class="form-actions">
                                                                     <div class="row">
                                                                         <div class="col-md-offset-3 col-md-9">
-
-                                                                            <input type="hidden"  id="cash_closingid" name="closingid" value="<?php echo $expense['id']?>" class="form-control"/>
-                                                                            <button type="submit" class="btn red">Verify Now</button>
-
+                                                                            <input type="hidden" name="closingid" value="<?php echo $expense['id']?>" class="form-control"/>
+                                                                            <button type="submit" class="btn red verify-cash-direct-btn">Verify Now</button>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -595,19 +588,13 @@ $myAccess = checkUserAccess();
     document.addEventListener( "DOMContentLoaded", function()
     {
         $('#loader_div').hide();
-        $(document).on("click", ".open-EditCashClosing", function () {
-            var myBookId = $(this).data('id');
-            var plans = <?php echo json_encode(isset($closings) ? $closings : array()) ?>;
+        function handleVerifyCashSuccess(closingId) {
+            $("#cashclosingdetails").modal("hide");
+            $('.verify-cash-btn[data-closing-id="' + closingId + '"]').replaceWith('<a href="#" title="Verify Now" class="btn green">Verified</a>');
+            $('.verify-cash-direct-form[data-closing-id="' + closingId + '"]').replaceWith('<a href="#" title="Verify Now" class="btn green">Verified</a>');
+        }
 
-            $(".modal-body #cash_amount").val(plans[myBookId].closed_amount);
-            $(".modal-body #cash_closingid").val(plans[myBookId].id);
-        });
-        $("#verify_cash_form").on("submit", function (e) {
-            e.preventDefault();
-
-            var $form = $(this);
-            var $submitBtn = $("#verify_cash_submit");
-
+        function submitVerifyCash($form, $submitBtn) {
             $submitBtn.prop("disabled", true);
 
             $.ajax({
@@ -617,8 +604,7 @@ $myAccess = checkUserAccess();
                 dataType: "json",
                 success: function (response) {
                     if (response.success) {
-                        $("#cashclosingdetails").modal("hide");
-                        $('.verify-cash-btn[data-closing-id="' + response.closing_id + '"]').replaceWith('<a href="#" title="Verify Now" class="btn green">Verified</a>');
+                        handleVerifyCashSuccess(response.closing_id);
                     } else {
                         alert(response.message || "Verification failed.");
                     }
@@ -629,6 +615,23 @@ $myAccess = checkUserAccess();
                     $submitBtn.prop("disabled", false);
                 }
             });
+        }
+
+        $(document).on("click", ".open-EditCashClosing", function () {
+            var myBookId = $(this).data('id');
+            var plans = <?php echo json_encode(isset($closings) ? $closings : array()) ?>;
+
+            $(".modal-body #cash_amount").val(plans[myBookId].closed_amount);
+            $(".modal-body #cash_closingid").val(plans[myBookId].id);
+        });
+        $("#verify_cash_form").on("submit", function (e) {
+            e.preventDefault();
+            submitVerifyCash($(this), $("#verify_cash_submit"));
+        });
+        $(document).on("submit", ".verify-cash-direct-form", function (e) {
+            e.preventDefault();
+            var $form = $(this);
+            submitVerifyCash($form, $form.find(".verify-cash-direct-btn"));
         });
         $(document).on("click", ".open-BankTransfer", function () {
             var myBookId = $(this).data('id');
