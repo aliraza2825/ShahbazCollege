@@ -386,6 +386,26 @@ $myAccess = checkUserAccess();
                                     </li>
                                 </ul>
                             </li>
+                            <li class="<?php if($this->uri->segment(1)=='staff_shifts'){echo 'active';}?>">
+                                <a href="javascript:;">
+                                    <i class="icon-clock"></i>
+                                    <span class="title">Staff Shifts</span>
+                                    <span class="selected"></span>
+                                    <span class="arrow <?php if($this->uri->segment(1)=='staff_shifts'){echo 'open';}?>"></span>
+                                </a>
+                                <ul class="sub-menu">
+                                    <li class="<?php if($this->uri->segment(2)=='add_staff_shift'){echo 'active';}?>">
+                                        <a href="<?php echo site_url();?>/staff_shifts/add_staff_shift">
+                                            <i class="icon-plus"></i>
+                                            Add Staff Shift</a>
+                                    </li>
+                                    <li class="<?php if($this->uri->segment(2)=='all_staff_shifts'){echo 'active';}?>">
+                                        <a href="<?php echo site_url();?>/staff_shifts/all_staff_shifts">
+                                            <i class="icon-list"></i>
+                                            All Staff Shifts</a>
+                                    </li>
+                                </ul>
+                            </li>
                             <li class="<?php if($this->uri->segment(1)=='allownces'){echo 'active';}?>">
                                 <a href="javascript:;">
                                     <i class="fa fa-users"></i>
@@ -2707,6 +2727,33 @@ $myAccess = checkUserAccess();
                                 <?php
                                 endif;
                                 ?>
+                            </ul>
+                        </li>
+                    <?php
+                    endif;
+                    ?>
+
+                    <?php
+                    if(@$myAccess[0]['staff_type_sidebar']==1):
+                        ?>
+                        <li class="<?php if($this->uri->segment(1)=='staff_shifts'){echo 'active';}?>">
+                            <a href="javascript:;">
+                                <i class="icon-clock"></i>
+                                <span class="title">Staff Shifts</span>
+                                <span class="selected"></span>
+                                <span class="arrow <?php if($this->uri->segment(1)=='staff_shifts'){echo 'open';}?>"></span>
+                            </a>
+                            <ul class="sub-menu">
+                                <li class="<?php if($this->uri->segment(2)=='add_staff_shift'){echo 'active';}?>">
+                                    <a href="<?php echo site_url();?>/staff_shifts/add_staff_shift">
+                                        <i class="icon-plus"></i>
+                                        Add Staff Shift</a>
+                                </li>
+                                <li class="<?php if($this->uri->segment(2)=='all_staff_shifts'){echo 'active';}?>">
+                                    <a href="<?php echo site_url();?>/staff_shifts/all_staff_shifts">
+                                        <i class="icon-list"></i>
+                                        All Staff Shifts</a>
+                                </li>
                             </ul>
                         </li>
                     <?php

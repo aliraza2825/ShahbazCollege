@@ -1140,13 +1140,7 @@ function getSalary($date, $day, $user_id, $this_day_checkin ,$this_day_checkout,
     //GET SALARY
     $salary = $ci->db->get_where('users', array('user_id'=>$user_id))->row()->salary;
     //GET CHECKIN CHECKOUT TIMING
-    $timingRow = $ci->db->get_where('staff_timing', array('staff_id'=>$user_id,'day'=>$day))->row_array();
-    if (!$timingRow && $ci->db->field_exists('staff_type_id', 'staff_timing')) {
-        $staffTypeId = (int) @$ci->db->get_where('users', array('user_id' => $user_id))->row()->staff_type_id;
-        if ($staffTypeId > 0) {
-            $timingRow = $ci->db->get_where('staff_timing', array('staff_type_id' => $staffTypeId, 'day' => $day))->row_array();
-        }
-    }
+    $timingRow = get_staff_day_timing($user_id, $day);
     $day_checkin_timing = isset($timingRow['checkin_timing']) ? $timingRow['checkin_timing'] : '00:00:00';
     $day_checkout_timing = isset($timingRow['checkout_timing']) ? $timingRow['checkout_timing'] : '00:00:00';
 
@@ -2586,6 +2580,77 @@ function pp($data)
 	echo '<pre>';
 	print_r($data);
 	echo '</pre>';
+}
+
+function ensure_staff_shift_schema()
+{
+    $ci =& get_instance();
+    if (!$ci->db->table_exists('staff_shifts')) {
+        $ci->db->query("CREATE TABLE `staff_shifts` (
+            `staff_shift_id` INT(11) NOT NULL AUTO_INCREMENT,
+            `shift_name` VARCHAR(255) NOT NULL,
+            `description` TEXT NULL,
+            `status` TINYINT(1) NOT NULL DEFAULT 1,
+            `created_at` DATETIME NULL DEFAULT NULL,
+            `updated_at` DATETIME NULL DEFAULT NULL,
+            PRIMARY KEY (`staff_shift_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+    }
+    if ($ci->db->table_exists('users') && !$ci->db->field_exists('staff_shift_id', 'users')) {
+        $ci->db->query("ALTER TABLE `users` ADD `staff_shift_id` INT(11) NULL DEFAULT NULL AFTER `staff_type_id`");
+    }
+    if ($ci->db->table_exists('staff_timing') && !$ci->db->field_exists('staff_shift_id', 'staff_timing')) {
+        $ci->db->query("ALTER TABLE `staff_timing` ADD `staff_shift_id` INT(11) NULL DEFAULT NULL AFTER `staff_id`");
+    }
+}
+
+function get_staff_day_timing($user_id, $day)
+{
+    $ci =& get_instance();
+    ensure_staff_shift_schema();
+
+    $timing = $ci->db
+        ->where('staff_id', $user_id)
+        ->where('day', $day)
+        ->get('staff_timing')
+        ->row_array();
+
+    if ($timing) {
+        return $timing;
+    }
+
+    $user = $ci->db
+        ->select('staff_shift_id')
+        ->where('user_id', $user_id)
+        ->get('users')
+        ->row_array();
+
+    $staffShiftId = isset($user['staff_shift_id']) ? (int) $user['staff_shift_id'] : 0;
+    if ($staffShiftId <= 0) {
+        return array();
+    }
+
+    return $ci->db
+        ->where('staff_shift_id', $staffShiftId)
+        ->where('day', $day)
+        ->get('staff_timing')
+        ->row_array();
+}
+
+function is_off_day_timing($timing)
+{
+    if (empty($timing)) {
+        return false;
+    }
+
+    $checkinTiming = isset($timing['checkin_timing']) ? trim((string) $timing['checkin_timing']) : '';
+    $checkoutTiming = isset($timing['checkout_timing']) ? trim((string) $timing['checkout_timing']) : '';
+
+    if (strtoupper($checkinTiming) === 'OFF' || strtoupper($checkoutTiming) === 'OFF') {
+        return true;
+    }
+
+    return $checkinTiming === '00:00:00' || $checkoutTiming === '00:00:00';
 }
 
 function isAccountsAccessAdmin()

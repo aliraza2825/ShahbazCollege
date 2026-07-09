@@ -109,11 +109,11 @@ class Teacher extends CI_Model {
 	public function checkUserTiming($user_id)
 	{
         $user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
-        $staffTypeId = isset($user['staff_type_id']) ? (int) $user['staff_type_id'] : 0;
+        $staffShiftId = isset($user['staff_shift_id']) ? (int) $user['staff_shift_id'] : 0;
 
-        if ($this->db->field_exists('staff_type_id', 'staff_timing') && $staffTypeId > 0) {
+        if ($staffShiftId > 0) {
             return $this->db
-                ->where('staff_type_id', $staffTypeId)
+                ->where('staff_shift_id', $staffShiftId)
                 ->get('staff_timing')
                 ->result_array();
         }
@@ -143,13 +143,13 @@ class Teacher extends CI_Model {
 	public function updateTeacherTiming($data, $user_id)
 	{
         $user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
-        $staffTypeId = isset($user['staff_type_id']) ? (int) $user['staff_type_id'] : 0;
+        $staffShiftId = isset($user['staff_shift_id']) ? (int) $user['staff_shift_id'] : 0;
 
 		$count = count($data['checkin_time']);
 		for($i=0; $i<$count; $i++)
 		{
-            if ($this->db->field_exists('staff_type_id', 'staff_timing') && $staffTypeId > 0) {
-                $checkStaffEntry = $this->db->get_where('staff_timing', array('staff_type_id' => $staffTypeId, 'day' => $data['day'][$i]))->result_array();
+            if ($staffShiftId > 0) {
+                $checkStaffEntry = $this->db->get_where('staff_timing', array('staff_shift_id' => $staffShiftId, 'day' => $data['day'][$i]))->result_array();
             } else {
 			    $checkStaffEntry = $this->db->get_where('staff_timing', array('staff_id'=>$user_id, 'day'=>$data['day'][$i]))->result_array();
             }
@@ -159,8 +159,8 @@ class Teacher extends CI_Model {
 			$this->db->set('checkout_timing', $data['checkout_time'][$i]);
 			$this->db->set('half_day_on', $data['half_day_on'][$i]);
 			$this->db->set('full_day_on', $data['full_day_on'][$i]);
-            if ($this->db->field_exists('staff_type_id', 'staff_timing') && $staffTypeId > 0) {
-                $this->db->set('staff_type_id', $staffTypeId);
+            if ($staffShiftId > 0) {
+                $this->db->set('staff_shift_id', $staffShiftId);
                 $this->db->set('staff_id', 0);
             } else {
 			    $this->db->set('staff_id', $user_id);
@@ -168,8 +168,8 @@ class Teacher extends CI_Model {
 			
 			if(count($checkStaffEntry)>0)
 			{
-                if ($this->db->field_exists('staff_type_id', 'staff_timing') && $staffTypeId > 0) {
-                    $this->db->where(array('day' => $data['day'][$i], 'staff_type_id' => $staffTypeId));
+                if ($staffShiftId > 0) {
+                    $this->db->where(array('day' => $data['day'][$i], 'staff_shift_id' => $staffShiftId));
                 } else {
 				    $this->db->where(array('day'=>$data['day'][$i], 'staff_id'=>$user_id));
                 }

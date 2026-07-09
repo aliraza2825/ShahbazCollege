@@ -13,11 +13,11 @@
                     <div class="portlet-title">
                         <div class="caption">
                             <i class="fa fa-clock-o"></i>
-                            Staff Timing (<?php echo $staff_type['staff_type_name']; ?>)
+                            Staff Timing (<?php echo $staff_shift['shift_name']; ?>)
                         </div>
                     </div>
                     <div class="portlet-body form">
-                        <form class="form-horizontal" role="form" method="post" action="<?php echo site_url();?>/staff_type/save_staff_timing/<?php echo $staff_type['staff_type_id']; ?>">
+                        <form class="form-horizontal" role="form" method="post" action="<?php echo site_url();?>/staff_shifts/save_staff_timing/<?php echo $staff_shift['staff_shift_id']; ?>">
                             <div class="form-body">
                                 <div class="alert alert-info">
                                     OFF day ke liye timing fields mein <strong>00:00:00</strong> set karein. Salary calculation mein OFF ko present treat kiya jayega.
@@ -81,7 +81,7 @@
                                 <div class="row">
                                     <div class="col-md-offset-3 col-md-9">
                                         <button type="submit" class="btn green">Save Timing</button>
-                                        <a onclick="return confirm('Are you sure you want to delete timing for this staff type?')" href="<?php echo site_url();?>/staff_type/delete_staff_timing/<?php echo $staff_type['staff_type_id']; ?>" class="btn red">Delete Timing</a>
+                                        <a onclick="return confirm('Are you sure you want to delete timing for this shift?')" href="<?php echo site_url();?>/staff_shifts/delete_staff_timing/<?php echo $staff_shift['staff_shift_id']; ?>" class="btn red">Delete Timing</a>
                                     </div>
                                 </div>
                             </div>

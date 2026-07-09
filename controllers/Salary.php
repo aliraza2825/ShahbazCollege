@@ -21,9 +21,7 @@ class Salary  extends CI_Controller{
         if ($this->db->table_exists('payroll_statutory_rules') && !$this->db->field_exists('wage_contribution_cap', 'payroll_statutory_rules')) {
             $this->db->query("ALTER TABLE payroll_statutory_rules ADD wage_contribution_cap DECIMAL(12,2) NOT NULL DEFAULT 0 AFTER calculation_base");
         }
-        if ($this->db->table_exists('staff_timing') && !$this->db->field_exists('staff_type_id', 'staff_timing')) {
-            $this->db->query("ALTER TABLE staff_timing ADD staff_type_id INT NULL AFTER staff_id");
-        }
+        ensure_staff_shift_schema();
     }
 
     private function user_applies_statutory_rules($user_id)
@@ -39,52 +37,12 @@ class Salary  extends CI_Controller{
 
     private function get_staff_day_timing($user_id, $day)
     {
-        $timing = $this->db
-            ->where('staff_id', $user_id)
-            ->where('day', $day)
-            ->get('staff_timing')
-            ->row_array();
-
-        if ($timing) {
-            return $timing;
-        }
-
-        if (!$this->db->field_exists('staff_type_id', 'staff_timing')) {
-            return array();
-        }
-
-        $user = $this->db
-            ->select('staff_type_id')
-            ->where('user_id', $user_id)
-            ->get('users')
-            ->row_array();
-
-        $staffTypeId = isset($user['staff_type_id']) ? (int) $user['staff_type_id'] : 0;
-        if ($staffTypeId <= 0) {
-            return array();
-        }
-
-        return $this->db
-            ->where('staff_type_id', $staffTypeId)
-            ->where('day', $day)
-            ->get('staff_timing')
-            ->row_array();
+        return get_staff_day_timing($user_id, $day);
     }
 
     private function is_off_day_timing($timing)
     {
-        if (empty($timing)) {
-            return false;
-        }
-
-        $checkinTiming = isset($timing['checkin_timing']) ? trim((string) $timing['checkin_timing']) : '';
-        $checkoutTiming = isset($timing['checkout_timing']) ? trim((string) $timing['checkout_timing']) : '';
-
-        if (strtoupper($checkinTiming) === 'OFF' || strtoupper($checkoutTiming) === 'OFF') {
-            return true;
-        }
-
-        return $checkinTiming === '00:00:00' || $checkoutTiming === '00:00:00';
+        return is_off_day_timing($timing);
     }
 
     public function salary_list(){

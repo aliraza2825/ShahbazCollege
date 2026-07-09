@@ -70,6 +70,19 @@
                                         </div>
 										<div class="col-md-6">
                                         	<div class="form-group">
+                                                <label class="col-md-3 control-label"> Staff Shift <span class="required">*</span></label>
+                                                <div class="col-md-9">
+                                                    <select name="staff_shift_id" class="form-control input-inline input-large" required>
+                                                        <option value="">SELECT STAFF SHIFT</option>
+														<?php foreach($staff_shifts as $staff_shift): ?>
+                                                        <option value="<?php echo $staff_shift['staff_shift_id'];?>"><?php echo $staff_shift['shift_name'];?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                        </div>
+										<div class="col-md-6">
+                                        	<div class="form-group">
                                                 <label class="col-md-3 control-label"> Department <span class="required">*</span></label>
                                                 <div class="col-md-9">
                                                     <select name="department_id" class="form-control input-inline input-large" required>

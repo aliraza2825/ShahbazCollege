@@ -1,0 +1,192 @@
+<?php
+defined('BASEPATH') OR exit('No direct script access allowed');
+
+class Staff_shifts extends CI_Controller {
+
+    public function __construct()
+    {
+        parent::__construct();
+        ensure_staff_shift_schema();
+    }
+
+    private function week_days()
+    {
+        return array('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday');
+    }
+
+    public function add_staff_shift()
+    {
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('staff_shifts/add_staff_shift');
+        $this->load->view('inc/footer');
+    }
+
+    public function insert()
+    {
+        $shiftName = trim((string) $this->input->post('shift_name'));
+        $check = $this->db->get_where('staff_shifts', array('shift_name' => $shiftName))->result_array();
+
+        if (count($check) > 0) {
+            $this->session->set_flashdata('error', 'Staff Shift Already Added.');
+            redirect('staff_shifts/add_staff_shift');
+        }
+
+        $this->db->set('shift_name', $shiftName);
+        $this->db->set('description', $this->input->post('description'));
+        $this->db->set('status', (int) $this->input->post('status'));
+        $this->db->set('created_at', date('Y-m-d H:i:s'));
+        $this->db->insert('staff_shifts');
+
+        $this->session->set_flashdata('message', 'Staff Shift Added Successfully');
+        redirect('staff_shifts/add_staff_shift');
+    }
+
+    public function all_staff_shifts()
+    {
+        $data['staff_shifts'] = $this->db->order_by('shift_name', 'ASC')->get('staff_shifts')->result_array();
+        $timingRows = $this->db
+            ->select('staff_shift_id, COUNT(*) as total')
+            ->where('staff_shift_id IS NOT NULL', null, false)
+            ->group_by('staff_shift_id')
+            ->get('staff_timing')
+            ->result_array();
+
+        $data['timing_map'] = array();
+        foreach ($timingRows as $timingRow) {
+            $data['timing_map'][$timingRow['staff_shift_id']] = (int) $timingRow['total'];
+        }
+
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('staff_shifts/all_staff_shifts', $data);
+        $this->load->view('inc/footer');
+    }
+
+    public function edit_staff_shift($staff_shift_id)
+    {
+        $data['staff_shift'] = $this->db->get_where('staff_shifts', array('staff_shift_id' => $staff_shift_id))->result_array();
+        if (count($data['staff_shift']) <= 0) {
+            show_404();
+        }
+
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('staff_shifts/edit_staff_shift', $data);
+        $this->load->view('inc/footer');
+    }
+
+    public function update($staff_shift_id)
+    {
+        $shiftName = trim((string) $this->input->post('shift_name'));
+
+        $this->db->set('shift_name', $shiftName);
+        $this->db->set('description', $this->input->post('description'));
+        $this->db->set('status', (int) $this->input->post('status'));
+        $this->db->set('updated_at', date('Y-m-d H:i:s'));
+        $this->db->where('staff_shift_id', $staff_shift_id);
+        $this->db->update('staff_shifts');
+
+        $this->session->set_flashdata('message', 'Staff Shift Updated Successfully');
+        redirect('staff_shifts/edit_staff_shift/'.$staff_shift_id);
+    }
+
+    public function delete($staff_shift_id)
+    {
+        $this->db->where('staff_shift_id', $staff_shift_id);
+        $this->db->delete('staff_timing');
+
+        $this->db->where('staff_shift_id', $staff_shift_id);
+        $this->db->delete('staff_shifts');
+
+        $this->session->set_flashdata('message', 'Staff Shift Deleted Successfully');
+        redirect('staff_shifts/all_staff_shifts');
+    }
+
+    public function staff_timing($staff_shift_id)
+    {
+        $staffShift = $this->db->get_where('staff_shifts', array('staff_shift_id' => $staff_shift_id))->row_array();
+        if (!$staffShift) {
+            show_404();
+        }
+
+        $timings = $this->db
+            ->where('staff_shift_id', $staff_shift_id)
+            ->get('staff_timing')
+            ->result_array();
+
+        $timingMap = array();
+        foreach ($timings as $timing) {
+            $timingMap[$timing['day']] = $timing;
+        }
+
+        $data['staff_shift'] = $staffShift;
+        $data['week_days'] = $this->week_days();
+        $data['timings'] = $timingMap;
+
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('staff_shifts/staff_timing', $data);
+        $this->load->view('inc/footer');
+    }
+
+    public function save_staff_timing($staff_shift_id)
+    {
+        $staffShift = $this->db->get_where('staff_shifts', array('staff_shift_id' => $staff_shift_id))->row_array();
+        if (!$staffShift) {
+            show_404();
+        }
+
+        $days = $this->input->post('day');
+        $checkin = $this->input->post('checkin_time');
+        $checkout = $this->input->post('checkout_time');
+        $halfDayOn = $this->input->post('half_day_on');
+        $fullDayOn = $this->input->post('full_day_on');
+
+        if (!is_array($days)) {
+            $days = array();
+        }
+
+        $count = count($days);
+        for ($i = 0; $i < $count; $i++) {
+            $day = isset($days[$i]) ? $days[$i] : '';
+            if ($day === '') {
+                continue;
+            }
+
+            $checkStaffEntry = $this->db
+                ->where('staff_shift_id', $staff_shift_id)
+                ->where('day', $day)
+                ->get('staff_timing')
+                ->row_array();
+
+            $payload = array(
+                'day' => $day,
+                'checkin_timing' => isset($checkin[$i]) ? $checkin[$i] : '00:00:00',
+                'checkout_timing' => isset($checkout[$i]) ? $checkout[$i] : '00:00:00',
+                'half_day_on' => isset($halfDayOn[$i]) ? $halfDayOn[$i] : '00:00:00',
+                'full_day_on' => isset($fullDayOn[$i]) ? $fullDayOn[$i] : '00:00:00',
+                'staff_shift_id' => $staff_shift_id,
+                'staff_id' => 0
+            );
+
+            if ($checkStaffEntry) {
+                $this->db->where('id', $checkStaffEntry['id'])->update('staff_timing', $payload);
+            } else {
+                $this->db->insert('staff_timing', $payload);
+            }
+        }
+
+        $this->session->set_flashdata('message', 'Staff Shift Timing Updated Successfully.');
+        redirect('staff_shifts/staff_timing/'.$staff_shift_id);
+    }
+
+    public function delete_staff_timing($staff_shift_id)
+    {
+        $this->db->where('staff_shift_id', $staff_shift_id);
+        $this->db->delete('staff_timing');
+
+        $this->session->set_flashdata('message', 'Staff Shift Timing Deleted Successfully.');
+        redirect('staff_shifts/all_staff_shifts');
+    }
+}

@@ -79,6 +79,7 @@ class Teachers extends CI_Controller {
 				'status' 			=> $this->input->post('status'),
 				'campus_id' 		=> $this->input->post('campus_id'),
 				'staff_type_id' 	=> $this->input->post('staff_type_id'),
+				'staff_shift_id' 	=> $this->input->post('staff_shift_id'),
 				'department_id' 	=> $this->input->post('department_id'),
 				'designation_id' 	=> $designations,
 				'type' 				=> $this->input->post('type')
@@ -190,6 +191,7 @@ class Teachers extends CI_Controller {
             'status' 			=> $this->input->post('status'),
             'campus_id' 		=> $this->input->post('campus_id'),
             'staff_type_id' 	=> $this->input->post('staff_type_id'),
+            'staff_shift_id' 	=> $this->input->post('staff_shift_id'),
             'department_id' 	=> $this->input->post('department_id'),
             'designation_id' 	=> $designations,
             'type' 				=> $this->input->post('type')
@@ -320,6 +322,8 @@ class Teachers extends CI_Controller {
 		$data['campuses'] = $this->teacher->getCampuses();
 		$data['teachers'] = $this->teacher->getTeachers();
 		$data['staff_types'] = $this->db->get('staff_type')->result_array();
+		ensure_staff_shift_schema();
+		$data['staff_shifts'] = $this->db->where('status', 1)->order_by('shift_name', 'ASC')->get('staff_shifts')->result_array();
 		$data['departments'] = $this->db->get('departments')->result_array();
 		$data['designations'] = $this->db->get('designations')->result_array();
 		
@@ -335,6 +339,8 @@ class Teachers extends CI_Controller {
 		$data['campuses'] = $this->teacher->getCampuses();
 		$data['teachers'] = $this->teacher->editTeacher($id);
 		$data['staff_types'] = $this->db->get('staff_type')->result_array();
+		ensure_staff_shift_schema();
+		$data['staff_shifts'] = $this->db->where('status', 1)->order_by('shift_name', 'ASC')->get('staff_shifts')->result_array();
 		$data['departments'] = $this->db->get('departments')->result_array();
 		$data['designations'] = $this->db->get('designations')->result_array();
         $data['allowances'] = $this->db->get('allownces')->result_array();
@@ -460,13 +466,13 @@ class Teachers extends CI_Controller {
             show_404();
         }
 
-        $staffTypeId = (int) @$user[0]['staff_type_id'];
-        if ($staffTypeId <= 0) {
-            $this->session->set_flashdata('error', 'Please set staff type first to manage timing.');
+        $staffShiftId = (int) @$user[0]['staff_shift_id'];
+        if ($staffShiftId <= 0) {
+            $this->session->set_flashdata('error', 'Please set staff shift first to manage timing.');
             redirect('teachers/all_teachers');
         }
 
-        redirect('staff_type/staff_timing/'.$staffTypeId);
+        redirect('staff_shifts/staff_timing/'.$staffShiftId);
 	}
 	
 	public function update_timing($user_id)
@@ -475,13 +481,13 @@ class Teachers extends CI_Controller {
         if (count($user) <= 0) {
             show_404();
         }
-        $staffTypeId = (int) @$user[0]['staff_type_id'];
-        if ($staffTypeId <= 0) {
-            $this->session->set_flashdata('error', 'Please set staff type first to manage timing.');
+        $staffShiftId = (int) @$user[0]['staff_shift_id'];
+        if ($staffShiftId <= 0) {
+            $this->session->set_flashdata('error', 'Please set staff shift first to manage timing.');
             redirect('teachers/all_teachers');
         }
 
-        redirect('staff_type/staff_timing/'.$staffTypeId);
+        redirect('staff_shifts/staff_timing/'.$staffShiftId);
 	}
 	
 	public function contact_for_fee()
