@@ -374,7 +374,7 @@ class Accounts extends CI_Controller {
 //        $bankAccounts = $this->db->get()->result_array();
 
         $data['cash_accounts'] = filterRecordsByAccessIds($cashAccounts, 'id', 'allowed_cash_account_ids');
-//        $data['bank_accounts'] = filterRecordsByAccessIds($bankAccounts, 'id', 'allowed_bank_account_ids');
+        $data['bank_accounts'] = [];
         $data['accounts'] = filterRecordsByAccessIds(array_merge($cashAccounts, []), 'id', 'funds_transfer_account_ids');
         $data['edit_accounts'] = array_merge($data['cash_accounts'], []);
 

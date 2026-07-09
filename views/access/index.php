@@ -333,20 +333,20 @@
                                                     </div>
                                                 <?php endif; ?>
 
-                                                <?php if(count($accessBankAccounts) > 0): ?>
-                                                    <div class="form-group">
-                                                        <label class="col-md-3 control-label">Allowed Bank Accounts</label>
-                                                        <div class="col-md-5">
-                                                            <select class="form-control select2" id="allowed_bank_account_ids" name="allowed_bank_account_ids[]" multiple>
-                                                                <?php foreach($accessBankAccounts as $bankAccount): ?>
-                                                                    <option value="<?php echo $bankAccount['id'];?>" <?php if(in_array($bankAccount['id'], explode(',',@$access_values[0]['allowed_bank_account_ids']))){echo 'selected';}?>>
-                                                                        <?php echo $bankAccount['account_name'];?>
-                                                                    </option>
-                                                                <?php endforeach; ?>
-                                                            </select>
-                                                        </div>
-                                                    </div>
-                                                <?php endif; ?>
+<!--                                                --><?php //if(count($accessBankAccounts) > 0): ?>
+<!--                                                    <div class="form-group">-->
+<!--                                                        <label class="col-md-3 control-label">Allowed Bank Accounts</label>-->
+<!--                                                        <div class="col-md-5">-->
+<!--                                                            <select class="form-control select2" id="allowed_bank_account_ids" name="allowed_bank_account_ids[]" multiple>-->
+<!--                                                                --><?php //foreach($accessBankAccounts as $bankAccount): ?>
+<!--                                                                    <option value="--><?php //echo $bankAccount['id'];?><!--" --><?php //if(in_array($bankAccount['id'], explode(',',@$access_values[0]['allowed_bank_account_ids']))){echo 'selected';}?><!-->-->
+<!--                                                                        --><?php //echo $bankAccount['account_name'];?>
+<!--                                                                    </option>-->
+<!--                                                                --><?php //endforeach; ?>
+<!--                                                            </select>-->
+<!--                                                        </div>-->
+<!--                                                    </div>-->
+<!--                                                --><?php //endif; ?>
 
                                                 <?php if(count($accessTransferAccounts) > 0): ?>
                                                     <div class="form-group">
