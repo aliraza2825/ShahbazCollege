@@ -322,7 +322,7 @@
                                                     <div class="form-group">
                                                         <label class="col-md-3 control-label">Allowed Cash Accounts</label>
                                                         <div class="col-md-5">
-                                                            <select class="form-control select2" name="allowed_cash_account_ids[]" multiple>
+                                                            <select class="form-control select2" name="allowed_cash_account_ids[]" id="allowed_cash_account_ids" multiple>
                                                                 <?php foreach($accessCashAccounts as $cashAccount): ?>
                                                                     <option value="<?php echo $cashAccount['id'];?>" <?php if(in_array($cashAccount['id'], explode(',',@$access_values[0]['allowed_cash_account_ids']))){echo 'selected';}?>>
                                                                         <?php echo $cashAccount['account_name'];?>
@@ -337,7 +337,7 @@
                                                     <div class="form-group">
                                                         <label class="col-md-3 control-label">Allowed Bank Accounts</label>
                                                         <div class="col-md-5">
-                                                            <select class="form-control select2" name="allowed_bank_account_ids[]" multiple>
+                                                            <select class="form-control select2" id="allowed_bank_account_ids" name="allowed_bank_account_ids[]" multiple>
                                                                 <?php foreach($accessBankAccounts as $bankAccount): ?>
                                                                     <option value="<?php echo $bankAccount['id'];?>" <?php if(in_array($bankAccount['id'], explode(',',@$access_values[0]['allowed_bank_account_ids']))){echo 'selected';}?>>
                                                                         <?php echo $bankAccount['account_name'];?>
@@ -352,7 +352,7 @@
                                                     <div class="form-group">
                                                         <label class="col-md-3 control-label">Funds Transfer Accounts (From/To)</label>
                                                         <div class="col-md-5">
-                                                            <select class="form-control select2" name="funds_transfer_account_ids[]" multiple>
+                                                            <select class="form-control select2" id="funds_transfer_account_ids" name="funds_transfer_account_ids[]" multiple>
                                                                 <?php foreach($accessTransferAccounts as $transferAccount): ?>
                                                                     <option value="<?php echo $transferAccount['id'];?>" <?php if(in_array($transferAccount['id'], explode(',',@$access_values[0]['funds_transfer_account_ids']))){echo 'selected';}?>>
                                                                         <?php echo $transferAccount['account_name'];?>
@@ -367,7 +367,7 @@
                                                     <div class="form-group">
                                                         <label class="col-md-3 control-label">Account Details Petty Cash</label>
                                                         <div class="col-md-5">
-                                                            <select class="form-control select2" name="account_details_pettycash_ids[]" multiple>
+                                                            <select class="form-control select2" id="account_details_pettycash_ids" name="account_details_pettycash_ids[]" multiple>
                                                                 <?php foreach($accessPettyAccounts as $pettyAccount): ?>
                                                                     <option value="<?php echo $pettyAccount['id'];?>" <?php if(in_array($pettyAccount['id'], explode(',',@$access_values[0]['account_details_pettycash_ids']))){echo 'selected';}?>>
                                                                         <?php echo $pettyAccount['first_name'].' '.$pettyAccount['last_name'].' ( '.$pettyAccount['campus_name'].' )';?>
@@ -1543,9 +1543,13 @@
         $("#select2_sample10").select2();
         $("#select2_sample17").select2();
         $("#select2_sampletype").select2();
-        $(".select2").select2();
+
         $("#select2_sample_council_report_courses").select2();
         $("#select2_sample_council_report_colleges").select2();
+        $("#allowed_cash_account_ids").select2();
+        $("#allowed_bank_account_ids").select2();
+        $("#funds_transfer_account_ids").select2();
+        $("#account_details_pettycash_ids").select2();
 
         $('.selection').click(function(){
             var selection = $(this).val();
