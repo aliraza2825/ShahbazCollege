@@ -1788,7 +1788,8 @@ class Accounts extends CI_Controller {
     {
         $this->db->select('*');
         $this->db->from('accounts');
-        $data['accounts'] = $this->db->get()->result_array();
+        $cashAccounts = $this->db->get()->result_array();
+        $data['accounts'] = filterRecordsByAccessIds($cashAccounts, 'id', 'allowed_cash_account_ids');
 
         $this->db->select('*,misc_incomes.amount as amount');
         $this->db->from('misc_incomes');
