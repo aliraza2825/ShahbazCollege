@@ -1543,7 +1543,7 @@
         $("#select2_sample10").select2();
         $("#select2_sample17").select2();
         $("#select2_sampletype").select2();
-        
+        $(".select2").select2();
         $("#select2_sample_council_report_courses").select2();
         $("#select2_sample_council_report_colleges").select2();
 
