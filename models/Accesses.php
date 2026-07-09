@@ -61,6 +61,40 @@ class Accesses extends CI_Model {
         }
     }
 
+    private function accountDetailsAccessCheckboxFields()
+    {
+        return array('account_add_account', 'account_funds_transfer', 'account_edit');
+    }
+
+    private function accountDetailsAccessListFields()
+    {
+        return array(
+            'allowed_cash_account_ids',
+            'allowed_bank_account_ids',
+            'funds_transfer_account_ids',
+            'account_details_pettycash_ids'
+        );
+    }
+
+    private function ensureAccountDetailsAccessColumns()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if (!$this->db->table_exists($table)) {
+                continue;
+            }
+            foreach ($this->accountDetailsAccessCheckboxFields() as $field) {
+                if (!$this->db->field_exists($field, $table)) {
+                    $this->db->query("ALTER TABLE `$table` ADD `$field` TINYINT(1) NULL DEFAULT NULL");
+                }
+            }
+            foreach ($this->accountDetailsAccessListFields() as $field) {
+                if (!$this->db->field_exists($field, $table)) {
+                    $this->db->query("ALTER TABLE `$table` ADD `$field` TEXT NULL DEFAULT NULL");
+                }
+            }
+        }
+    }
+
     public function getUsers()
     {
         $this->db->select('*');
@@ -172,6 +206,13 @@ class Accesses extends CI_Model {
         $closing_amount_edit = $this->input->post('closing_amount_edit');
         $closing_coo = $this->input->post('closing_coo');
         $misc_income = $this->input->post('misc_income');
+        $account_add_account = $this->input->post('account_add_account');
+        $account_funds_transfer = $this->input->post('account_funds_transfer');
+        $account_edit = $this->input->post('account_edit');
+        $allowed_cash_account_ids = $this->input->post('allowed_cash_account_ids');
+        $allowed_bank_account_ids = $this->input->post('allowed_bank_account_ids');
+        $funds_transfer_account_ids = $this->input->post('funds_transfer_account_ids');
+        $account_details_pettycash_ids = $this->input->post('account_details_pettycash_ids');
 
 
         //PETTY CASH
@@ -510,6 +551,22 @@ class Accesses extends CI_Model {
         {
             $campus_closing_ids =  implode(",", $campus_closing_ids);
         }
+        if($allowed_cash_account_ids!='')
+        {
+            $allowed_cash_account_ids = implode(",", $allowed_cash_account_ids);
+        }
+        if($allowed_bank_account_ids!='')
+        {
+            $allowed_bank_account_ids = implode(",", $allowed_bank_account_ids);
+        }
+        if($funds_transfer_account_ids!='')
+        {
+            $funds_transfer_account_ids = implode(",", $funds_transfer_account_ids);
+        }
+        if($account_details_pettycash_ids!='')
+        {
+            $account_details_pettycash_ids = implode(",", $account_details_pettycash_ids);
+        }
         $other_cities_access = $this->input->post('other_cities_access');
 
         $attendance_mobile_report = $this->input->post('attendance_mobile_report');
@@ -633,6 +690,14 @@ class Accesses extends CI_Model {
         $this->db->set('closing_amount_edit', $closing_amount_edit);
         $this->db->set('closing_coo', $closing_coo);
         $this->db->set('misc_income', $misc_income);
+        $this->ensureAccountDetailsAccessColumns();
+        $this->db->set('account_add_account', $account_add_account);
+        $this->db->set('account_funds_transfer', $account_funds_transfer);
+        $this->db->set('account_edit', $account_edit);
+        $this->db->set('allowed_cash_account_ids', $allowed_cash_account_ids);
+        $this->db->set('allowed_bank_account_ids', $allowed_bank_account_ids);
+        $this->db->set('funds_transfer_account_ids', $funds_transfer_account_ids);
+        $this->db->set('account_details_pettycash_ids', $account_details_pettycash_ids);
 
         $this->db->set('pettycash_sidebar', $pettycash_sidebar);
         $this->db->set('add_pettycash', $add_pettycash);
@@ -998,6 +1063,13 @@ class Accesses extends CI_Model {
         $closing_amount_edit = $this->input->post('closing_amount_edit');
         $closing_coo = $this->input->post('closing_coo');
         $misc_income = $this->input->post('misc_income');
+        $account_add_account = $this->input->post('account_add_account');
+        $account_funds_transfer = $this->input->post('account_funds_transfer');
+        $account_edit = $this->input->post('account_edit');
+        $allowed_cash_account_ids = $this->input->post('allowed_cash_account_ids');
+        $allowed_bank_account_ids = $this->input->post('allowed_bank_account_ids');
+        $funds_transfer_account_ids = $this->input->post('funds_transfer_account_ids');
+        $account_details_pettycash_ids = $this->input->post('account_details_pettycash_ids');
 
 
         //PETTY CASH
@@ -1322,6 +1394,22 @@ class Accesses extends CI_Model {
         {
             $campus_closing_ids =  implode(",", $campus_closing_ids);
         }
+        if($allowed_cash_account_ids!='')
+        {
+            $allowed_cash_account_ids = implode(",", $allowed_cash_account_ids);
+        }
+        if($allowed_bank_account_ids!='')
+        {
+            $allowed_bank_account_ids = implode(",", $allowed_bank_account_ids);
+        }
+        if($funds_transfer_account_ids!='')
+        {
+            $funds_transfer_account_ids = implode(",", $funds_transfer_account_ids);
+        }
+        if($account_details_pettycash_ids!='')
+        {
+            $account_details_pettycash_ids = implode(",", $account_details_pettycash_ids);
+        }
         $other_cities_access = $this->input->post('other_cities_access');
 
 
@@ -1452,6 +1540,14 @@ class Accesses extends CI_Model {
         $this->db->set('closing_amount_edit', $closing_amount_edit);
         $this->db->set('closing_coo', $closing_coo);
         $this->db->set('misc_income', $misc_income);
+        $this->ensureAccountDetailsAccessColumns();
+        $this->db->set('account_add_account', $account_add_account);
+        $this->db->set('account_funds_transfer', $account_funds_transfer);
+        $this->db->set('account_edit', $account_edit);
+        $this->db->set('allowed_cash_account_ids', $allowed_cash_account_ids);
+        $this->db->set('allowed_bank_account_ids', $allowed_bank_account_ids);
+        $this->db->set('funds_transfer_account_ids', $funds_transfer_account_ids);
+        $this->db->set('account_details_pettycash_ids', $account_details_pettycash_ids);
 
         $this->db->set('pettycash_sidebar', $pettycash_sidebar);
         $this->db->set('add_pettycash', $add_pettycash);

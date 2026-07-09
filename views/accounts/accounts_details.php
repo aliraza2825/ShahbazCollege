@@ -25,12 +25,16 @@
             <?php endif;?>
 			<div class="row">
                 <div class="col-md-12">
+                    <?php if(!empty($can_add_account)): ?>
                     <a data-toggle="modal"  title="Add this item" style="float: right; margin: 15px" class="open-AddBookDialog btn btn-primary" href="#addaccounts">
                         <i class="fa fa-home"> Add Account</i>
                     </a>
+                    <?php endif; ?>
+                    <?php if(!empty($can_funds_transfer)): ?>
                     <a data-toggle="modal"  title="Add this item" style="float: right; margin: 15px" class="open-AddBookDialog btn btn-primary" href="#fundtransfer">
                         <i class="fa fa-home"> Funds Transfer </i>
                     </a>
+                    <?php endif; ?>
                     <div class="clearfix"></div>
                 </div>
 				<div class="col-md-12">
@@ -144,9 +148,11 @@
                                             <?php echo $account['for_closing'] == "0" ? "NO" : "YES"?>
                                         </td>
 										<td>
-                                            <a data-toggle="modal" data-id="<?php echo $key ?>"  title="Add this item" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="#editaccounts">
+                                            <?php if(!empty($can_edit_account)): ?>
+                                            <a data-toggle="modal" data-id="<?php echo $account['id']; ?>"  title="Add this item" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="#editaccounts">
                                                 <i class="fa fa-home"> Edit</i>
                                             </a>
+                                            <?php endif; ?>
                                         </td>
 										<td>
                                             <a title="View" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="<?php echo site_url().'/accounts/cashaccountreport/'.$account['id'] ?>" target="_blank">
@@ -276,9 +282,11 @@
                                             <?php echo $account['for_closing'] == "0" ? "NO" : "YES"?>
                                         </td>
 										<td>
-                                            <a data-toggle="modal" data-id="<?php echo $key ?>"  title="Add this item" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="#editaccounts">
+                                            <?php if(!empty($can_edit_account)): ?>
+                                            <a data-toggle="modal" data-id="<?php echo $account['id']; ?>"  title="Add this item" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="#editaccounts">
                                                 <i class="fa fa-home"> Edit</i>
                                             </a>
+                                            <?php endif; ?>
                                         </td>
 										<td>
                                             <a title="View" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="<?php echo site_url().'/accounts/cashaccountreport/'.$account['id'] ?>" target="_blank">

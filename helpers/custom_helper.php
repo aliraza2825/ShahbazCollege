@@ -2588,6 +2588,68 @@ function pp($data)
 	echo '</pre>';
 }
 
+function isAccountsAccessAdmin()
+{
+    $ci =& get_instance();
+    return $ci->session->userdata('role') == 'Admin';
+}
+
+function getAccessIdList($field)
+{
+    if (isAccountsAccessAdmin()) {
+        return null;
+    }
+    $access = checkUserAccess();
+    if (empty($access[0][$field])) {
+        return array();
+    }
+    return array_values(array_filter(array_map('trim', explode(',', $access[0][$field]))));
+}
+
+function filterRecordsByAccessIds($records, $idField, $accessField)
+{
+    $allowed = getAccessIdList($accessField);
+    if ($allowed === null) {
+        return $records;
+    }
+    if (empty($allowed)) {
+        return array();
+    }
+    return array_values(array_filter($records, function ($row) use ($allowed, $idField) {
+        return in_array((string) $row[$idField], $allowed, true);
+    }));
+}
+
+function hasAccountDetailsFeature($field)
+{
+    if (isAccountsAccessAdmin()) {
+        return true;
+    }
+    $access = checkUserAccess();
+    return !empty($access[0][$field]);
+}
+
+function userCanAccessAccountId($accountId, $accessField)
+{
+    $allowed = getAccessIdList($accessField);
+    if ($allowed === null) {
+        return true;
+    }
+    return in_array((string) $accountId, $allowed, true);
+}
+
+function userCanEditAccountId($accountId)
+{
+    if (!hasAccountDetailsFeature('account_edit')) {
+        return false;
+    }
+    if (isAccountsAccessAdmin()) {
+        return true;
+    }
+    return userCanAccessAccountId($accountId, 'allowed_cash_account_ids')
+        || userCanAccessAccountId($accountId, 'allowed_bank_account_ids');
+}
+
 function get_council_date($fee_id)
     {
         $ci =& get_instance();

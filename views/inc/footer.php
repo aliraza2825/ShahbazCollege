@@ -4793,26 +4793,38 @@ endif?>
 
     $(document).on("click", ".open-Editacount", function () {
 
-        var myBookId = $(this).data('id');
-        var loans = <?php echo json_encode($accounts) ?>;
+        var accountId = $(this).data('id');
+        var loans = <?php echo json_encode(isset($edit_accounts) ? $edit_accounts : $accounts) ?>;
+        var account = null;
+        var i;
 
+        for (i = 0; i < loans.length; i++) {
+            if (loans[i].id == accountId) {
+                account = loans[i];
+                break;
+            }
+        }
 
-        $(".modal-body #daccount_id").val( loans[myBookId].id);
+        if (!account) {
+            return;
+        }
 
-        var bank=loans[myBookId].account_name.toString().substring(0, loans[myBookId].account_name.toString().indexOf("("));
-        var sti=loans[myBookId].account_name.toString();
-        var account=sti.substring(sti.indexOf("(")+1, sti.indexOf(")"));
+        $(".modal-body #daccount_id").val(account.id);
+
+        var bank=account.account_name.toString().substring(0, account.account_name.toString().indexOf("("));
+        var sti=account.account_name.toString();
+        var accountNo=sti.substring(sti.indexOf("(")+1, sti.indexOf(")"));
 
 
         $(".modal-body #edbank").val(bank);
 
-        $(".modal-body #edtitle").val(loans[myBookId].account_title);
+        $(".modal-body #edtitle").val(account.account_title);
 
-        $(".modal-body #edaccountno").val( account);
-        $(".modal-body #account_type").val( loans[myBookId].type);
-        $(".modal-body #account_taxable").val( loans[myBookId].taxable);
-        $(".modal-body #account_closing").val( loans[myBookId].for_closing);
-        $(".modal-body #edamount_limit").val( loans[myBookId].account_limit);
+        $(".modal-body #edaccountno").val(accountNo);
+        $(".modal-body #account_type").val(account.type);
+        $(".modal-body #account_taxable").val(account.taxable);
+        $(".modal-body #account_closing").val(account.for_closing);
+        $(".modal-body #edamount_limit").val(account.account_limit);
 
 
     });

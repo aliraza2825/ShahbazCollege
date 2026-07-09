@@ -288,6 +288,95 @@
                                                     </div>
 
                                                 <?php endif; ?>
+
+                                                <?php
+                                                $this->db->select('*');
+                                                $this->db->from('accounts');
+                                                $this->db->where('type', 0);
+                                                $this->db->order_by('account_name', 'ASC');
+                                                $accessCashAccounts = $this->db->get()->result_array();
+
+                                                $this->db->select('*');
+                                                $this->db->from('accounts');
+                                                $this->db->where('type', 1);
+                                                $this->db->order_by('account_name', 'ASC');
+                                                $accessBankAccounts = $this->db->get()->result_array();
+
+                                                $this->db->select('*, petty_cash_college_wise.id as id');
+                                                $this->db->from('petty_cash_college_wise');
+                                                $this->db->join('campuses','campuses.campus_id = petty_cash_college_wise.campus_id','left');
+                                                $this->db->join('users','users.user_id = petty_cash_college_wise.assign_to','left');
+                                                $this->db->where('petty_cash_college_wise.petty_status', '1');
+                                                $accessPettyAccounts = $this->db->get()->result_array();
+                                                $accessTransferAccounts = array_merge($accessCashAccounts, $accessBankAccounts);
+                                                ?>
+
+                                                <label class="checkbox-inline">
+                                                    <input type="checkbox" name="account_add_account" value="1" <?php if(@$access_values[0]['account_add_account']!=NULL){echo 'checked';}?> /> Account Details Add Account </label>
+                                                <label class="checkbox-inline">
+                                                    <input type="checkbox" name="account_funds_transfer" value="1" <?php if(@$access_values[0]['account_funds_transfer']!=NULL){echo 'checked';}?> /> Account Details Funds Transfer </label>
+                                                <label class="checkbox-inline">
+                                                    <input type="checkbox" name="account_edit" value="1" <?php if(@$access_values[0]['account_edit']!=NULL){echo 'checked';}?> /> Account Details Edit Account </label>
+
+                                                <?php if(count($accessCashAccounts) > 0): ?>
+                                                    <div class="form-group">
+                                                        <label class="col-md-3 control-label">Allowed Cash Accounts</label>
+                                                        <div class="col-md-5">
+                                                            <select class="form-control select2" name="allowed_cash_account_ids[]" multiple>
+                                                                <?php foreach($accessCashAccounts as $cashAccount): ?>
+                                                                    <option value="<?php echo $cashAccount['id'];?>" <?php if(in_array($cashAccount['id'], explode(',',@$access_values[0]['allowed_cash_account_ids']))){echo 'selected';}?>>
+                                                                        <?php echo $cashAccount['account_name'];?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <?php if(count($accessBankAccounts) > 0): ?>
+                                                    <div class="form-group">
+                                                        <label class="col-md-3 control-label">Allowed Bank Accounts</label>
+                                                        <div class="col-md-5">
+                                                            <select class="form-control select2" name="allowed_bank_account_ids[]" multiple>
+                                                                <?php foreach($accessBankAccounts as $bankAccount): ?>
+                                                                    <option value="<?php echo $bankAccount['id'];?>" <?php if(in_array($bankAccount['id'], explode(',',@$access_values[0]['allowed_bank_account_ids']))){echo 'selected';}?>>
+                                                                        <?php echo $bankAccount['account_name'];?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <?php if(count($accessTransferAccounts) > 0): ?>
+                                                    <div class="form-group">
+                                                        <label class="col-md-3 control-label">Funds Transfer Accounts (From/To)</label>
+                                                        <div class="col-md-5">
+                                                            <select class="form-control select2" name="funds_transfer_account_ids[]" multiple>
+                                                                <?php foreach($accessTransferAccounts as $transferAccount): ?>
+                                                                    <option value="<?php echo $transferAccount['id'];?>" <?php if(in_array($transferAccount['id'], explode(',',@$access_values[0]['funds_transfer_account_ids']))){echo 'selected';}?>>
+                                                                        <?php echo $transferAccount['account_name'];?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <?php if(count($accessPettyAccounts) > 0): ?>
+                                                    <div class="form-group">
+                                                        <label class="col-md-3 control-label">Account Details Petty Cash</label>
+                                                        <div class="col-md-5">
+                                                            <select class="form-control select2" name="account_details_pettycash_ids[]" multiple>
+                                                                <?php foreach($accessPettyAccounts as $pettyAccount): ?>
+                                                                    <option value="<?php echo $pettyAccount['id'];?>" <?php if(in_array($pettyAccount['id'], explode(',',@$access_values[0]['account_details_pettycash_ids']))){echo 'selected';}?>>
+                                                                        <?php echo $pettyAccount['first_name'].' '.$pettyAccount['last_name'].' ( '.$pettyAccount['campus_name'].' )';?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
                                             </div>
                                         </div>
 

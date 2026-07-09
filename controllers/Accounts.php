@@ -365,18 +365,18 @@ class Accounts extends CI_Controller {
     {
         $this->db->select('*');
         $this->db->from('accounts');
-        $this->db->where('type',0);
-        $data['accounts'] = $this->db->get()->result_array();
+        $this->db->where('type', 0);
+        $cashAccounts = $this->db->get()->result_array();
 
         $this->db->select('*');
         $this->db->from('accounts');
-        $this->db->where('type',0);
-        $data['cash_accounts'] = $this->db->get()->result_array();
+        $this->db->where('type', 1);
+        $bankAccounts = $this->db->get()->result_array();
 
-        $this->db->select('*');
-        $this->db->from('accounts');
-        $this->db->where('type',1);
-        $data['bank_accounts'] = $this->db->get()->result_array();
+        $data['cash_accounts'] = filterRecordsByAccessIds($cashAccounts, 'id', 'allowed_cash_account_ids');
+        $data['bank_accounts'] = filterRecordsByAccessIds($bankAccounts, 'id', 'allowed_bank_account_ids');
+        $data['accounts'] = filterRecordsByAccessIds(array_merge($cashAccounts, $bankAccounts), 'id', 'funds_transfer_account_ids');
+        $data['edit_accounts'] = array_merge($data['cash_accounts'], $data['bank_accounts']);
 
         $this->db->select('*');
         $this->db->from('petty_cash_college_wise');
@@ -384,7 +384,12 @@ class Accounts extends CI_Controller {
         $this->db->join('users','users.user_id = petty_cash_college_wise.assign_to','left');
         $this->db->join('designations','designations.designation_id = users.designation_id','left');
         $this->db->where('petty_cash_college_wise.petty_status = 1');
-        $data['Pettycashs'] = $this->db->get()->result_array();
+        $pettyAccounts = $this->db->get()->result_array();
+        $data['Pettycashs'] = filterRecordsByAccessIds($pettyAccounts, 'id', 'account_details_pettycash_ids');
+
+        $data['can_add_account'] = hasAccountDetailsFeature('account_add_account');
+        $data['can_funds_transfer'] = hasAccountDetailsFeature('account_funds_transfer');
+        $data['can_edit_account'] = hasAccountDetailsFeature('account_edit');
 
         $this->load->view('inc/header');
         $this->load->view('inc/sidebar');
@@ -813,6 +818,12 @@ class Accounts extends CI_Controller {
 
     public function add_account()
     {
+        if (!hasAccountDetailsFeature('account_add_account')) {
+            $this->session->set_userdata('error', 'You do not have permission to add accounts.');
+            redirect('accounts/account_details');
+            return;
+        }
+
         $accounttitle = $this->input->post('title');
         $accountno = $this->input->post('accountno');
         $accountamount = $this->input->post('amount');
@@ -836,6 +847,12 @@ class Accounts extends CI_Controller {
 
     public function edit()
     {
+        $accountId = $this->input->post('daccount_id');
+        if (!userCanEditAccountId($accountId)) {
+            $this->session->set_userdata('error', 'You do not have permission to edit this account.');
+            redirect('accounts/account_details');
+            return;
+        }
 
         $accounttitle = $this->input->post('title');
         $accountno = $this->input->post('accountno');
@@ -863,6 +880,11 @@ class Accounts extends CI_Controller {
 
     public function transfer_funds()
     {
+        if (!hasAccountDetailsFeature('account_funds_transfer')) {
+            $this->session->set_userdata('error', 'You do not have permission to transfer funds.');
+            redirect('accounts/account_details');
+            return;
+        }
 
         $petty_account = $this->input->post('petty_account');
         $from = $this->input->post('from_account');
@@ -870,6 +892,24 @@ class Accounts extends CI_Controller {
         $pettyid = $this->input->post('petty_account_id');
         $accountamount = $this->input->post('sentamount');
         $trasfer_reason = $this->input->post('trasfer_reason');
+
+        if (!userCanAccessAccountId($from, 'funds_transfer_account_ids')) {
+            $this->session->set_userdata('error', 'Invalid from account selected.');
+            redirect('accounts/account_details');
+            return;
+        }
+
+        if ($petty_account == '0') {
+            if (!userCanAccessAccountId($to, 'funds_transfer_account_ids')) {
+                $this->session->set_userdata('error', 'Invalid to account selected.');
+                redirect('accounts/account_details');
+                return;
+            }
+        } elseif (!userCanAccessAccountId($pettyid, 'account_details_pettycash_ids')) {
+            $this->session->set_userdata('error', 'Invalid petty cash account selected.');
+            redirect('accounts/account_details');
+            return;
+        }
 
         //load the helper
         $this->load->helper('form');
