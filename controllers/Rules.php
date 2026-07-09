@@ -292,7 +292,7 @@ class Rules extends CI_Controller {
 
         
         $data['campuses'] = $this->db->get('campuses')->result_array();
-        $data['accounts'] = $this->db->get_where('accounts',array('id >'=>'0'))->result_array();
+        $data['accounts'] = $this->db->get_where('accounts',array('id >'=>'0','type'=>0))->result_array();
 
 
         $this->db->select('*');
