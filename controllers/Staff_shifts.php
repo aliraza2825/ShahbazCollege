@@ -20,7 +20,7 @@ class Staff_shifts extends CI_Controller {
             return array();
         }
 
-        return $this->db->order_by('name', 'ASC')->get('study_type')->result_array();
+        return $this->db->order_by('name', 'ASC')->group_by('name')->get('study_type')->result_array();
     }
 
     private function shift_combo_exists($shiftName, $studyTypeId, $excludeId = 0)
