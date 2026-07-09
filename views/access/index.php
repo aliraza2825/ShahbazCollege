@@ -312,11 +312,11 @@
                                                 ?>
 
                                                 <label class="checkbox-inline">
-                                                    <input type="checkbox" name="account_add_account" value="1" <?php if(@$access_values[0]['account_add_account']!=NULL){echo 'checked';}?> /> Account Details Add Account </label>
+                                                    <input type="checkbox" name="account_add_account" value="1" <?php if(@$access_values[0]['account_add_account']!=NULL){echo 'checked';}?> /> Add Account </label>
                                                 <label class="checkbox-inline">
-                                                    <input type="checkbox" name="account_funds_transfer" value="1" <?php if(@$access_values[0]['account_funds_transfer']!=NULL){echo 'checked';}?> /> Account Details Funds Transfer </label>
+                                                    <input type="checkbox" name="account_funds_transfer" value="1" <?php if(@$access_values[0]['account_funds_transfer']!=NULL){echo 'checked';}?> /> Funds Transfer </label>
                                                 <label class="checkbox-inline">
-                                                    <input type="checkbox" name="account_edit" value="1" <?php if(@$access_values[0]['account_edit']!=NULL){echo 'checked';}?> /> Account Details Edit Account </label>
+                                                    <input type="checkbox" name="account_edit" value="1" <?php if(@$access_values[0]['account_edit']!=NULL){echo 'checked';}?> /> Edit Account </label>
 
                                                 <?php if(count($accessCashAccounts) > 0): ?>
                                                     <div class="form-group">
