@@ -472,9 +472,9 @@ $myAccess = checkUserAccess();
                         <?php if($myAccess[0]['dailybankclosing'] == '1' && $closing_status == '0' && count($closed) == 0):  ?>
                             <button type="submit" id="bank" class="btn green">Close by Bank</button>
                         <?php endif; ?>
-                        <?php if($myAccess[0]['dailybankclosing'] == '1' && $closing_status == '0' && count($closed) == 0):  ?>
-                            <button type="submit" id="paypro" class="btn green">Close by PayPro</button>
-                        <?php endif; ?>
+<!--                        --><?php //if($myAccess[0]['dailybankclosing'] == '1' && $closing_status == '0' && count($closed) == 0):  ?>
+<!--                            <button type="submit" id="paypro" class="btn green">Close by PayPro</button>-->
+<!--                        --><?php //endif; ?>
                         <?php if(count($closed) > 0): ?>
                             <div class="alert alert-info" style="display:inline-block; margin:0;">
                                 Closing already completed for this campus on this date.
