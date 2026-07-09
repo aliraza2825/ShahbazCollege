@@ -851,6 +851,8 @@ class Closing extends CI_Controller {
 
         $id = $this->input->post('closingid');
         $amount = $this->input->post('amount');
+        $success = false;
+        $message = 'Closing not found or already verified.';
 
         $this->db->select('*');
         $this->db->from('closing_perday');
@@ -894,6 +896,26 @@ class Closing extends CI_Controller {
 
             }
 
+            $success = true;
+            $message = 'Closing verified successfully.';
+
+        }
+
+        if ($this->input->is_ajax_request()) {
+            $this->output
+                ->set_content_type('application/json')
+                ->set_output(json_encode(array(
+                    'success' => $success,
+                    'message' => $message,
+                    'closing_id' => $id
+                )));
+            return;
+        }
+
+        if ($success) {
+            $this->session->set_userdata('message', $message);
+        } else {
+            $this->session->set_userdata('error', $message);
         }
 
         redirect('closing/accountsclosing');

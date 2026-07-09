@@ -300,7 +300,7 @@ $myAccess = checkUserAccess();
                                                             <?php
                                                             }
                                                             else {?>
-                                                                <a data-toggle="modal" data-id="<?php echo $i; ?>" title="Add this item" class="open-EditCashClosing btn blue" href="#cashclosingdetails">
+                                                                <a data-toggle="modal" data-id="<?php echo $i; ?>" data-closing-id="<?php echo $expense['id']; ?>" title="Add this item" class="open-EditCashClosing verify-cash-btn btn blue" href="#cashclosingdetails">
                                                                     <i class="fa fa-dollar"> Verify Cash</i>
                                                                 </a>
                                                             <?php
@@ -468,7 +468,7 @@ $myAccess = checkUserAccess();
         <h4 class="modal-title">Confirm Closing Details</h4>
     </div>
     <div class="modal-body">
-        <form class="form-horizontal" enctype="multipart/form-data" role="form" method="post" action="<?php echo site_url();?>/closing/verify_closing_now">
+        <form id="verify_cash_form" class="form-horizontal" enctype="multipart/form-data" role="form" method="post" action="<?php echo site_url();?>/closing/verify_closing_now">
             <div class="form-body">
                 <div class="form-group">
                     <label class="col-md-3 control-label">Received Amount</label>
@@ -481,7 +481,7 @@ $myAccess = checkUserAccess();
                 <div class="row">
                     <div class="col-md-offset-3 col-md-9">
                         <input type="hidden"  id="cash_closingid" name="closingid" value="" class="form-control mobile"/>
-                        <button type="submit" class="btn red">Submit</button>
+                        <button type="submit" id="verify_cash_submit" class="btn red">Submit</button>
                     </div>
                 </div>
             </div>
@@ -597,10 +597,38 @@ $myAccess = checkUserAccess();
         $('#loader_div').hide();
         $(document).on("click", ".open-EditCashClosing", function () {
             var myBookId = $(this).data('id');
-            var plans = <?php echo json_encode($closings) ?>;
+            var plans = <?php echo json_encode(isset($closings) ? $closings : array()) ?>;
 
             $(".modal-body #cash_amount").val(plans[myBookId].closed_amount);
             $(".modal-body #cash_closingid").val(plans[myBookId].id);
+        });
+        $("#verify_cash_form").on("submit", function (e) {
+            e.preventDefault();
+
+            var $form = $(this);
+            var $submitBtn = $("#verify_cash_submit");
+
+            $submitBtn.prop("disabled", true);
+
+            $.ajax({
+                url: "<?php echo site_url();?>/closing/verify_closing_now",
+                type: "POST",
+                data: $form.serialize(),
+                dataType: "json",
+                success: function (response) {
+                    if (response.success) {
+                        $("#cashclosingdetails").modal("hide");
+                        $('.verify-cash-btn[data-closing-id="' + response.closing_id + '"]').replaceWith('<a href="#" title="Verify Now" class="btn green">Verified</a>');
+                    } else {
+                        alert(response.message || "Verification failed.");
+                    }
+                    $submitBtn.prop("disabled", false);
+                },
+                error: function () {
+                    alert("Something went wrong. Please try again.");
+                    $submitBtn.prop("disabled", false);
+                }
+            });
         });
         $(document).on("click", ".open-BankTransfer", function () {
             var myBookId = $(this).data('id');
