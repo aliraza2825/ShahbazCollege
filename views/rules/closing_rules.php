@@ -62,7 +62,7 @@
                                                     <?php
                                                     foreach($accounts as $account):
                                                         ?>
-                                                        <option value="<?php echo $account['id'];?>"><?php echo $account['account_name'];?></option>
+                                                        <option value="<?php echo $account['id'];?>"><?php echo $account['account_name'].' '.$account['account_title'];?></option>
                                                     <?php
                                                     endforeach;
                                                     ?>
