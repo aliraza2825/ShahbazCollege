@@ -548,7 +548,7 @@
                         <select class="form-control bank_details" name="to_account" id="funds_account_id" required>
                             <option value="">SELECT ACCOUNT</option>
                             <?php
-                            foreach($accounts as $key=>$account):
+                            foreach($cash_accounts as $key=>$account):
                                 ?>
                                 <option value="<?php echo $account['id'];?>"><?php echo $account['account_name'];?></option>
                             <?php
