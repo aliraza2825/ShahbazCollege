@@ -537,11 +537,16 @@ $myAccess = checkUserAccess();
             $('#cash, #bank, #paypro').prop('disabled', true).addClass('disabled');
         }
 
-        $('#cash, #bank, #paypro').click(function(){
-            if (closingFormSubmitted) {
-                return false;
-            }
-            disableClosingButtons();
+        $('#cash').on('click', function(){
+            $('#close_type').val('2');
+        });
+
+        $('#bank').on('click', function(){
+            $('#close_type').val('1');
+        });
+
+        $('#paypro').on('click', function(){
+            $('#close_type').val('3');
         });
 
         $('form[action*="/closing/closenow"]').on('submit', function(e){
@@ -558,51 +563,24 @@ $myAccess = checkUserAccess();
             disableClosingButtons();
         });
 
-        $('#paypro').click(function(){
-            $('#close_type').val('3');
-        });
-
         $('#update_paypro').click(function(){
             $('#upd_close_type').val('3');
         });
-        
+
+        $('#update_bank').click(function(){
+            $('#upd_close_type').val('1');
+        });
+
+        $('#update_cash').click(function(){
+            $('#upd_close_type').val('2');
+        });
+
         $(document).ready(function(){
             $('.autohide').click(function(){
                 $(this).hide();
             });
         });
-        
-    }, false );
 
-    // $('#bank').click(function(){
-    //
-    //
-    //     $('#close_type').val('1');
-    //
-    //     return false;
-    // });
-    //
-    // $('#cash').click(function(){
-    //
-    //
-    //     $('#close_type').val('2');
-    //
-    //     return false;
-    // });
-    //
-    // $('#update_bank').click(function(){
-    //
-    //     $('#upd_close_type').val('1');
-    //
-    //     return false;
-    // });
-    //
-    // $('#update_cash').click(function(){
-    //
-    //
-    //     $('#upd_close_type').val('2');
-    //
-    //     return false;
-    // });
+    }, false );
     
 </script>
