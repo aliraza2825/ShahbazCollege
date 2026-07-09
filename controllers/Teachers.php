@@ -323,7 +323,7 @@ class Teachers extends CI_Controller {
 		$data['teachers'] = $this->teacher->getTeachers();
 		$data['staff_types'] = $this->db->get('staff_type')->result_array();
 		ensure_staff_shift_schema();
-		$data['staff_shifts'] = $this->db->where('status', 1)->order_by('shift_name', 'ASC')->get('staff_shifts')->result_array();
+		$data['staff_shifts'] = get_staff_shifts_with_study_type(true);
 		$data['departments'] = $this->db->get('departments')->result_array();
 		$data['designations'] = $this->db->get('designations')->result_array();
 		
@@ -340,7 +340,7 @@ class Teachers extends CI_Controller {
 		$data['teachers'] = $this->teacher->editTeacher($id);
 		$data['staff_types'] = $this->db->get('staff_type')->result_array();
 		ensure_staff_shift_schema();
-		$data['staff_shifts'] = $this->db->where('status', 1)->order_by('shift_name', 'ASC')->get('staff_shifts')->result_array();
+		$data['staff_shifts'] = get_staff_shifts_with_study_type(true);
 		$data['departments'] = $this->db->get('departments')->result_array();
 		$data['designations'] = $this->db->get('designations')->result_array();
         $data['allowances'] = $this->db->get('allownces')->result_array();

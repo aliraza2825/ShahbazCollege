@@ -24,7 +24,9 @@ $myAccess = checkUserAccess();
 							<tr>
 								<th class="hidden">hidden</th>
                                 <th>Shift ID</th>
-								<th>Shift Name</th>
+                                <th>Shift Name</th>
+                                <th>Study Type</th>
+                                <th>Combo</th>
                                 <th>Description</th>
                                 <th>Status</th>
                                 <th>Timing</th>
@@ -37,6 +39,8 @@ $myAccess = checkUserAccess();
 								<td class="hidden"><?php echo $i;?></td>
                                 <td><?php echo $staff_shift['staff_shift_id'];?></td>
 								<td><?php echo $staff_shift['shift_name'];?></td>
+                                <td><?php echo $staff_shift['study_type_name'];?></td>
+                                <td><?php echo staff_shift_label($staff_shift); ?></td>
                                 <td><?php echo $staff_shift['description'];?></td>
                                 <td><?php echo ((int) $staff_shift['status'] === 1) ? 'Active' : 'Inactive'; ?></td>
                                 <td>

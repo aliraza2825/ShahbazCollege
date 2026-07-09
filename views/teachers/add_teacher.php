@@ -70,12 +70,12 @@
                                         </div>
 										<div class="col-md-6">
                                         	<div class="form-group">
-                                                <label class="col-md-3 control-label"> Staff Shift <span class="required">*</span></label>
+                                                <label class="col-md-3 control-label"> Staff Shift (Shift + Study Type) <span class="required">*</span></label>
                                                 <div class="col-md-9">
                                                     <select name="staff_shift_id" class="form-control input-inline input-large" required>
                                                         <option value="">SELECT STAFF SHIFT</option>
 														<?php foreach($staff_shifts as $staff_shift): ?>
-                                                        <option value="<?php echo $staff_shift['staff_shift_id'];?>"><?php echo $staff_shift['shift_name'];?></option>
+                                                        <option value="<?php echo $staff_shift['staff_shift_id'];?>"><?php echo staff_shift_label($staff_shift); ?></option>
                                                         <?php endforeach; ?>
                                                     </select>
                                                 </div>

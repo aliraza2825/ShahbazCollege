@@ -14,25 +14,52 @@ class Staff_shifts extends CI_Controller {
         return array('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday');
     }
 
+    private function load_study_types()
+    {
+        if (!$this->db->table_exists('study_type')) {
+            return array();
+        }
+
+        return $this->db->order_by('name', 'ASC')->get('study_type')->result_array();
+    }
+
+    private function shift_combo_exists($shiftName, $studyTypeId, $excludeId = 0)
+    {
+        $this->db->where('shift_name', $shiftName);
+        $this->db->where('study_type_id', (int) $studyTypeId);
+        if ($excludeId > 0) {
+            $this->db->where('staff_shift_id !=', (int) $excludeId);
+        }
+        return count($this->db->get('staff_shifts')->result_array()) > 0;
+    }
+
     public function add_staff_shift()
     {
+        $data['study_types'] = $this->load_study_types();
+
         $this->load->view('inc/header');
         $this->load->view('inc/sidebar');
-        $this->load->view('staff_shifts/add_staff_shift');
+        $this->load->view('staff_shifts/add_staff_shift', $data);
         $this->load->view('inc/footer');
     }
 
     public function insert()
     {
         $shiftName = trim((string) $this->input->post('shift_name'));
-        $check = $this->db->get_where('staff_shifts', array('shift_name' => $shiftName))->result_array();
+        $studyTypeId = (int) $this->input->post('study_type_id');
 
-        if (count($check) > 0) {
-            $this->session->set_flashdata('error', 'Staff Shift Already Added.');
+        if ($studyTypeId <= 0) {
+            $this->session->set_flashdata('error', 'Please select study type.');
+            redirect('staff_shifts/add_staff_shift');
+        }
+
+        if ($this->shift_combo_exists($shiftName, $studyTypeId)) {
+            $this->session->set_flashdata('error', 'This shift and study type combination already exists.');
             redirect('staff_shifts/add_staff_shift');
         }
 
         $this->db->set('shift_name', $shiftName);
+        $this->db->set('study_type_id', $studyTypeId);
         $this->db->set('description', $this->input->post('description'));
         $this->db->set('status', (int) $this->input->post('status'));
         $this->db->set('created_at', date('Y-m-d H:i:s'));
@@ -44,7 +71,7 @@ class Staff_shifts extends CI_Controller {
 
     public function all_staff_shifts()
     {
-        $data['staff_shifts'] = $this->db->order_by('shift_name', 'ASC')->get('staff_shifts')->result_array();
+        $data['staff_shifts'] = get_staff_shifts_with_study_type(false);
         $timingRows = $this->db
             ->select('staff_shift_id, COUNT(*) as total')
             ->where('staff_shift_id IS NOT NULL', null, false)
@@ -65,10 +92,15 @@ class Staff_shifts extends CI_Controller {
 
     public function edit_staff_shift($staff_shift_id)
     {
-        $data['staff_shift'] = $this->db->get_where('staff_shifts', array('staff_shift_id' => $staff_shift_id))->result_array();
+        $this->db->select('staff_shifts.*, study_type.name as study_type_name');
+        $this->db->from('staff_shifts');
+        $this->db->join('study_type', 'study_type.id = staff_shifts.study_type_id', 'left');
+        $this->db->where('staff_shifts.staff_shift_id', $staff_shift_id);
+        $data['staff_shift'] = $this->db->get()->result_array();
         if (count($data['staff_shift']) <= 0) {
             show_404();
         }
+        $data['study_types'] = $this->load_study_types();
 
         $this->load->view('inc/header');
         $this->load->view('inc/sidebar');
@@ -79,8 +111,20 @@ class Staff_shifts extends CI_Controller {
     public function update($staff_shift_id)
     {
         $shiftName = trim((string) $this->input->post('shift_name'));
+        $studyTypeId = (int) $this->input->post('study_type_id');
+
+        if ($studyTypeId <= 0) {
+            $this->session->set_flashdata('error', 'Please select study type.');
+            redirect('staff_shifts/edit_staff_shift/'.$staff_shift_id);
+        }
+
+        if ($this->shift_combo_exists($shiftName, $studyTypeId, $staff_shift_id)) {
+            $this->session->set_flashdata('error', 'This shift and study type combination already exists.');
+            redirect('staff_shifts/edit_staff_shift/'.$staff_shift_id);
+        }
 
         $this->db->set('shift_name', $shiftName);
+        $this->db->set('study_type_id', $studyTypeId);
         $this->db->set('description', $this->input->post('description'));
         $this->db->set('status', (int) $this->input->post('status'));
         $this->db->set('updated_at', date('Y-m-d H:i:s'));
@@ -105,7 +149,11 @@ class Staff_shifts extends CI_Controller {
 
     public function staff_timing($staff_shift_id)
     {
-        $staffShift = $this->db->get_where('staff_shifts', array('staff_shift_id' => $staff_shift_id))->row_array();
+        $this->db->select('staff_shifts.*, study_type.name as study_type_name');
+        $this->db->from('staff_shifts');
+        $this->db->join('study_type', 'study_type.id = staff_shifts.study_type_id', 'left');
+        $this->db->where('staff_shifts.staff_shift_id', $staff_shift_id);
+        $staffShift = $this->db->get()->row_array();
         if (!$staffShift) {
             show_404();
         }

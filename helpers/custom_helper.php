@@ -2589,6 +2589,7 @@ function ensure_staff_shift_schema()
         $ci->db->query("CREATE TABLE `staff_shifts` (
             `staff_shift_id` INT(11) NOT NULL AUTO_INCREMENT,
             `shift_name` VARCHAR(255) NOT NULL,
+            `study_type_id` INT(11) NULL DEFAULT NULL,
             `description` TEXT NULL,
             `status` TINYINT(1) NOT NULL DEFAULT 1,
             `created_at` DATETIME NULL DEFAULT NULL,
@@ -2596,12 +2597,41 @@ function ensure_staff_shift_schema()
             PRIMARY KEY (`staff_shift_id`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
     }
+    if ($ci->db->table_exists('staff_shifts') && !$ci->db->field_exists('study_type_id', 'staff_shifts')) {
+        $ci->db->query("ALTER TABLE `staff_shifts` ADD `study_type_id` INT(11) NULL DEFAULT NULL AFTER `shift_name`");
+    }
     if ($ci->db->table_exists('users') && !$ci->db->field_exists('staff_shift_id', 'users')) {
         $ci->db->query("ALTER TABLE `users` ADD `staff_shift_id` INT(11) NULL DEFAULT NULL AFTER `staff_type_id`");
     }
     if ($ci->db->table_exists('staff_timing') && !$ci->db->field_exists('staff_shift_id', 'staff_timing')) {
         $ci->db->query("ALTER TABLE `staff_timing` ADD `staff_shift_id` INT(11) NULL DEFAULT NULL AFTER `staff_id`");
     }
+}
+
+function staff_shift_label($shift)
+{
+    $name = isset($shift['shift_name']) ? trim((string) $shift['shift_name']) : '';
+    $studyType = isset($shift['study_type_name']) ? trim((string) $shift['study_type_name']) : '';
+    if ($name !== '' && $studyType !== '') {
+        return $name . ' - ' . $studyType;
+    }
+    return $name !== '' ? $name : $studyType;
+}
+
+function get_staff_shifts_with_study_type($activeOnly = true)
+{
+    $ci =& get_instance();
+    ensure_staff_shift_schema();
+
+    $ci->db->select('staff_shifts.*, study_type.name as study_type_name');
+    $ci->db->from('staff_shifts');
+    $ci->db->join('study_type', 'study_type.id = staff_shifts.study_type_id', 'left');
+    if ($activeOnly) {
+        $ci->db->where('staff_shifts.status', 1);
+    }
+    $ci->db->order_by('staff_shifts.shift_name', 'ASC');
+    $ci->db->order_by('study_type.name', 'ASC');
+    return $ci->db->get()->result_array();
 }
 
 function get_staff_day_timing($user_id, $day)

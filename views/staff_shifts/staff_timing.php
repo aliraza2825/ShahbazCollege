@@ -13,7 +13,7 @@
                     <div class="portlet-title">
                         <div class="caption">
                             <i class="fa fa-clock-o"></i>
-                            Staff Timing (<?php echo $staff_shift['shift_name']; ?>)
+                            Staff Timing (<?php echo staff_shift_label($staff_shift); ?>)
                         </div>
                     </div>
                     <div class="portlet-body form">

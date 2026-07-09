@@ -29,6 +29,17 @@
                                                 </div>
                                             </div>
 											<div class="form-group">
+                                                <label class="col-md-3 control-label">Study Type <span class="required">*</span></label>
+                                                <div class="col-md-9">
+                                                    <select name="study_type_id" class="form-control input-inline input-large" required>
+                                                        <option value="">SELECT STUDY TYPE</option>
+                                                        <?php foreach($study_types as $study_type): ?>
+                                                            <option value="<?php echo $study_type['id']; ?>" <?php if((int) $shift['study_type_id'] === (int) $study_type['id']){echo 'selected';} ?>><?php echo $study_type['name']; ?></option>
+                                                        <?php endforeach; ?>
+                                                    </select>
+                                                </div>
+                                            </div>
+											<div class="form-group">
                                                 <label class="col-md-3 control-label">Description</label>
                                                 <div class="col-md-9">
                                                     <textarea class="form-control" name="description" rows="3"><?php echo $shift['description']; ?></textarea>
