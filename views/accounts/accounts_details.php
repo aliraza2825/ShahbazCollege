@@ -171,139 +171,139 @@
 					<!-- END EXAMPLE TABLE PORTLET-->
 				</div>
 
-                <div class="col-md-12">
-					<!-- BEGIN EXAMPLE TABLE PORTLET-->
-					<div class="portlet box grey-cascade">
-						<div class="portlet-title">
-							<div class="caption">
-								<i class="fa fa-list"></i> Bank Accounts
-							</div>
-
-						</div>
-
-						<div class="portlet-body">
-							<table class="table table-striped table-bordered table-hover" id="sample_10">
-							<thead>
-							<tr>
-                                <th>
-									 ID
-								</th>
-								<th>
-                                    Bank
-                                </th>
-                                <th>
-                                    Title
-                                </th>
-								
-								<th>
-									 Account No
-								</th>
-                                <th>
-                                    Account Limit
-                                </th>
-                                <th>
-									 Amount
-								</th>
-								<th>
-									 Shiftable Amount
-								</th>
-								<th>
-									 Created Date
-								</th>
-                                <th>
-                                     Taxable
-                                </th>
-                                <th>
-                                     For Closing
-                                </th>
-                                <th>
-                                     Last Account Updated
-                                </th>
-								 <th>
-                                     Action
-                                </th>
-
-							</tr>
-							</thead>
-							<tbody>
-                                <?php
-                                    foreach($bank_accounts as $key=>$account):
-                                ?>
-                                    <tr class="odd gradeX">
-
-                                        <td>
-                                            <?php echo ($key+1)?>
-
-                                        </td>
-										<td>
-                                            <?php echo substr($account['account_name'],0,stripos($account['account_name'],'('))?>
-                                        </td>
-										<td>
-                                            <?php echo $account['account_title']?>
-                                        </td>
-
-
-                                        <td>
-                                            <?php
-
-												$bank = $account['account_name'];
-												
-												$bank = substr($bank,stripos($account['account_name'],'(') , stripos($account['account_name'],')'));
-												$bank=str_replace('(',' ',$bank);
-												$bank=str_replace(')',' ',$bank);
-												
-												echo $bank;
-
-											?>
-                                        </td>
-                                        <td style="text-align: right; font-weight: bold">
-                                            <?php echo $account['account_limit']?>
-                                        </td>
-                                        <td style="text-align: right; font-weight: bolder">
-                                            <?php echo $account['amount']?>
-                                        </td>
-										<td style="text-align: right; font-weight: bolder">
-                                            <?php 
-											
-											if($account['amount'] > $account['account_limit'])
-												echo ($account['amount']-$account['account_limit']);
-											else
-												echo "0"	;										
-												
-												?>
-                                        </td>
-                                        <td>
-                                            <?php echo $account['updated_at']?>
-                                        </td>
-                                        <td>
-                                            <?php echo $account['taxable'] == "0" ? "NO" : "YES"?>
-                                        </td>
-                                        <td>
-                                            <?php echo $account['for_closing'] == "0" ? "NO" : "YES"?>
-                                        </td>
-										<td>
-                                            <?php if(!empty($can_edit_account)): ?>
-                                            <a data-toggle="modal" data-id="<?php echo $account['id']; ?>"  title="Add this item" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="#editaccounts">
-                                                <i class="fa fa-home"> Edit</i>
-                                            </a>
-                                            <?php endif; ?>
-                                        </td>
-										<td>
-                                            <a title="View" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="<?php echo site_url().'/accounts/cashaccountreport/'.$account['id'] ?>" target="_blank">
-                                                <i class="fa fa-home"> View Statement</i>
-                                            </a>
-                                        </td>
-                                    </tr>
-
-                                <?php
-                                    endforeach;
-                                ?>
-							</tbody>
-							</table>
-						</div>
-					</div>
-					<!-- END EXAMPLE TABLE PORTLET-->
-				</div>
+<!--                <div class="col-md-12">-->
+<!--					<!-- BEGIN EXAMPLE TABLE PORTLET-->-->
+<!--					<div class="portlet box grey-cascade">-->
+<!--						<div class="portlet-title">-->
+<!--							<div class="caption">-->
+<!--								<i class="fa fa-list"></i> Bank Accounts-->
+<!--							</div>-->
+<!---->
+<!--						</div>-->
+<!---->
+<!--						<div class="portlet-body">-->
+<!--							<table class="table table-striped table-bordered table-hover" id="sample_10">-->
+<!--							<thead>-->
+<!--							<tr>-->
+<!--                                <th>-->
+<!--									 ID-->
+<!--								</th>-->
+<!--								<th>-->
+<!--                                    Bank-->
+<!--                                </th>-->
+<!--                                <th>-->
+<!--                                    Title-->
+<!--                                </th>-->
+<!--								-->
+<!--								<th>-->
+<!--									 Account No-->
+<!--								</th>-->
+<!--                                <th>-->
+<!--                                    Account Limit-->
+<!--                                </th>-->
+<!--                                <th>-->
+<!--									 Amount-->
+<!--								</th>-->
+<!--								<th>-->
+<!--									 Shiftable Amount-->
+<!--								</th>-->
+<!--								<th>-->
+<!--									 Created Date-->
+<!--								</th>-->
+<!--                                <th>-->
+<!--                                     Taxable-->
+<!--                                </th>-->
+<!--                                <th>-->
+<!--                                     For Closing-->
+<!--                                </th>-->
+<!--                                <th>-->
+<!--                                     Last Account Updated-->
+<!--                                </th>-->
+<!--								 <th>-->
+<!--                                     Action-->
+<!--                                </th>-->
+<!---->
+<!--							</tr>-->
+<!--							</thead>-->
+<!--							<tbody>-->
+<!--                                --><?php
+//                                    foreach($bank_accounts as $key=>$account):
+//                                ?>
+<!--                                    <tr class="odd gradeX">-->
+<!---->
+<!--                                        <td>-->
+<!--                                            --><?php //echo ($key+1)?>
+<!---->
+<!--                                        </td>-->
+<!--										<td>-->
+<!--                                            --><?php //echo substr($account['account_name'],0,stripos($account['account_name'],'('))?>
+<!--                                        </td>-->
+<!--										<td>-->
+<!--                                            --><?php //echo $account['account_title']?>
+<!--                                        </td>-->
+<!---->
+<!---->
+<!--                                        <td>-->
+<!--                                            --><?php
+//
+//												$bank = $account['account_name'];
+//
+//												$bank = substr($bank,stripos($account['account_name'],'(') , stripos($account['account_name'],')'));
+//												$bank=str_replace('(',' ',$bank);
+//												$bank=str_replace(')',' ',$bank);
+//
+//												echo $bank;
+//
+//											?>
+<!--                                        </td>-->
+<!--                                        <td style="text-align: right; font-weight: bold">-->
+<!--                                            --><?php //echo $account['account_limit']?>
+<!--                                        </td>-->
+<!--                                        <td style="text-align: right; font-weight: bolder">-->
+<!--                                            --><?php //echo $account['amount']?>
+<!--                                        </td>-->
+<!--										<td style="text-align: right; font-weight: bolder">-->
+<!--                                            --><?php //
+//
+//											if($account['amount'] > $account['account_limit'])
+//												echo ($account['amount']-$account['account_limit']);
+//											else
+//												echo "0"	;
+//
+//												?>
+<!--                                        </td>-->
+<!--                                        <td>-->
+<!--                                            --><?php //echo $account['updated_at']?>
+<!--                                        </td>-->
+<!--                                        <td>-->
+<!--                                            --><?php //echo $account['taxable'] == "0" ? "NO" : "YES"?>
+<!--                                        </td>-->
+<!--                                        <td>-->
+<!--                                            --><?php //echo $account['for_closing'] == "0" ? "NO" : "YES"?>
+<!--                                        </td>-->
+<!--										<td>-->
+<!--                                            --><?php //if(!empty($can_edit_account)): ?>
+<!--                                            <a data-toggle="modal" data-id="--><?php //echo $account['id']; ?><!--"  title="Add this item" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="#editaccounts">-->
+<!--                                                <i class="fa fa-home"> Edit</i>-->
+<!--                                            </a>-->
+<!--                                            --><?php //endif; ?>
+<!--                                        </td>-->
+<!--										<td>-->
+<!--                                            <a title="View" style="float: right; margin: 15px" class="open-Editacount btn btn-primary" href="--><?php //echo site_url().'/accounts/cashaccountreport/'.$account['id'] ?><!--" target="_blank">-->
+<!--                                                <i class="fa fa-home"> View Statement</i>-->
+<!--                                            </a>-->
+<!--                                        </td>-->
+<!--                                    </tr>-->
+<!---->
+<!--                                --><?php
+//                                    endforeach;
+//                                ?>
+<!--							</tbody>-->
+<!--							</table>-->
+<!--						</div>-->
+<!--					</div>-->
+<!--					<!-- END EXAMPLE TABLE PORTLET-->-->
+<!--				</div>-->
 			</div>
 			<!-- END PAGE CONTENT-->
 		</div>
