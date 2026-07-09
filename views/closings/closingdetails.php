@@ -17,6 +17,13 @@ $myAccess = checkUserAccess();
                     <?php echo $this->session->userdata('message');?> </span>
             </div>
         <?php endif;?>
+        <?php if(@$this->session->userdata('error')):?>
+            <div class="alert alert-danger">
+                <button class="close" data-close="alert"></button>
+                <span>
+                    <?php echo $this->session->userdata('error');?> </span>
+            </div>
+        <?php endif;?>
 
         <?php if($closing_status != '0'):  ?>
             <button class="btn green" id="print" onclick="printContent('printtable');" >Print</button>
@@ -459,14 +466,19 @@ $myAccess = checkUserAccess();
                         <br />
                         <br />
                         <input type="hidden" id="close_type" name="close_type"  >
-                        <?php if($myAccess[0]['dailyclosing'] == '1' && $closing_status == '0'):  ?>
+                        <?php if($myAccess[0]['dailyclosing'] == '1' && $closing_status == '0' && count($closed) == 0):  ?>
                             <button type="submit" id="cash" class="btn green">Close by Cash</button>
                         <?php endif; ?>
-                        <?php if($myAccess[0]['dailybankclosing'] == '1' && $closing_status == '0'):  ?>
+                        <?php if($myAccess[0]['dailybankclosing'] == '1' && $closing_status == '0' && count($closed) == 0):  ?>
                             <button type="submit" id="bank" class="btn green">Close by Bank</button>
                         <?php endif; ?>
-                        <?php if($myAccess[0]['dailybankclosing'] == '1' && $closing_status == '0'):  ?>
+                        <?php if($myAccess[0]['dailybankclosing'] == '1' && $closing_status == '0' && count($closed) == 0):  ?>
                             <button type="submit" id="paypro" class="btn green">Close by PayPro</button>
+                        <?php endif; ?>
+                        <?php if(count($closed) > 0): ?>
+                            <div class="alert alert-info" style="display:inline-block; margin:0;">
+                                Closing already completed for this campus on this date.
+                            </div>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -518,6 +530,33 @@ $myAccess = checkUserAccess();
     };
 
     document.addEventListener( "DOMContentLoaded", function(){
+
+        var closingFormSubmitted = false;
+
+        function disableClosingButtons() {
+            $('#cash, #bank, #paypro').prop('disabled', true).addClass('disabled');
+        }
+
+        $('#cash, #bank, #paypro').click(function(){
+            if (closingFormSubmitted) {
+                return false;
+            }
+            disableClosingButtons();
+        });
+
+        $('form[action*="/closing/closenow"]').on('submit', function(e){
+            if (closingFormSubmitted) {
+                e.preventDefault();
+                return false;
+            }
+            if (!$('#close_type').val()) {
+                e.preventDefault();
+                alert('Please select Close by Cash, Bank or PayPro.');
+                return false;
+            }
+            closingFormSubmitted = true;
+            disableClosingButtons();
+        });
 
         $('#paypro').click(function(){
             $('#close_type').val('3');

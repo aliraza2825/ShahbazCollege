@@ -21,6 +21,48 @@ class Closing extends CI_Controller {
     {
         parent::__construct();
         $this->load->model('account');
+        $this->ensure_closing_constraints();
+    }
+
+    private function ensure_closing_constraints()
+    {
+        if (!$this->db->table_exists('closing_perday')) {
+            return;
+        }
+
+        $indexes = $this->db->query("SHOW INDEX FROM closing_perday WHERE Key_name = 'uniq_campus_closing_date'")->result_array();
+        if (!empty($indexes)) {
+            return;
+        }
+
+        $duplicate = $this->db->query(
+            "SELECT campus_id FROM closing_perday
+             GROUP BY campus_id, for_day, for_month, for_year
+             HAVING COUNT(*) > 1
+             LIMIT 1"
+        )->row_array();
+
+        if (empty($duplicate)) {
+            $this->db->query(
+                "ALTER TABLE closing_perday
+                 ADD UNIQUE KEY uniq_campus_closing_date (campus_id, for_day, for_month, for_year)"
+            );
+        }
+    }
+
+    private function get_closing_for_date($campus_id, $day, $month, $year, $lock = false)
+    {
+        $sql = "SELECT * FROM closing_perday
+                WHERE campus_id = ?
+                AND for_day = ?
+                AND for_month = ?
+                AND for_year = ?";
+
+        if ($lock) {
+            $sql .= " FOR UPDATE";
+        }
+
+        return $this->db->query($sql, array($campus_id, $day, $month, $year))->row_array();
     }
 
     public function index()
@@ -549,7 +591,7 @@ class Closing extends CI_Controller {
         $data['month'] = date('m', strtotime($date));
         $data['year'] = date('Y', strtotime($date));
         $data['campus_id'] = $campus;
-        $data['closing_status'] = $status;
+        $data['closing_status'] = (count($closed) > 0) ? '1' : $status;
         $data['loans'] = $loan_today;
         $data['total_amount'] = $total_amount;
 
@@ -618,6 +660,20 @@ class Closing extends CI_Controller {
         $close_type=$this->input->post('close_type');
         $sale_ids=$this->input->post('sale_ids');
         $loan_ids=$this->input->post('loan_ids');
+        $closingDate = sprintf('%04d-%02d-%02d', (int) $year, (int) $month, (int) $day);
+
+        $this->db->trans_start();
+
+        $existingClosing = $this->get_closing_for_date($cam_id, $day, $month, $year, true);
+        if ($existingClosing) {
+            $this->db->trans_complete();
+            $this->session->set_flashdata('error', 'Closing already exists for this campus on this date.');
+            redirect(
+                'closing/viewclosing/'.$closingDate.'/'.$cam_id.'/'.$existingClosing['closed_amount'].'/1',
+                'refresh'
+            );
+            return;
+        }
 
         $sqlclosingid="SELECT concat( LEFT(`campus_closing_id`,3),MAX(CAST(SUBSTRING(`campus_closing_id`, 4, length(`campus_closing_id`)-2) AS UNSIGNED))+1) as closing_id FROM `closing_perday` WHERE `campus_id` = '".$cam_id."'";
         $closingid=$this->db->query($sqlclosingid)->row();
@@ -651,11 +707,20 @@ class Closing extends CI_Controller {
         $this->db->set('close_type',$close_type);
         $this->db->set('closed_by',$this->session->userdata('name'));
         $this->db->insert('closing_perday');
+        $insertedClosingId = $this->db->insert_id();
 
         $user = $this->session->userdata('user_id');
         $this->db->set('closing_id',$closingid->closing_id);
         $this->db->where_in('id',@explode(',',$loan_ids));
         $this->db->update('loan_plan');
+
+        if ($this->db->trans_status() === FALSE) {
+            $this->session->set_flashdata('error', 'Closing could not be saved. Please try again.');
+            redirect('closing/viewclosing/'.$closingDate.'/'.$cam_id.'/'.$total_amount.'/0', 'refresh');
+            return;
+        }
+
+        $this->db->trans_complete();
 
         if ($close_type == '3'){
             $user_phones = $this->db->get_where("users_phones","user_id = '$user'")->row();
@@ -664,7 +729,7 @@ class Closing extends CI_Controller {
                 $number = "03168042977";
             else
                 $number = $user_phones->phone;
-            $bill_url = $this->generate_paypro($total_amount,$this->session->userdata('name'),$number,$user,$closingid->id);
+            $bill_url = $this->generate_paypro($total_amount,$this->session->userdata('name'),$number,$user,$insertedClosingId);
             redirect($bill_url, 'refresh');
         }else
             redirect('closing/index', 'refresh');
