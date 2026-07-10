@@ -580,13 +580,12 @@ class Dashboards extends CI_Model {
 	private function applyOnlineApplicationCampusAccess($table = 'apply_now')
 	{
 		if ($this->session->userdata('role') == 'Admin') {
-			return;
+			return true;
 		}
 
 		$campus_ids = getUserOnlineApplicationCampusIds();
 		if (empty($campus_ids)) {
-			$this->db->where('1 = 0', null, false);
-			return;
+			return false;
 		}
 
 		if ($table === 'apply_now') {
@@ -600,6 +599,8 @@ class Dashboards extends CI_Model {
 		} else {
 			$this->db->where_in('campus_id', $campus_ids);
 		}
+
+		return true;
 	}
 
 	private function joinLatestApplicationComment()
@@ -644,6 +645,10 @@ class Dashboards extends CI_Model {
 	public function getNewAdmisssions($campus_id=NULL){
 		$this->releaseExpiredPendingApplications();
 
+		if ($this->session->userdata('role') != 'Admin' && empty(getUserOnlineApplicationCampusIds())) {
+			return array();
+		}
+
 		$this->db->select('apply_now.*');
 		$this->db->from('apply_now');
 		$this->applyOnlineApplicationCampusAccess('apply_now');
@@ -660,14 +665,18 @@ class Dashboards extends CI_Model {
 			$this->db->where('campuses.campus_id', $campus_id);
 		}
 
-		$this->db->where(array('status'=>0,'clear_by_admin'=>0,'pending_status'=>NULL));
-		$query = $this->db->get()->result_array();
+		$this->db->where(array('apply_now.status'=>0,'apply_now.clear_by_admin'=>0,'apply_now.pending_status'=>NULL));
+		$query = $this->db->get('apply_now')->result_array();
 		return $query;
 	}
 	
 	public function getPendingAdmisssions($campus_id=NULL, $call_type='today')
 	{
 		$this->releaseExpiredPendingApplications();
+
+		if ($this->session->userdata('role') != 'Admin' && empty(getUserOnlineApplicationCampusIds())) {
+			return array();
+		}
 
 		$this->db->select('apply_now.*, latest_comment.next_date_for_call AS latest_next_date_for_call, latest_comment.add_by AS latest_comment_by');
 		$this->db->from('apply_now');
@@ -703,7 +712,7 @@ class Dashboards extends CI_Model {
 		}
 
 		$this->db->order_by('latest_comment.next_date_for_call', 'ASC');
-		$query = $this->db->get()->result_array();
+		$query = $this->db->get('apply_now')->result_array();
 		return $query;
 	}
 	
@@ -716,6 +725,10 @@ class Dashboards extends CI_Model {
 
     public function getNewMobileAdmisssions($campus_id=NULL)
     {
+        if ($this->session->userdata('role') != 'Admin' && empty(getUserOnlineApplicationCampusIds())) {
+            return array();
+        }
+
         $this->applyOnlineApplicationCampusAccess('admission_applications');
 
         if (@$campus_id != NULL) {
