@@ -577,16 +577,50 @@ class Dashboards extends CI_Model {
 		$this->db->update('update_student_requests');
 	}
 	
+	private function applyOnlineApplicationCampusAccess($table = 'apply_now')
+	{
+		if ($this->session->userdata('role') == 'Admin') {
+			return;
+		}
+
+		$campus_ids = getUserOnlineApplicationCampusIds();
+		if (empty($campus_ids)) {
+			$this->db->where('1 = 0', null, false);
+			return;
+		}
+
+		if ($table === 'apply_now') {
+			$this->db->join(
+				'campuses',
+				"campuses.website = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(apply_now.website, 'https://www.', ''), 'http://www.', ''), 'https://', ''), 'http://', ''), '/', ''))",
+				'inner',
+				false
+			);
+			$this->db->where_in('campuses.campus_id', $campus_ids);
+		} else {
+			$this->db->where_in('campus_id', $campus_ids);
+		}
+	}
+
 	public function getNewAdmisssions($campus_id=NULL){
-//		if(@$campus_id!=NULL){
-//			$campus_website = $this->db->get_where('campuses',array('campus_id'=>$campus_id))->row()->website;
-//			$website = 'https://www.'.$campus_website.'/';
-//		}
-//		if(@$campus_id!=NULL){
-//			$this->db->where('website',$website);
-//		}
+		$this->db->select('apply_now.*');
+		$this->db->from('apply_now');
+		$this->applyOnlineApplicationCampusAccess('apply_now');
+
+		if (@$campus_id != NULL) {
+			if ($this->session->userdata('role') == 'Admin') {
+				$this->db->join(
+					'campuses',
+					"campuses.website = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(apply_now.website, 'https://www.', ''), 'http://www.', ''), 'https://', ''), 'http://', ''), '/', ''))",
+					'inner',
+					false
+				);
+			}
+			$this->db->where('campuses.campus_id', $campus_id);
+		}
+
 		$this->db->where(array('status'=>0,'clear_by_admin'=>0,'pending_status'=>NULL));
-		$query = $this->db->get('apply_now')->result_array();
+		$query = $this->db->get()->result_array();
 		return $query;
 	}
 	
@@ -613,8 +647,14 @@ class Dashboards extends CI_Model {
 		return $query;
 	}
 
-    public function getNewMobileAdmisssions()
+    public function getNewMobileAdmisssions($campus_id=NULL)
     {
+        $this->applyOnlineApplicationCampusAccess('admission_applications');
+
+        if (@$campus_id != NULL) {
+            $this->db->where('campus_id', $campus_id);
+        }
+
         $this->db->where(array('status != '=>3));
         $query = $this->db->get('admission_applications')->result_array();
         return $query;

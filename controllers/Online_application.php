@@ -132,7 +132,15 @@ class Online_application extends CI_Controller {
 	}
 
 	public function new_applications($campus_id=NULL)
-	{		
+	{
+		$access = checkUserAccess();
+		if ($this->session->userdata('role') != 'Admin') {
+			if (empty($access) || @$access[0]['online_application_access'] != 1 || @$access[0]['online_application_new_admissions'] != 1) {
+				redirect('dashboard');
+				return;
+			}
+		}
+
 		if(@$this->input->post('comment'))
 		{
 			$this->db->set('comment', $this->input->post('comment'));

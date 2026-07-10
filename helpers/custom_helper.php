@@ -1277,11 +1277,15 @@ function newApplicationsCount()
 {
     $ci =& get_instance();
 
-    $total = $ci->db->get_where('apply_now',array('status'=>0,'clear_by_admin'=>0,'pending_status'=>NULL))->result_array();
-    $ci->db->where(array('status != '=>3));
-    $query = $ci->db->get('admission_applications')->result_array();
-    return count($total)+count($query);
+    if ($ci->session->userdata('role') == 'Admin') {
+        $total = $ci->db->get_where('apply_now', array('status'=>0,'clear_by_admin'=>0,'pending_status'=>NULL))->result_array();
+        $ci->db->where(array('status != '=>3));
+        $query = $ci->db->get('admission_applications')->result_array();
+        return count($total) + count($query);
+    }
 
+    $ci->load->model('dashboards');
+    return count($ci->dashboards->getNewAdmisssions()) + count($ci->dashboards->getNewMobileAdmisssions());
 }
 
 function pendingApplicationsCount()
@@ -1586,6 +1590,34 @@ function dashboardUnclearDocuments($campus_id)
     $ci->db->where(array('campuses.campus_id'=>$campus_id,'documents.status'=>0));
     $query = $ci->db->get()->result_array();
     return $query;
+}
+
+function normalizeApplicationWebsite($url)
+{
+    $url = strtolower(trim((string) $url));
+    $url = preg_replace('#^https?://(www\.)?#i', '', $url);
+    return rtrim($url, '/');
+}
+
+function getUserOnlineApplicationCampusIds()
+{
+    $ci =& get_instance();
+
+    if ($ci->session->userdata('role') == 'Admin') {
+        return null;
+    }
+
+    $access_rows = $ci->db
+        ->select('campus_id')
+        ->where('user_id', $ci->session->userdata('user_id'))
+        ->get('online_application_access')
+        ->result_array();
+
+    if (empty($access_rows)) {
+        return array();
+    }
+
+    return array_values(array_unique(array_column($access_rows, 'campus_id')));
 }
 
 function dashboardNewApplications($campus_id)

@@ -215,7 +215,24 @@
                                                     <input type="checkbox" id="inlineCheckbox4" name="online_application_all" value="1" <?php if(@$access_values[0]['online_application_all']!=NULL){echo 'checked';}?> /> All Applications </label>
                                                 <label class="checkbox-inline">
                                                     <input type="checkbox" id="inlineCheckbox4" name="facebook_leads" value="1" <?php if(@$access_values[0]['facebook_leads']!=NULL){echo 'checked';}?> /> Facebook Leads Upload </label>
-                                                <label class="checkbox-inline">
+                                            </div>
+                                        </div>
+
+                                        <div class="form-group online_application_campus_section" <?php if(@$access_values[0]['online_application_access']!=1){echo 'style="display:none;"';}?>>
+                                            <label class="col-md-1 control-label"><strong>Online Admission Campuses</strong></label>
+                                            <div class="col-md-11">
+                                                <select class="form-control select2" id="online_admission_campus_ids" name="online_admission_campus_ids[]" multiple>
+                                                    <?php
+                                                    foreach($campuses as $campus):
+                                                    ?>
+                                                        <option value="<?php echo $campus['campus_id'];?>" <?php if(in_array($campus['campus_id'], @$online_admission_campus_ids ?: array())){echo 'selected';}?>>
+                                                            <?php echo $campus['campus_name'];?> (<?php echo $campus['website'];?>)
+                                                        </option>
+                                                    <?php
+                                                    endforeach;
+                                                    ?>
+                                                </select>
+                                                <span class="help-block">User ko sirf in campuses ki online applications dikhein gi. Admin ko hamesha sab dikhti hain.</span>
                                             </div>
                                         </div>
 
@@ -1461,53 +1478,6 @@
                                         <!--<span class="help-inline"></span>-->
                                     </div>
                                 </div>
-                                <div class="online_appliaction_accesses"  style="display: none">
-                                    <?php
-                                    foreach($online_applications as $online_application):
-                                        ?>
-                                        <div class="form-group">
-                                            <label class="col-md-3 control-label">Campus &amp; Cities for online application <span class="required">*</span></label>
-                                            <div class="col-md-4">
-                                                <select class="form-control" name="application_campus_id[]">
-                                                    <?php
-                                                    foreach($campuses as $campus):
-                                                        ?>
-                                                        <option value="<?php echo $campus['campus_id'];?>" <?php if($campus['campus_id']==$online_application['campus_id']){echo 'selected';}?>>
-                                                            <?php echo $campus['campus_name'];?>
-                                                        </option>
-                                                    <?php
-                                                    endforeach;
-                                                    ?>
-                                                </select>
-                                                <!--<span class="help-inline"></span>-->
-                                            </div>
-                                            <div class="col-md-3">
-                                                <select class="form-control" name="application_city[]">
-                                                    <?php
-                                                    foreach($cities as $city):
-                                                        ?>
-                                                        <option value="<?php echo $city;?>" <?php if($city==$online_application['city']){echo 'selected';}?>>
-                                                            <?php echo $city;?>
-                                                        </option>
-                                                    <?php
-                                                    endforeach;
-                                                    ?>
-                                                </select>
-                                            </div>
-                                            <div class="col-md-2 checkbox-list">
-                                                <label class="checkbox-inline">
-                                                    <input type="checkbox" id="inlineCheckbox1" name="all_cities[]" value="1" <?php if($online_application['all_cities']==1){echo 'checked';}?> /> All Cities </label>
-                                            </div>
-                                        </div>
-                                    <?php
-                                    endforeach;
-                                    ?>
-                                </div>
-                                <div class="col-md-3" style="display: none"></div>
-                                <div class="col-md-9"  style="display: none">
-                                    <button type="button" class="btn purple add_new_campus"><i class="fa fa-plus"></i> &nbsp;&nbsp; Add Campus &amp; City for Online Application</button>
-                                    <button type="button" class="btn red remove_new_campus"><i class="fa fa-trash"></i> &nbsp;&nbsp; Delete</button>
-                                </div>
                             </div>
 
                     </div>
@@ -1570,6 +1540,18 @@
                 jQuery('.designations').attr('required');
             }
         });
+
+        function toggleOnlineApplicationCampusSection() {
+            if ($('input[name="online_application_access"]').is(':checked')) {
+                $('.online_application_campus_section').show();
+            } else {
+                $('.online_application_campus_section').hide();
+            }
+        }
+
+        $('input[name="online_application_access"]').on('change', toggleOnlineApplicationCampusSection);
+        toggleOnlineApplicationCampusSection();
+        $('#online_admission_campus_ids').select2();
 
     }, false );
 

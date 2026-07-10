@@ -34,6 +34,7 @@ class Access extends CI_Controller {
 		$data['subjects'] = $this->accesses->getTestEngineSubjects();
 		$data['assignment_subjects'] = $this->accesses->getAssignmentsSubjects();
 		$data['departments'] = $this->accesses->getDepartments();
+		$data['online_admission_campus_ids'] = array();
 		
 		if($this->input->post('campus_user_id'))
 		{
@@ -300,6 +301,7 @@ class Access extends CI_Controller {
 			}
 			
 			$data['online_applications'] = $this->db->get_where('online_application_access', array('user_id'=>$this->input->post('campus_user_id')))->result_array();
+			$data['online_admission_campus_ids'] = array_values(array_unique(array_column($data['online_applications'], 'campus_id')));
 			
 		}
 		
@@ -615,28 +617,30 @@ class Access extends CI_Controller {
 			$this->accesses->addAccess();
 		}
 		
-		$cities_count = count($this->input->post('application_city'));
-		$application_campus_id = $this->input->post('application_campus_id');
-		$application_city = $this->input->post('application_city');
-		$all_cities = $this->input->post('all_cities');
+		$online_admission_campus_ids = $this->input->post('online_admission_campus_ids');
 		$user_id = $this->input->post('user_id');
 		
-		$this->db->where('user_id',$user_id);
-		$this->db->delete('online_application_access');
-		
-		$error = '';
-		
-		for($i=0;$i<$cities_count;$i++)
-		{
-			$this->db->set('user_id',$user_id);
-				$this->db->set('campus_id',$application_campus_id[$i]);
-				$this->db->set('city',$application_city[$i]);
-				$this->db->set('all_cities',$all_cities[$i]);
-				$this->db->insert('online_application_access');
+		if ($user_id) {
+			$this->db->where('user_id', $user_id);
+			$this->db->delete('online_application_access');
+
+			if (is_array($online_admission_campus_ids)) {
+				foreach ($online_admission_campus_ids as $campus_id) {
+					if ($campus_id == '') {
+						continue;
+					}
+
+					$this->db->insert('online_application_access', array(
+						'user_id' => $user_id,
+						'campus_id' => $campus_id,
+						'city' => '',
+						'all_cities' => 1
+					));
+				}
+			}
 		}
 		
 		$this->session->set_flashdata('message', 'Access has been granted successfully');
-		$this->session->set_flashdata('error', $error);
 		
 		redirect('access');
 	}
