@@ -666,7 +666,7 @@ class Dashboards extends CI_Model {
 		}
 
 		$this->db->where(array('apply_now.status'=>0,'apply_now.clear_by_admin'=>0,'apply_now.pending_status'=>NULL));
-		$query = $this->db->get('apply_now')->result_array();
+		$query = $this->db->get()->result_array();
 		return $query;
 	}
 	
@@ -712,7 +712,7 @@ class Dashboards extends CI_Model {
 		}
 
 		$this->db->order_by('latest_comment.next_date_for_call', 'ASC');
-		$query = $this->db->get('apply_now')->result_array();
+		$query = $this->db->get()->result_array();
 		return $query;
 	}
 	
