@@ -946,6 +946,37 @@
                                     </div>
                                 </div>
                                 <div class="form-group">
+                                    <label class="col-md-1 control-label"><strong>POS (Bookstore)</strong></label>
+                                    <div class="col-md-11 checkbox-list">
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" name="pos" value="1" <?php if(@$access_values[0]['pos']!=NULL){echo 'checked';}?> /> POS Access / Sell
+                                        </label>
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" name="pos_manage_categories" value="1" <?php if(@$access_values[0]['pos_manage_categories']!=NULL){echo 'checked';}?> /> Manage Categories &amp; Items
+                                        </label>
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" name="pos_manage_bundles" value="1" <?php if(@$access_values[0]['pos_manage_bundles']!=NULL){echo 'checked';}?> /> Manage Bundles
+                                        </label>
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" name="pos_view_history" value="1" <?php if(@$access_values[0]['pos_view_history']!=NULL){echo 'checked';}?> /> View POS History
+                                        </label>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label class="col-md-3 control-label">POS Campuses</label>
+                                    <div class="col-md-9">
+                                        <select class="form-control select2 select2_sample1" name="pos_campuses[]" multiple>
+                                            <?php foreach($campuses as $campus): ?>
+                                                <option value="<?php echo $campus['campus_id'];?>" <?php if(in_array($campus['campus_id'], explode(',',@$access_values[0]['pos_campuses']))){echo 'selected';}?>>
+                                                    <?php echo $campus['campus_name'];?>
+                                                </option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <span class="help-inline">Campuses this user can sell / manage in modern POS</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
                                     <label class="col-md-1 control-label"><strong>Construction</strong></label>
                                     <div class="col-md-11 checkbox-list">
                                         <label class="checkbox-inline"><input type="checkbox" name="construction_sidebar" value="1" <?php if(@$access_values[0]['construction_sidebar']!=NULL){echo 'checked';}?> /> Construction Access</label>

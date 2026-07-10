@@ -30,6 +30,48 @@ class Accesses extends CI_Model {
         );
     }
 
+    private function posAccessCheckboxFields()
+    {
+        return array(
+            'pos',
+            'pos_manage_categories',
+            'pos_manage_bundles',
+            'pos_view_history',
+        );
+    }
+
+    private function ensurePosAccessColumns()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if (!$this->db->table_exists($table)) {
+                continue;
+            }
+            foreach ($this->posAccessCheckboxFields() as $field) {
+                if (!$this->db->field_exists($field, $table)) {
+                    $this->db->query("ALTER TABLE `$table` ADD `$field` TINYINT(1) NULL DEFAULT NULL");
+                }
+            }
+            if (!$this->db->field_exists('pos_campuses', $table)) {
+                $this->db->query("ALTER TABLE `$table` ADD `pos_campuses` VARCHAR(500) NULL DEFAULT NULL");
+            }
+        }
+    }
+
+    private function setPosAccessFields()
+    {
+        $this->ensurePosAccessColumns();
+        foreach ($this->posAccessCheckboxFields() as $field) {
+            $this->db->set($field, $this->input->post($field));
+        }
+        $pos_campuses = $this->input->post('pos_campuses');
+        if ($pos_campuses != '') {
+            $pos_campuses = implode(',', $pos_campuses);
+        } else {
+            $pos_campuses = null;
+        }
+        $this->db->set('pos_campuses', $pos_campuses);
+    }
+
     private function ensureConstructionAccessColumns()
     {
         foreach (array('access_rules', 'access') as $table) {
@@ -996,6 +1038,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report_add_information_can_add_fee',$council_report_add_information_can_add_fee);
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
         $this->setConstructionAccessFields();
+        $this->setPosAccessFields();
         
 
         if($user_id!='')
@@ -1837,6 +1880,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report_add_information_can_add_fee',$council_report_add_information_can_add_fee);
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
         $this->setConstructionAccessFields();
+        $this->setPosAccessFields();
 
 
         if($user_id!='')
