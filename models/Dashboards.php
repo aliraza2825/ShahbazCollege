@@ -602,7 +602,48 @@ class Dashboards extends CI_Model {
 		}
 	}
 
+	private function joinLatestApplicationComment()
+	{
+		$this->db->join(
+			'(SELECT c1.apply_now_id, c1.next_date_for_call, c1.add_by, c1.interest_type, c1.comment, c1.add_date_time
+				FROM online_application_comments c1
+				INNER JOIN (
+					SELECT apply_now_id, MAX(online_application_comment_id) AS max_id
+					FROM online_application_comments
+					GROUP BY apply_now_id
+				) c2 ON c1.online_application_comment_id = c2.max_id
+			) AS latest_comment',
+			'latest_comment.apply_now_id = apply_now.apply_now_id',
+			'inner',
+			false
+		);
+	}
+
+	private function releaseExpiredPendingApplications()
+	{
+		$this->db->query("
+			UPDATE apply_now
+			INNER JOIN (
+				SELECT c1.apply_now_id, c1.next_date_for_call
+				FROM online_application_comments c1
+				INNER JOIN (
+					SELECT apply_now_id, MAX(online_application_comment_id) AS max_id
+					FROM online_application_comments
+					GROUP BY apply_now_id
+				) c2 ON c1.online_application_comment_id = c2.max_id
+			) latest_comment ON latest_comment.apply_now_id = apply_now.apply_now_id
+			SET apply_now.pending_status = NULL
+			WHERE apply_now.pending_status = 1
+				AND apply_now.status = 0
+				AND latest_comment.next_date_for_call != '0000-00-00'
+				AND latest_comment.next_date_for_call IS NOT NULL
+				AND latest_comment.next_date_for_call < DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+		");
+	}
+
 	public function getNewAdmisssions($campus_id=NULL){
+		$this->releaseExpiredPendingApplications();
+
 		$this->db->select('apply_now.*');
 		$this->db->from('apply_now');
 		$this->applyOnlineApplicationCampusAccess('apply_now');
@@ -624,19 +665,45 @@ class Dashboards extends CI_Model {
 		return $query;
 	}
 	
-	public function getPendingAdmisssions($campus_id=NULL)
+	public function getPendingAdmisssions($campus_id=NULL, $call_type='today')
 	{
-//		if(@$campus_id!=NULL)
-//		{
-//			$campus_website = $this->db->get_where('campuses',array('campus_id'=>$campus_id))->row()->website;
-//			$website = 'https://www.'.$campus_website.'/';
-//		}
-//		if(@$campus_id!=NULL)
-//		{
-//			$this->db->where('website',$website);
-//		}
-		$this->db->where(array('pending_status'=>1,'status'=>0));
-		$query = $this->db->get('apply_now')->result_array();
+		$this->releaseExpiredPendingApplications();
+
+		$this->db->select('apply_now.*, latest_comment.next_date_for_call AS latest_next_date_for_call, latest_comment.add_by AS latest_comment_by');
+		$this->db->from('apply_now');
+		$this->joinLatestApplicationComment();
+		$this->applyOnlineApplicationCampusAccess('apply_now');
+
+		$this->db->where(array('apply_now.pending_status'=>1, 'apply_now.status'=>0));
+
+		if ($this->session->userdata('role') != 'Admin') {
+			$this->db->where('latest_comment.add_by', $this->session->userdata('name'));
+		}
+
+		if ($call_type == 'today') {
+			$this->db->group_start();
+			$this->db->where('latest_comment.next_date_for_call <=', date('Y-m-d'));
+			$this->db->or_where('latest_comment.next_date_for_call', '0000-00-00');
+			$this->db->group_end();
+		} elseif ($call_type == 'future') {
+			$this->db->where('latest_comment.next_date_for_call >', date('Y-m-d'));
+			$this->db->where('latest_comment.next_date_for_call !=', '0000-00-00');
+		}
+
+		if (@$campus_id != NULL) {
+			if ($this->session->userdata('role') == 'Admin') {
+				$this->db->join(
+					'campuses',
+					"campuses.website = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(apply_now.website, 'https://www.', ''), 'http://www.', ''), 'https://', ''), 'http://', ''), '/', ''))",
+					'inner',
+					false
+				);
+			}
+			$this->db->where('campuses.campus_id', $campus_id);
+		}
+
+		$this->db->order_by('latest_comment.next_date_for_call', 'ASC');
+		$query = $this->db->get()->result_array();
 		return $query;
 	}
 	

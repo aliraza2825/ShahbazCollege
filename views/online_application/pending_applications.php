@@ -112,11 +112,8 @@
 							<tbody>
 							<?php
 								$i=1;
-								foreach($clear_admissions as $clear_admission):
-                                    $this->db->order_by('next_date_for_call', 'DESC');
-                                    $comments = $this->db->get_where('online_application_comments', array('apply_now_id'=>$clear_admission['apply_now_id']))->result_array();
-                                    if($comments[0]['next_date_for_call']<=date('Y-m-d') && $comments[count($comments)-1]['add_by'] == $this->session->userdata('name')):
-                                        $show=1;
+								foreach($today_pending as $clear_admission):
+                                    $comments = $this->db->order_by('online_application_comment_id', 'ASC')->get_where('online_application_comments', array('apply_now_id'=>$clear_admission['apply_now_id']))->result_array();
 
                                         //CNIC CHECK
                                         if($clear_admission['cnic']!='')
@@ -137,7 +134,6 @@
                                         {
                                             $mobile_check = array();
                                         }
-                                        if($show==1 || $this->session->userdata('role')=='Admin'):
 
                                             //SYSTEM COMMENT SECTION
                                             $msg='';
@@ -298,10 +294,7 @@
 								</td>
 							</tr>
                             <?php
-                                            //endif;
                                             $i++;
-                                        endif;
-                                    endif;
                             	endforeach;
 							?>
 							</tbody>
@@ -394,36 +387,10 @@
 							<tbody>
 							<?php
 								$i=1;
-								foreach($clear_admissions as $clear_admission):
+								foreach($future_pending as $clear_admission):
 								
-								$this->db->order_by('next_date_for_call', 'DESC');
-								$comments = $this->db->get_where('online_application_comments', array('apply_now_id'=>$clear_admission['apply_now_id']))->result_array();
-								if($comments[0]['next_date_for_call']>date('Y-m-d')  && $comments[count($comments)-1]['add_by'] == $this->session->userdata('name')):
-									
-									$show=0;
-									if($this->session->userdata('role')!='Admin')
-									{
-										$campus_id = @$this->db->get_where('campuses', array('website'=>str_replace('/','',str_replace('https://www.','',$clear_admission['website']))))->row()->campus_id;
-										
-										$check_access = $this->db->get_where('online_application_access',array('campus_id'=>$campus_id,'city'=>$clear_admission['city'],'user_id'=>$this->session->userdata('user_id')))->result_array();
-										//print_r($check_access);
-										if(count($check_access)>0)
-										{
-											$show=1;
-										}
-										if($show==0)
-										{
-											$first_check = $this->db->get_where('online_application_access',array('campus_id'=>$campus_id,'city'=>$clear_admission['city']))->result_array();
-											if(count($first_check)<1)
-											{
-												$second_check = $this->db->get_where('online_application_access',array('campus_id'=>$campus_id,'city!='=>$clear_admission['city'],'all_cities'=>1,'user_id'=>$this->session->userdata('user_id')))->result_array();
-												if(count($second_check)>0)
-												{
-													$show=1;
-												}
-											}
-										}
-									}
+								$comments = $this->db->order_by('online_application_comment_id', 'ASC')->get_where('online_application_comments', array('apply_now_id'=>$clear_admission['apply_now_id']))->result_array();
+								
 									//CNIC CHECK
 								if($clear_admission['cnic']!='')
 								{
@@ -443,7 +410,6 @@
 								{
 									$mobile_check = array();
 								}
-								if($show==1 || $this->session->userdata('role')=='Admin'):
 								
 								//SYSTEM COMMENT SECTION
 								$msg='';
@@ -604,8 +570,6 @@
 							</tr>
                             <?php
 								$i++;
-								endif;
-								endif;
                             	endforeach;
 							?>
 							</tbody>

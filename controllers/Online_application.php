@@ -164,6 +164,14 @@ class Online_application extends CI_Controller {
 	
 	public function pending_applications($campus_id=NULL)
 	{
+		$access = checkUserAccess();
+		if ($this->session->userdata('role') != 'Admin') {
+			if (empty($access) || @$access[0]['online_application_access'] != 1 || @$access[0]['online_application_new_admissions'] != 1) {
+				redirect('dashboard');
+				return;
+			}
+		}
+
 		if(@$this->input->post('clear_new_admission'))
 		{
 			$this->db->set('pending_status', 0);
@@ -173,7 +181,8 @@ class Online_application extends CI_Controller {
 			$this->session->set_flashdata('message', 'Your Request Clear Submit Successfully.');
 		}
 		
-		$data['clear_admissions'] = $this->dashboards->getPendingAdmisssions($campus_id);
+		$data['today_pending'] = $this->dashboards->getPendingAdmisssions($campus_id, 'today');
+		$data['future_pending'] = $this->dashboards->getPendingAdmisssions($campus_id, 'future');
 		
 		$this->load->view('inc/header');
 		$this->load->view('inc/sidebar');

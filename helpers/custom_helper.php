@@ -1291,14 +1291,10 @@ function newApplicationsCount()
 function pendingApplicationsCount()
 {
     $ci =& get_instance();
+    $ci->load->model('dashboards');
 
-    $total = $ci->db->join("online_application_comments","online_application_comments.apply_now_id = apply_now.apply_now_id")->order_by('online_application_comments.online_application_comment_id','DESC')->group_by("apply_now.apply_now_id")->get_where('apply_now',array('apply_now.pending_status'=>1,'apply_now.status'=>0,'online_application_comments.add_by'=>$ci->session->userdata("name")))->result_array();
-//        print_r($ci->db->last_query());
-//        exit();
-    //        $ci->db->where(array('apply_now.status != '=>3));
-//        $query = $ci->db->get('admission_applications')->result_array();
-    return count($total);
-
+    return count($ci->dashboards->getPendingAdmisssions(NULL, 'today'))
+        + count($ci->dashboards->getPendingAdmisssions(NULL, 'future'));
 }
 
 function dashboardNewAdmissions($campus_id)
@@ -1674,51 +1670,22 @@ function dashboardNewApplications($campus_id)
 function dashboardPendingApplications($campus_id)
 {
     $ci =& get_instance();
-    if($ci->session->userdata('role')=='Admin')
-    {
-        $applications = $ci->db->get_where('apply_now',array('pending_status'=>1,'status'=>0))->result_array();
-        $total=0;
-        foreach($applications as $application)
-        {
-            $application_campus_id = @$ci->db->get_where('campuses', array('website'=>str_replace('/','',str_replace('https://www.','',$application['website']))))->row()->campus_id;
-            if($application_campus_id==$campus_id)
-            {
-                $total++;
-            }
+    $ci->load->model('dashboards');
+
+    $applications = array_merge(
+        $ci->dashboards->getPendingAdmisssions(NULL, 'today'),
+        $ci->dashboards->getPendingAdmisssions(NULL, 'future')
+    );
+
+    $total = 0;
+    foreach ($applications as $application) {
+        $application_campus_id = @$ci->db->get_where('campuses', array('website'=>str_replace('/','',str_replace('https://www.','',$application['website']))))->row()->campus_id;
+        if ($application_campus_id == $campus_id) {
+            $total++;
         }
-        return $total;
     }
-    else{
-        $applications = $ci->db->get_where('apply_now',array('pending_status'=>1,'status'=>0))->result_array();
-        $total=0;
-        foreach($applications as $application)
-        {
-            $application_campus_id = @$ci->db->get_where('campuses', array('website'=>str_replace('/','',str_replace('https://www.','',$application['website']))))->row()->campus_id;
 
-            $check_access = $ci->db->get_where('online_application_access',array('campus_id'=>$application_campus_id,'city'=>$application['city'],'user_id'=>$ci->session->userdata('user_id')))->result_array();
-
-            if(count($check_access)>0)
-            {
-                if($application_campus_id == $campus_id)
-                {
-                    $total++;
-                }
-            }
-            if(count($check_access)<1)
-            {
-
-                $second_check = $ci->db->get_where('online_application_access',array('campus_id'=>$application_campus_id,'city!='=>$application['city'],'all_cities'=>1,'user_id'=>$ci->session->userdata('user_id')))->result_array();
-                if(count($second_check)>0)
-                {
-                    if($application_campus_id == $campus_id)
-                    {
-                        $total++;
-                    }
-                }
-            }
-        }
-        return $total;
-    }
+    return $total;
 }
 
 function totalAmountSendToCouncil($campus_id, $class, $council_exam_no)
