@@ -893,11 +893,11 @@ class Accounts extends CI_Controller {
         $accountamount = $this->input->post('sentamount');
         $trasfer_reason = $this->input->post('trasfer_reason');
 
-        if (!userCanAccessAccountId($from, 'funds_transfer_account_ids')) {
-            $this->session->set_userdata('error', 'Invalid from account selected.');
-            redirect('accounts/account_details');
-            return;
-        }
+//        if (!userCanAccessAccountId($from, 'funds_transfer_account_ids')) {
+//            $this->session->set_userdata('error', 'Invalid from account selected.');
+//            redirect('accounts/account_details');
+//            return;
+//        }
 
         if ($petty_account == '0') {
             if (!userCanAccessAccountId($to, 'funds_transfer_account_ids')) {
