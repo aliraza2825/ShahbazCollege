@@ -1603,17 +1603,26 @@ function getUserOnlineApplicationCampusIds()
         return null;
     }
 
-    $access_rows = $ci->db
-        ->select('campus_id')
-        ->where('user_id', $ci->session->userdata('user_id'))
-        ->get('online_application_access')
-        ->result_array();
+    // Use raw query so we do NOT reset / merge with an in-progress Active Record build
+    // (calling $ci->db->get() here was wiping FROM/SELECT of the parent query)
+    $user_id = (int)$ci->session->userdata('user_id');
+    $access_rows = $ci->db->query(
+        'SELECT campus_id FROM online_application_access WHERE user_id = ?',
+        array($user_id)
+    )->result_array();
 
     if (empty($access_rows)) {
         return array();
     }
 
-    return array_values(array_unique(array_column($access_rows, 'campus_id')));
+    $ids = array();
+    foreach ($access_rows as $row) {
+        $id = (int)$row['campus_id'];
+        if ($id > 0) {
+            $ids[$id] = $id;
+        }
+    }
+    return array_values($ids);
 }
 
 function dashboardNewApplications($campus_id)
