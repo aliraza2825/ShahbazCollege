@@ -86,9 +86,13 @@
 									<div class="form-group">
                                         <label class="col-md-3 control-label"> Students <span class="required">*</span></label>
                                         <div class="col-md-6">
-                                            <select class="form-control select2 student_ids" name="student_ids[]" id="select2_sample5"  multiple required>
-
-                                            </select>
+											<label class="mt-checkbox">
+												<input type="checkbox" id="include_all_students" checked />
+												Include all students of selected shifts
+												<span></span>
+											</label>
+											<input type="hidden" name="student_ids" id="student_ids_hidden" value="" />
+											<span class="help-block" id="students_count_label">0 students selected</span>
                                         </div>
                                     </div>
 								</div>
@@ -256,10 +260,26 @@
 								</td>
 								<td>
 									<?php 
-										$shifts = $this->db->where_in('id',explode(',',$holiday['shift_ids']))->get('shifts')->result_array();
-										foreach($shifts as $shift)
+										$shift_ids = array_filter(explode(',',$holiday['shift_ids']));
+										if(!empty($shift_ids))
 										{
-											echo $shift['name'].'<br />';
+											$shifts = $this->db
+												->select('shifts.name, courses.course_name')
+												->from('shifts')
+												->join('study_type', 'study_type.id = shifts.study_type_id', 'left')
+												->join('courses', 'courses.course_id = study_type.course_id', 'left')
+												->where_in('shifts.id', $shift_ids)
+												->get()
+												->result_array();
+											foreach($shifts as $shift)
+											{
+												$label = $shift['name'];
+												if(!empty($shift['course_name']))
+												{
+													$label .= ' - '.$shift['course_name'];
+												}
+												echo $label.'<br />';
+											}
 										}
 									
 									?>
@@ -324,6 +344,22 @@
 	window.addEventListener('DOMContentLoaded',function () {
     //your code here
 
+		var selectedShiftStudentIds = '';
+
+		function syncStudentHiddenField() {
+			if($('#include_all_students').is(':checked') && selectedShiftStudentIds !== '')
+			{
+				$('#student_ids_hidden').val(selectedShiftStudentIds);
+				var count = selectedShiftStudentIds.split(',').filter(Boolean).length;
+				$('#students_count_label').text(count + ' students selected');
+			}
+			else
+			{
+				$('#student_ids_hidden').val('');
+				$('#students_count_label').text('0 students selected');
+			}
+		}
+
 		$('.add_date').click(function(){
 			var html = '<div class="comission"><div class="row"><div class="col-md-12"><div class="form-group"><label class="col-md-3 control-label">Select Date <span class="required">*</span></label>	<div class="col-md-3"><div class="input-group input-medium date date-picker" data-date="<?php echo date('Y-m-d')?>" data-date-format="yyyy-mm-dd" data-date-viewmode="years"><input type="date" name="date[]" class="form-control" value="" required> </div></div>	<div class="col-md-3"><button type="button" class="btn red remove_line"><i class="fa fa-trash"></i> Remove</button></div></div></div>';
 			$('.date_area').append(html)
@@ -340,7 +376,7 @@
 		$('.campus_ids').change(function(){
 			var staff_type_ids = $('.staff_type_ids').select2('val');
 			var campus_ids = $('.campus_ids').select2('val');
-			if(staff_type_ids!='' && campus_ids!='')
+			if(staff_type_ids && staff_type_ids.length > 0 && campus_ids && campus_ids.length > 0)
 			{
 				$.ajax({
 					type: "post",
@@ -359,7 +395,7 @@
 				});
 			}
 
-			if(campus_ids!='')
+			if(campus_ids && campus_ids.length > 0)
 			{
 				$.ajax({
 					type: "post",
@@ -377,13 +413,21 @@
 					}
 				});
 			}
+			else
+			{
+				$('.shift_ids').select2('destroy');
+				$('.shift_ids').html('');
+				$('.shift_ids').select2();
+				selectedShiftStudentIds = '';
+				syncStudentHiddenField();
+			}
 		});
 
 		$('.staff_type_ids').change(function(){
 			var staff_type_ids = $('.staff_type_ids').select2('val');
 			var campus_ids = $('.campus_ids').select2('val');
 
-			if(staff_type_ids!='' && campus_ids!='')
+			if(staff_type_ids && staff_type_ids.length > 0 && campus_ids && campus_ids.length > 0)
 			{
 				$.ajax({
 					type: "post",
@@ -402,22 +446,28 @@
 				});
 			}
 		});
-		
+
+		$('#include_all_students').change(function(){
+			syncStudentHiddenField();
+		});
+
 		$('.shift_ids').change(function(){
 			var shift_ids = $('.shift_ids').select2('val');
-			if(shift_ids!='')
+			selectedShiftStudentIds = '';
+			syncStudentHiddenField();
+
+			if(shift_ids && shift_ids.length > 0)
 			{
 				$.ajax({
 					type: "post",
-					async: false,
 					url: '<?php echo site_url()?>/holidays/findShiftStudents',
+					dataType: 'json',
 					data: {
 						shift_ids : shift_ids,
 					},
 					success: function(data) {
-						$('.student_ids').select2('destroy');
-						$('.student_ids').html(data);
-						$('.student_ids').select2();
+						selectedShiftStudentIds = data.student_ids || '';
+						syncStudentHiddenField();
 					}
 				});
 			}

@@ -97,13 +97,22 @@ class Holidays extends CI_Controller {
 	{
 		$campus_ids = implode(',',$this->input->post('campus_ids'));
 
-		$qry = 'SELECT * FROM shifts WHERE campus_id IN ('.$campus_ids.')';
+		$qry = 'SELECT shifts.*, courses.course_name
+			FROM shifts
+			LEFT JOIN study_type ON study_type.id = shifts.study_type_id
+			LEFT JOIN courses ON courses.course_id = study_type.course_id
+			WHERE shifts.campus_id IN ('.$campus_ids.')';
 		$shifts = $this->db->query($qry)->result_array();
 
 		$html='';
 		foreach($shifts as $shift)
 		{
-			$html.='<option value="'.$shift['id'].'" selected="selected">'.$shift['name'].'</option>';
+			$label = $shift['name'];
+			if(!empty($shift['course_name']))
+			{
+				$label .= ' - '.$shift['course_name'];
+			}
+			$html.='<option value="'.$shift['id'].'" selected="selected">'.htmlspecialchars($label).'</option>';
 		}
 		echo $html;
 	}
@@ -112,14 +121,18 @@ class Holidays extends CI_Controller {
 	{
 		$shift_ids = implode(',',$this->input->post('shift_ids'));
 
-		$qry = 'SELECT * FROM students WHERE status=1 AND shift IN ('.$shift_ids.')';
+		$qry = 'SELECT student_id FROM students WHERE status=1 AND shift IN ('.$shift_ids.')';
 		$students = $this->db->query($qry)->result_array();
 
-		$html='';
+		$student_ids = array();
 		foreach($students as $student)
 		{
-			$html.='<option value="'.$student['student_id'].'" selected="selected">'.$student['first_name'].' '.$student['last_name'].' ('.$student['roll_no'].')</option>';
+			$student_ids[] = $student['student_id'];
 		}
-		echo $html;
+
+		echo json_encode(array(
+			'student_ids' => implode(',', $student_ids),
+			'count' => count($student_ids)
+		));
 	}
 }

@@ -26,7 +26,12 @@ class Holiday extends CI_Model {
 			$this->db->set('staff_type_ids', implode(',',$data['staff_type_ids']));
 			$this->db->set('user_ids', implode(',',$data['user_ids']));
 			$this->db->set('shift_ids', implode(',',$data['shift_ids']));
-			$this->db->set('student_ids', implode(',',$data['student_ids']));
+			$student_ids = isset($data['student_ids']) ? $data['student_ids'] : '';
+			if(is_array($student_ids))
+			{
+				$student_ids = implode(',',$student_ids);
+			}
+			$this->db->set('student_ids', $student_ids);
 			$this->db->set('reason', $data['reason_detail']);
 			$this->db->set('add_by', $this->session->userdata('name'));
 			
