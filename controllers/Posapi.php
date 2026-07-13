@@ -176,8 +176,23 @@ class Posapi extends CI_Controller {
 
 	private function _user_payload($user)
 	{
+		$this->_ensure_pos_closing_campus_column();
 		$campus = $this->db->get_where('campuses', array('campus_id' => $user['campus_id']))->row_array();
 		$perms = $this->_permissions($user);
+
+		$closing_campus_id = 0;
+		if (isset($user['pos_closing_campus_id'])) {
+			$closing_campus_id = (int)$user['pos_closing_campus_id'];
+		} else {
+			$row = $this->db->select('pos_closing_campus_id')->get_where('users', array('user_id' => $user['user_id']))->row_array();
+			$closing_campus_id = $row ? (int)$row['pos_closing_campus_id'] : 0;
+		}
+
+		$closing_campus = null;
+		if ($closing_campus_id > 0) {
+			$closing_campus = $this->db->get_where('campuses', array('campus_id' => $closing_campus_id))->row_array();
+		}
+
 		return array(
 			'user_id' => $user['user_id'],
 			'name' => trim($user['first_name'] . ' ' . $user['last_name']),
@@ -185,8 +200,55 @@ class Posapi extends CI_Controller {
 			'role' => $user['role'],
 			'campus_id' => $user['campus_id'],
 			'campus_name' => $campus ? $campus['campus_name'] : '',
+			'closing_campus_id' => $closing_campus_id > 0 ? $closing_campus_id : null,
+			'closing_campus_name' => $closing_campus ? $closing_campus['campus_name'] : '',
 			'permissions' => $perms,
 		);
+	}
+
+	private function _ensure_pos_closing_campus_column()
+	{
+		if (!$this->db->table_exists('users')) {
+			return;
+		}
+		if ($this->db->field_exists('pos_closing_campus_id', 'users')) {
+			return;
+		}
+		$this->db->query("ALTER TABLE `users` ADD `pos_closing_campus_id` INT(11) NULL DEFAULT NULL");
+	}
+
+	/** Active daily-closing campuses (closing_persons.active_status=1), filtered by POS access */
+	private function _closing_campus_rows($user = null)
+	{
+		$perms = $this->_permissions($user);
+		$this->db->select('campuses.campus_id, campuses.campus_name, campuses.roll_no_code, campuses.status');
+		$this->db->from('closing_persons');
+		$this->db->join('campuses', 'campuses.campus_id = closing_persons.campus_id', 'inner');
+		$this->db->where('closing_persons.active_status', 1);
+		$this->db->where('campuses.status', 1);
+		if (!$perms['is_admin']) {
+			if (!count($perms['campus_ids'])) {
+				return array();
+			}
+			$this->db->where_in('closing_persons.campus_id', $perms['campus_ids']);
+		}
+		$this->db->group_by('closing_persons.campus_id');
+		$this->db->order_by('campuses.campus_name', 'ASC');
+		return $this->db->get()->result_array();
+	}
+
+	private function _is_allowed_closing_campus($campus_id, $user = null)
+	{
+		$campus_id = (int)$campus_id;
+		if ($campus_id <= 0) {
+			return false;
+		}
+		foreach ($this->_closing_campus_rows($user) as $row) {
+			if ((int)$row['campus_id'] === $campus_id) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	public function ping()
@@ -832,6 +894,38 @@ class Posapi extends CI_Controller {
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
+	/** Campuses that appear on Daily Closing (active closing_persons) */
+	public function closing_campuses()
+	{
+		$rows = $this->_closing_campus_rows();
+		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	/** Persist selected closing campus for this staff user */
+	public function set_closing_campus()
+	{
+		$this->_ensure_pos_closing_campus_column();
+		$body = $this->_body();
+		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
+		if ($campus_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'Closing campus required'), 422);
+		}
+		if (!$this->_is_allowed_closing_campus($campus_id)) {
+			$this->_json(array('success' => false, 'message' => 'Campus is not an active closing campus or you have no POS access'), 403);
+		}
+
+		$this->db->where('user_id', $this->current_user['user_id'])->update('users', array(
+			'pos_closing_campus_id' => $campus_id,
+		));
+		$this->current_user['pos_closing_campus_id'] = $campus_id;
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Closing campus saved',
+			'user' => $this->_user_payload($this->current_user),
+		));
+	}
+
 	public function courses()
 	{
 		$campus_id = (int)$this->input->get('campus_id');
@@ -1175,12 +1269,28 @@ class Posapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Cart is empty'), 422);
 		}
 
-		// Ensure line campuses are allowed
-		foreach ($lines as $line) {
-			if (!empty($line['campus_id'])) {
-				$this->_require_campus_access((int)$line['campus_id']);
-			}
+		// Closing campus required — must be selected in Settings (or sent on checkout)
+		$this->_ensure_pos_closing_campus_column();
+		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
+		if ($campus_id <= 0) {
+			$fresh = $this->db->select('pos_closing_campus_id')->get_where('users', array(
+				'user_id' => $this->current_user['user_id'],
+			))->row_array();
+			$campus_id = $fresh ? (int)$fresh['pos_closing_campus_id'] : 0;
 		}
+		if ($campus_id <= 0 || !$this->_is_allowed_closing_campus($campus_id)) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Select a closing campus in Settings before creating an invoice',
+			), 422);
+		}
+		$this->_require_campus_access($campus_id);
+
+		// Force all lines onto the selected closing campus
+		foreach ($lines as &$line) {
+			$line['campus_id'] = $campus_id;
+		}
+		unset($line);
 
 		if ($student_id) {
 			$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
@@ -1195,7 +1305,7 @@ class Posapi extends CI_Controller {
 		$quote_body = array('student_id' => $student_id, 'lines' => $lines);
 		$quoted = $this->_quote_internal($quote_body);
 
-		$campus = $this->db->get_where('campuses', array('campus_id' => $this->current_user['campus_id']))->row_array();
+		$campus = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
 		$code = $campus && !empty($campus['roll_no_code']) ? $campus['roll_no_code'] : 'POS';
 		$invoice_no = $code . '-' . time();
 
@@ -1204,7 +1314,7 @@ class Posapi extends CI_Controller {
 		try {
 			$this->db->insert('pos_orders', array(
 				'invoice_no' => $invoice_no,
-				'campus_id' => $this->current_user['campus_id'],
+				'campus_id' => $campus_id,
 				'student_id' => $student_id,
 				'purchaser_type' => $purchaser_type,
 				'purchaser_name' => $purchaser_name,
@@ -1229,7 +1339,7 @@ class Posapi extends CI_Controller {
 					'unit_price' => $line['unit_price'],
 					'line_total' => $line['line_total'],
 					'is_free' => !empty($line['is_free']) ? 1 : 0,
-					'campus_id' => $line['campus_id'],
+					'campus_id' => $campus_id,
 					'room_id' => $line['room_id'],
 					'subroom_id' => $line['subroom_id'],
 				));
@@ -1247,7 +1357,7 @@ class Posapi extends CI_Controller {
 							$student_id,
 							$purchaser_name,
 							$purchaser_phone,
-							isset($line['campus_id']) ? $line['campus_id'] : null,
+							$campus_id,
 							isset($line['room_id']) ? $line['room_id'] : null,
 							isset($line['subroom_id']) ? $line['subroom_id'] : null,
 							$free_u
@@ -1268,7 +1378,7 @@ class Posapi extends CI_Controller {
 						$student_id,
 						$purchaser_name,
 						$purchaser_phone,
-						$line['campus_id'],
+						$campus_id,
 						$line['room_id'],
 						$line['subroom_id'],
 						$free_u
@@ -1296,6 +1406,7 @@ class Posapi extends CI_Controller {
 				'order_id' => $order_id,
 				'invoice_no' => $invoice_no,
 				'total' => $quoted['total'],
+				'campus_id' => $campus_id,
 				'lines' => $quoted['lines'],
 			)
 		));
