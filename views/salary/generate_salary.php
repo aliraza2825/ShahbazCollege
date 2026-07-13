@@ -179,7 +179,7 @@ if ($display_income_tax <= 0) {
                                         Absent <br> <input type="text" class="form-control input-inline "  name="total_absents" value="<?php echo $absent; ?>" readonly>
                                     </div>
                                     <div class="col-md-2 value ml-20" data-toggle="tooltip" title="" style="text-align: center; color: red" data-original-title="Absent!">
-                                        Counted Days <br> <input type="text" class="form-control input-inline " style="text-align: center; font-weight: bold" name="total_days" id="total_days" value="<?php echo $counted_days-$leaves-$absent ?>" readonly>
+                                        Counted Days <br> <input type="text" class="form-control input-inline " style="text-align: center; font-weight: bold" name="total_days" id="total_days" value="<?php echo $counted_days-$leaves-$absent ?>">
                                     </div>
                                 </div>
 
