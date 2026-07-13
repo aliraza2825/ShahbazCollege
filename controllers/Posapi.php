@@ -217,21 +217,42 @@ class Posapi extends CI_Controller {
 		$this->db->query("ALTER TABLE `users` ADD `pos_closing_campus_id` INT(11) NULL DEFAULT NULL");
 	}
 
-	/** Active daily-closing campuses (closing_persons.active_status=1), filtered by POS access */
+	/** Same campuses as /closing/index for this user — from closing_persons */
 	private function _closing_campus_rows($user = null)
 	{
-		$perms = $this->_permissions($user);
-		$this->db->select('campuses.campus_id, campuses.campus_name, campuses.roll_no_code, campuses.status');
+		$user = $user ? $user : $this->current_user;
+		if (!$user) {
+			return array();
+		}
+
+		$is_admin = $this->_is_admin($user);
+		$access = $this->_pos_access_row($user);
+		$view_campus_closings = $access && !empty($access['view_campus_closings']) ? (string)$access['view_campus_closings'] : '0';
+		$campus_closing_ids = $access && !empty($access['campus_closing_ids']) ? $access['campus_closing_ids'] : '';
+
+		$this->db->select('campuses.campus_id, campuses.campus_name, campuses.roll_no_code, campuses.status, closing_persons.id as closing_person_id');
 		$this->db->from('closing_persons');
 		$this->db->join('campuses', 'campuses.campus_id = closing_persons.campus_id', 'inner');
-		$this->db->where('closing_persons.active_status', 1);
 		$this->db->where('campuses.status', 1);
-		if (!$perms['is_admin']) {
-			if (!count($perms['campus_ids'])) {
+
+		if ($is_admin) {
+			$this->db->where('closing_persons.active_status', 1);
+		} elseif ($view_campus_closings === '1' && $campus_closing_ids !== '') {
+			$ids = array();
+			foreach (explode(',', $campus_closing_ids) as $id) {
+				$id = (int)trim($id);
+				if ($id > 0) $ids[] = $id;
+			}
+			if (!count($ids)) {
 				return array();
 			}
-			$this->db->where_in('closing_persons.campus_id', $perms['campus_ids']);
+			$this->db->where_in('closing_persons.id', $ids);
+		} else {
+			// Exact Closing::index rule for normal staff
+			$this->db->where('closing_persons.user_id', (int)$user['user_id']);
+			$this->db->where('closing_persons.active_status', 1);
 		}
+
 		$this->db->group_by('closing_persons.campus_id');
 		$this->db->order_by('campuses.campus_name', 'ASC');
 		return $this->db->get()->result_array();
@@ -911,7 +932,7 @@ class Posapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Closing campus required'), 422);
 		}
 		if (!$this->_is_allowed_closing_campus($campus_id)) {
-			$this->_json(array('success' => false, 'message' => 'Campus is not an active closing campus or you have no POS access'), 403);
+			$this->_json(array('success' => false, 'message' => 'Campus is not in your active closing_persons list'), 403);
 		}
 
 		$this->db->where('user_id', $this->current_user['user_id'])->update('users', array(
