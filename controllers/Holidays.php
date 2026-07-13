@@ -97,7 +97,7 @@ class Holidays extends CI_Controller {
 	{
 		$campus_ids = implode(',',$this->input->post('campus_ids'));
 
-		$qry = 'SELECT shifts.*, courses.course_name
+		$qry = 'SELECT shifts.*, study_type.name as study_type_name, courses.course_name
 			FROM shifts
 			LEFT JOIN study_type ON study_type.id = shifts.study_type_id
 			LEFT JOIN courses ON courses.course_id = study_type.course_id
@@ -107,11 +107,16 @@ class Holidays extends CI_Controller {
 		$html='';
 		foreach($shifts as $shift)
 		{
-			$label = $shift['name'];
+			$parts = array($shift['name']);
+			if(!empty($shift['study_type_name']))
+			{
+				$parts[] = $shift['study_type_name'];
+			}
 			if(!empty($shift['course_name']))
 			{
-				$label .= ' - '.$shift['course_name'];
+				$parts[] = $shift['course_name'];
 			}
+			$label = implode(' - ', $parts);
 			$html.='<option value="'.$shift['id'].'" selected="selected">'.htmlspecialchars($label).'</option>';
 		}
 		echo $html;

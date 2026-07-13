@@ -264,7 +264,7 @@
 										if(!empty($shift_ids))
 										{
 											$shifts = $this->db
-												->select('shifts.name, courses.course_name')
+												->select('shifts.name, study_type.name as study_type_name, courses.course_name')
 												->from('shifts')
 												->join('study_type', 'study_type.id = shifts.study_type_id', 'left')
 												->join('courses', 'courses.course_id = study_type.course_id', 'left')
@@ -273,12 +273,16 @@
 												->result_array();
 											foreach($shifts as $shift)
 											{
-												$label = $shift['name'];
+												$parts = array($shift['name']);
+												if(!empty($shift['study_type_name']))
+												{
+													$parts[] = $shift['study_type_name'];
+												}
 												if(!empty($shift['course_name']))
 												{
-													$label .= ' - '.$shift['course_name'];
+													$parts[] = $shift['course_name'];
 												}
-												echo $label.'<br />';
+												echo implode(' - ', $parts).'<br />';
 											}
 										}
 									

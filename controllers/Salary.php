@@ -440,6 +440,22 @@ class Salary  extends CI_Controller{
         $user = $this->db->get()->row();
         $my_attendances = array();
 
+        $staff_type_id = isset($data['staff']->staff_type_id) ? $data['staff']->staff_type_id : '';
+        $holiday_dates = array();
+        if ($staff_type_id !== '' && $staff_type_id !== null) {
+            $holiday_qry = "SELECT `date` FROM holidays
+                WHERE `date` >= ".$this->db->escape($strDateFrom)."
+                AND `date` <= ".$this->db->escape($strDateTo)."
+                AND (cancel = 0 OR cancel IS NULL OR cancel = '')
+                AND FIND_IN_SET(".$this->db->escape($campus_id).", campus_ids)
+                AND FIND_IN_SET(".$this->db->escape($staff_type_id).", staff_type_ids)
+                AND FIND_IN_SET(".$this->db->escape($user_id).", user_ids)";
+            $holiday_rows = $this->db->query($holiday_qry)->result_array();
+            foreach ($holiday_rows as $holiday_row) {
+                $holiday_dates[$holiday_row['date']] = true;
+            }
+        }
+
         if ($user != NULL) {
             $machine_user_id = $user->machine_id;
             foreach ($dates as $key => $date) {
@@ -503,8 +519,13 @@ class Salary  extends CI_Controller{
                     if (!empty($status) && $this->is_off_day_timing($status)) {
                         $array_date['status'] = "5";
                     }
-
                 }
+
+                // Public holiday (campus + staff type + user) counts as paid day
+                if (isset($holiday_dates[$date]) && in_array($array_date['status'], array("0", "3", "4", "5"), true)) {
+                    $array_date['status'] = "6";
+                }
+
                 array_push($my_attendances, $array_date);
             }
         }
@@ -514,6 +535,7 @@ class Salary  extends CI_Controller{
         $data['present_manual'] = 0;
         $data['absent'] = 0;
         $data['leaves'] = 0;
+        $data['holidays'] = 0;
         $data['counted_days'] = cal_days_in_month(CAL_GREGORIAN, date("m", strtotime($data['from_date'])), date("Y", strtotime($data['from_date'])));
 
         foreach ($my_attendances as $at) {
@@ -528,6 +550,8 @@ class Salary  extends CI_Controller{
                         $data['present_manual'] += 1;
                     }
                 }
+            } elseif ($at['status'] == "6") {
+                $data['holidays'] += 1;
             } elseif ($at['status'] == "4") {
                 $data['leaves'] += 1;
             } elseif ($at['status'] == "2") {
