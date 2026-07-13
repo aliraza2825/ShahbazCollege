@@ -4761,7 +4761,7 @@ endif?>
 
     $('#from_account').on('change', function() {
 
-        var plans = <?php echo json_encode($accounts) ?>;
+        var plans = <?php echo json_encode($cash_accounts) ?>;
         let i;
         $(".modal-body #sentamount").val('0');
 

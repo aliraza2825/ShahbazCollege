@@ -7,7 +7,54 @@ class Pos extends CI_Controller {
 		parent::__construct();
 		$this->load->model('clas');
 	}
+
+	/**
+	 * Side-menu POS click → issue API token → open modern POS already logged in
+	 */
 	public function index()
+	{
+		$user_id = (int)$this->session->userdata('user_id');
+		if (!$user_id) {
+			redirect('login');
+			return;
+		}
+
+		$user = $this->db->get_where('users', array(
+			'user_id' => $user_id,
+			'status' => '1',
+		))->row_array();
+
+		if (!$user) {
+			$this->session->set_flashdata('error', 'User not found.');
+			redirect('dashboard');
+			return;
+		}
+
+		if ($user['role'] !== 'Admin') {
+			$acc = $this->db->get_where('access', array('user_id' => $user_id))->row_array();
+			if (!$acc || empty($acc['pos'])) {
+				$this->session->set_flashdata('error', 'No POS access. Ask admin to enable POS in Access.');
+				redirect('dashboard');
+				return;
+			}
+		}
+
+		$token = bin2hex(openssl_random_pseudo_bytes(32));
+		$expires = date('Y-m-d H:i:s', strtotime('+12 hours'));
+
+		$this->db->where('user_id', $user_id)->delete('pos_api_tokens');
+		$this->db->insert('pos_api_tokens', array(
+			'user_id' => $user_id,
+			'token' => $token,
+			'expires_at' => $expires,
+		));
+
+		$pos_url = 'https://pos.shahbazcollegeofpharmacy.edu.pk/login?sso=' . rawurlencode($token);
+		redirect($pos_url);
+	}
+
+	/** Old in-panel POS UI (kept for emergency / reference) */
+	public function legacy()
 	{
 		$data['campuses'] = $this->clas->getCampuses();
 

@@ -1886,7 +1886,7 @@ $myAccess = checkUserAccess();
                     </li>
                     
                     <li class="start <?php if($this->uri->segment(1)=='pos'){echo 'active';}?>">
-                        <a href="<?php echo site_url()?>/pos">
+                        <a href="<?php echo site_url()?>/pos" target="_blank" rel="noopener">
                             <i class="fa fa-shopping-cart"></i>
                             <span class="title">
 					            POS</span>
