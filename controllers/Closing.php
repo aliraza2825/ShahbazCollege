@@ -30,6 +30,8 @@ class Closing extends CI_Controller {
             return;
         }
 
+        $this->ensure_products_closing_id_column();
+
         $indexes = $this->db->query("SHOW INDEX FROM closing_perday WHERE Key_name = 'uniq_campus_closing_date'")->result_array();
         if (!empty($indexes)) {
             return;
@@ -48,6 +50,82 @@ class Closing extends CI_Controller {
                  ADD UNIQUE KEY uniq_campus_closing_date (campus_id, for_day, for_month, for_year)"
             );
         }
+    }
+
+    /** Bookstore POS rows need closing_id so post-close sales roll to the next day */
+    private function ensure_products_closing_id_column()
+    {
+        if (!$this->db->table_exists('products')) {
+            return;
+        }
+        if ($this->db->field_exists('closing_id', 'products')) {
+            return;
+        }
+        $this->db->query("ALTER TABLE `products` ADD `closing_id` VARCHAR(50) NULL DEFAULT NULL");
+        $this->db->query("ALTER TABLE `products` ADD INDEX `idx_products_closing_id` (`closing_id`)");
+    }
+
+    private function apply_pos_unclosed_where()
+    {
+        $this->db->group_start();
+        $this->db->where('products.closing_id IS NULL', null, false);
+        $this->db->or_where('products.closing_id', '');
+        $this->db->or_where('products.closing_id', '0');
+        $this->db->group_end();
+    }
+
+    private function get_pos_sales_rows($campus, $sold_date, $only_unclosed = true)
+    {
+        $this->db->select('products.*, product_names.product_name, CONCAT(users.first_name, " ", users.last_name) as sold_by_name', false);
+        $this->db->from('products');
+        $this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'left');
+        $this->db->join('users', 'users.user_id = products.sold_by', 'left');
+        $this->db->where('products.sold', 1);
+        $this->db->where('products.campus_id', $campus);
+        $this->db->where('products.sold_date', $sold_date);
+        if ($only_unclosed) {
+            $this->apply_pos_unclosed_where();
+        }
+        $this->db->order_by('products.invoice_no', 'DESC');
+        return $this->db->get()->result_array();
+    }
+
+    private function get_pos_sales_sum($campus, $sold_date, $only_unclosed = true)
+    {
+        $this->db->select('sum(products.sold_amount) as total');
+        $this->db->from('products');
+        $this->db->where('products.sold', 1);
+        $this->db->where('products.campus_id', $campus);
+        $this->db->where('products.sold_date', $sold_date);
+        if ($only_unclosed) {
+            $this->apply_pos_unclosed_where();
+        }
+        $row = $this->db->get()->result_array();
+        return (float)@$row[0]['total'];
+    }
+
+    private function get_pos_sales_by_closing($campus, $campus_closing_id)
+    {
+        $this->db->select('products.*, product_names.product_name, CONCAT(users.first_name, " ", users.last_name) as sold_by_name', false);
+        $this->db->from('products');
+        $this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'left');
+        $this->db->join('users', 'users.user_id = products.sold_by', 'left');
+        $this->db->where('products.sold', 1);
+        $this->db->where('products.campus_id', $campus);
+        $this->db->where('products.closing_id', $campus_closing_id);
+        $this->db->order_by('products.invoice_no', 'DESC');
+        return $this->db->get()->result_array();
+    }
+
+    private function get_pos_sales_sum_by_closing($campus, $campus_closing_id)
+    {
+        $this->db->select('sum(products.sold_amount) as total');
+        $this->db->from('products');
+        $this->db->where('products.sold', 1);
+        $this->db->where('products.campus_id', $campus);
+        $this->db->where('products.closing_id', $campus_closing_id);
+        $row = $this->db->get()->result_array();
+        return (float)@$row[0]['total'];
     }
 
     private function get_closing_for_date($campus_id, $day, $month, $year, $lock = false)
@@ -252,24 +330,10 @@ class Closing extends CI_Controller {
                     $loan_today += $loan_yesterday[0]['total'];
                 }
 
-                // Bookstore POS (products.sold) — same unit rows as Pos / Posapi checkout
-                $this->db->select('sum(products.sold_amount) as total');
-                $this->db->from('products');
-                $this->db->where('products.sold', 1);
-                $this->db->where('products.campus_id', $closing['campus_id']);
-                $this->db->where('products.sold_date', $today);
-                $pos_sales_sum_today = $this->db->get()->result_array();
-                $pos_sale_amount = (float)@$pos_sales_sum_today[0]['total'];
-
-                // Carry yesterday only if that day was never closed (no closing_id on product rows)
-                if (count($yest_closed) == 0) {
-                    $this->db->select('sum(products.sold_amount) as total');
-                    $this->db->from('products');
-                    $this->db->where('products.sold', 1);
-                    $this->db->where('products.campus_id', $closing['campus_id']);
-                    $this->db->where('products.sold_date', $yesterday);
-                    $pos_sales_sum_yesterday = $this->db->get()->result_array();
-                    $pos_sale_amount += (float)@$pos_sales_sum_yesterday[0]['total'];
+                // Bookstore POS (products.sold) — unclosed only; orphans from closed yesterday roll forward
+                $pos_sale_amount = $this->get_pos_sales_sum($closing['campus_id'], $today, true);
+                if (count($yest_closed) > 0) {
+                    $pos_sale_amount += $this->get_pos_sales_sum($closing['campus_id'], $yesterday, true);
                 }
 
                 $dataclose[$key]['closing_amount'] = $value+$sale_amount+$asset_sale_amount+$loan_today+$pos_sale_amount;
@@ -447,22 +511,8 @@ class Closing extends CI_Controller {
             $this->db->where('sales.closing_id = "'.$closed[0]['campus_closing_id'].'" and sales.campus_id ="'.$campus.'"');
             $data['sales_sum'] = $this->db->get()->result_array();
 
-            $this->db->select('products.*, product_names.product_name, CONCAT(users.first_name, " ", users.last_name) as sold_by_name', false);
-            $this->db->from('products');
-            $this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'left');
-            $this->db->join('users', 'users.user_id = products.sold_by', 'left');
-            $this->db->where('products.sold', 1);
-            $this->db->where('products.campus_id', $campus);
-            $this->db->where('products.sold_date', $date);
-            $this->db->order_by('products.invoice_no', 'DESC');
-            $data['pos_sales'] = $this->db->get()->result_array();
-
-            $this->db->select('sum(products.sold_amount) as total');
-            $this->db->from('products');
-            $this->db->where('products.sold', 1);
-            $this->db->where('products.campus_id', $campus);
-            $this->db->where('products.sold_date', $date);
-            $data['pos_sales_sum'] = $this->db->get()->result_array();
+            $data['pos_sales'] = $this->get_pos_sales_by_closing($campus, $closed[0]['campus_closing_id']);
+            $data['pos_sales_sum'] = array(array('total' => $this->get_pos_sales_sum_by_closing($campus, $closed[0]['campus_closing_id'])));
 
             $this->db->select('*,loan_plan.id as id');
             $this->db->from('loan_plan');
@@ -525,22 +575,8 @@ class Closing extends CI_Controller {
             $this->db->where("sales.sale_time >= '$date 00:00:00' and sales.sale_time <= '$date 23:59:59' and sales.campus_id ='$campus'");
             $data['sales_sum'] = $this->db->get()->result_array();
 
-            $this->db->select('products.*, product_names.product_name, CONCAT(users.first_name, " ", users.last_name) as sold_by_name', false);
-            $this->db->from('products');
-            $this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'left');
-            $this->db->join('users', 'users.user_id = products.sold_by', 'left');
-            $this->db->where('products.sold', 1);
-            $this->db->where('products.campus_id', $campus);
-            $this->db->where('products.sold_date', $date);
-            $this->db->order_by('products.invoice_no', 'DESC');
-            $data['pos_sales'] = $this->db->get()->result_array();
-
-            $this->db->select('sum(products.sold_amount) as total');
-            $this->db->from('products');
-            $this->db->where('products.sold', 1);
-            $this->db->where('products.campus_id', $campus);
-            $this->db->where('products.sold_date', $date);
-            $data['pos_sales_sum'] = $this->db->get()->result_array();
+            $data['pos_sales'] = $this->get_pos_sales_rows($campus, $date, true);
+            $data['pos_sales_sum'] = array(array('total' => $this->get_pos_sales_sum($campus, $date, true)));
 
             $yesterday = date('Y-m-d', strtotime($date. ' - 1 days'));
             $sq = "select * from closing_perday where campus_id = '".$campus."' and for_month = '".date('m', strtotime($yesterday))."' and for_day = '".date('d', strtotime($yesterday))."'and for_year = '".date('Y', strtotime($yesterday))."'";
@@ -608,29 +644,15 @@ class Closing extends CI_Controller {
                 $data['sales_sum2'] = $this->db->get()->result_array();
                 $data['sales_sum'][0]['total'] = $data['sales_sum'][0]['total']+$data['sales_sum2'][0]['total'];
 
+                // Yesterday already closed — carry unstamped bookstore POS sales (sold after close / never included)
+                $data['pos_sales2'] = $this->get_pos_sales_rows($campus, $yesterday, true);
+                $data['pos_sales'] = array_merge($data['pos_sales'], $data['pos_sales2']);
+                $data['pos_sales_sum'][0]['total'] = (float)$data['pos_sales_sum'][0]['total']
+                    + $this->get_pos_sales_sum($campus, $yesterday, true);
+
             }
             else {
                 $final = array_merge($query, $query2);
-
-                // Yesterday never closed — carry bookstore POS sales into today
-                $this->db->select('products.*, product_names.product_name, CONCAT(users.first_name, " ", users.last_name) as sold_by_name', false);
-                $this->db->from('products');
-                $this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'left');
-                $this->db->join('users', 'users.user_id = products.sold_by', 'left');
-                $this->db->where('products.sold', 1);
-                $this->db->where('products.campus_id', $campus);
-                $this->db->where('products.sold_date', $yesterday);
-                $this->db->order_by('products.invoice_no', 'DESC');
-                $data['pos_sales2'] = $this->db->get()->result_array();
-                $data['pos_sales'] = array_merge($data['pos_sales'], $data['pos_sales2']);
-
-                $this->db->select('sum(products.sold_amount) as total');
-                $this->db->from('products');
-                $this->db->where('products.sold', 1);
-                $this->db->where('products.campus_id', $campus);
-                $this->db->where('products.sold_date', $yesterday);
-                $data['pos_sales_sum2'] = $this->db->get()->result_array();
-                $data['pos_sales_sum'][0]['total'] = (float)@$data['pos_sales_sum'][0]['total'] + (float)@$data['pos_sales_sum2'][0]['total'];
             }
 
             $this->db->select('*,loan_plan.id as id,loans.id as loan_id');
@@ -772,6 +794,26 @@ class Closing extends CI_Controller {
         $this->db->set('closing_id',$closingid->closing_id);
         $this->db->where_in('id',@explode(',',$sale_ids));
         $this->db->update('asset_sales');
+
+        // Stamp bookstore POS units included in this closing (today + yesterday orphans if yesterday was closed)
+        $this->ensure_products_closing_id_column();
+        $yesterday = date('Y-m-d', strtotime($closingDate . ' -1 days'));
+        $yest_closed = $this->get_closing_for_date(
+            $cam_id,
+            date('d', strtotime($yesterday)),
+            date('m', strtotime($yesterday)),
+            date('Y', strtotime($yesterday))
+        );
+        $pos_dates = array($closingDate);
+        if (!empty($yest_closed)) {
+            $pos_dates[] = $yesterday;
+        }
+        $this->db->set('closing_id', $closingid->closing_id);
+        $this->db->where('sold', 1);
+        $this->db->where('campus_id', $cam_id);
+        $this->db->where_in('sold_date', $pos_dates);
+        $this->apply_pos_unclosed_where();
+        $this->db->update('products');
 
         $this->db->select('*');
         $this->db->where('closing_id = "'.$closingid->closing_id.'" and merged_challan is NOT NULL');
