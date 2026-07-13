@@ -404,7 +404,10 @@ class Posapi extends CI_Controller {
 			$this->_require_campus_access($cat['campus_id']);
 		}
 		$data = array();
-		if (isset($body['name'])) $data['name'] = trim($body['name']);
+		if (isset($body['name'])) {
+			$data['name'] = trim($body['name']);
+			$data['slug'] = strtolower(preg_replace('/[^a-zA-Z0-9]+/', '-', $data['name']));
+		}
 		if (isset($body['campus_id'])) {
 			$this->_require_campus_access((int)$body['campus_id']);
 			$data['campus_id'] = (int)$body['campus_id'];
@@ -726,7 +729,23 @@ class Posapi extends CI_Controller {
 		}
 
 		$bundle['items'] = $this->_bundle_items($bundle_id);
+		$bundle['image_url'] = $this->_pos_image_url(isset($bundle['image']) ? $bundle['image'] : '');
 		$this->_json(array('success' => true, 'data' => $bundle));
+	}
+
+	public function delete_bundle($bundle_id = 0)
+	{
+		$this->_require_perm('can_manage_bundles');
+		$bundle_id = (int)$bundle_id;
+		$bundle = $this->db->get_where('pos_bundles', array('bundle_id' => $bundle_id))->row_array();
+		if (!$bundle) {
+			$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		}
+		if (!empty($bundle['campus_id'])) {
+			$this->_require_campus_access($bundle['campus_id']);
+		}
+		$this->db->where('bundle_id', $bundle_id)->update('pos_bundles', array('status' => 0));
+		$this->_json(array('success' => true));
 	}
 
 	private function _bundle_items($bundle_id)
