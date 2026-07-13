@@ -219,7 +219,10 @@ class Staff_shifts extends CI_Controller {
             );
 
             if ($checkStaffEntry) {
-                $this->db->where('id', $checkStaffEntry['id'])->update('staff_timing', $payload);
+                $this->db
+                    ->where('staff_shift_id', $staff_shift_id)
+                    ->where('day', $day)
+                    ->update('staff_timing', $payload);
             } else {
                 $this->db->insert('staff_timing', $payload);
             }
