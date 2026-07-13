@@ -298,6 +298,87 @@ $myAccess = checkUserAccess();
                             <div class="portlet box grey-cascade">
                                 <div class="portlet-title">
                                     <div class="caption">
+                                        <i class="fa fa-list"></i>Bookstore POS Sales <label style="margin-left: 120px; font-size: large; font-weight: bold"><?php
+                                            echo 'Sale Amount  :  '.@$pos_sales_sum[0]['total'] ?></label>
+                                    </div>
+                                </div>
+                                <div class="portlet-body">
+                                    <div class="alert alert-success"></div>
+                                    <table class="table table-striped table-bordered table-hover">
+                                        <thead>
+                                        <tr>
+                                            <th class="hidden">
+                                                hidden
+                                            </th>
+                                            <th>
+                                                Invoice No
+                                            </th>
+                                            <th>
+                                                Product
+                                            </th>
+                                            <th>
+                                                Purchaser Name
+                                            </th>
+                                            <th>
+                                                Purchaser Phone
+                                            </th>
+                                            <th>
+                                                Sale Amount
+                                            </th>
+                                            <th>
+                                                Sold By
+                                            </th>
+                                            <th>
+                                                Sale Date
+                                            </th>
+                                        </tr>
+                                        </thead>
+                                        <tbody>
+                                        <?php
+                                        $i = 0;
+                                        foreach(@$pos_sales as $sale):
+                                            ?>
+                                            <tr class="odd gradeX">
+                                                <td class="hidden">
+                                                    <?php echo $i; ?>
+                                                </td>
+                                                <td>
+                                                    <?php echo $sale['invoice_no']?>
+                                                </td>
+                                                <td>
+                                                    <?php echo $sale['product_name']?>
+                                                </td>
+                                                <td>
+                                                    <?php echo $sale['purchaser_name']?>
+                                                </td>
+                                                <td>
+                                                    <?php echo $sale['purchaser_phone']?>
+                                                </td>
+                                                <td>
+                                                    <?php echo $sale['sold_amount']?>
+                                                </td>
+                                                <td>
+                                                    <?php echo $sale['sold_by_name']?>
+                                                </td>
+                                                <td>
+                                                    <?php echo $sale['sold_date']?>
+                                                </td>
+                                            </tr>
+                                            <?php
+                                            $i++;
+                                        endforeach;
+                                        ?>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <!-- END EXAMPLE TABLE PORTLET-->
+                        </div>
+                        <div class="col-md-12">
+                            <!-- BEGIN EXAMPLE TABLE PORTLET-->
+                            <div class="portlet box grey-cascade">
+                                <div class="portlet-title">
+                                    <div class="caption">
                                         <i class="fa fa-list"></i>Sale Details <label style="margin-left: 120px; font-size: large; font-weight: bold"><?php
                                             echo 'Sale Amount  :  '.$sales_sum[0]['total'] ?></label>
                                     </div>
@@ -461,7 +542,7 @@ $myAccess = checkUserAccess();
                         <input type="hidden"  value="<?php echo $saleids ?>" id="sale_ids" name="sale_ids" readonly>
                         <input type="hidden"  value="<?php echo $loanids ?>" id="loan_ids" name="loan_ids" readonly>
 
-                        Amount Receivable for closing :  <input type="text"  STYLE="text-align: center; margin-left: 20px; font-weight: bolder; font-size: large" value="<?php echo $am+$asset_sales_sum[0]['total'] ?>" id="receivable_amount" name="receivable_amount" readonly>
+                        Amount Receivable for closing :  <input type="text"  STYLE="text-align: center; margin-left: 20px; font-weight: bolder; font-size: large" value="<?php echo $am+$asset_sales_sum[0]['total']+@$pos_sales_sum[0]['total'] ?>" id="receivable_amount" name="receivable_amount" readonly>
                         <br />
                         <br />
                         <br />
@@ -484,7 +565,7 @@ $myAccess = checkUserAccess();
                 </div>
             </form>
             <?php if(@$myAccess[0]['dailyclosing'] == '1'  && @$closed[0]['close_type'] == '1'):  ?>
-                <a href="<?php echo site_url().'/closing/print_bank_challan/'.$stclosing.'/'.$campus_id.'/'.($am+$asset_sales_sum[0]['total']);?>" target="_blank" ><i class="btn btn-primary"></i> Bank Challan</a>
+                <a href="<?php echo site_url().'/closing/print_bank_challan/'.$stclosing.'/'.$campus_id.'/'.($am+$asset_sales_sum[0]['total']+@$pos_sales_sum[0]['total']);?>" target="_blank" ><i class="btn btn-primary"></i> Bank Challan</a>
             <?php endif; ?>
             <?php if (count($closed) > 0):
                 if ($closed[0]['checked_by'] != "1"):?>
