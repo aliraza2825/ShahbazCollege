@@ -1067,25 +1067,49 @@ class Posapi extends CI_Controller {
 			'reason' => null,
 		);
 
-		if (!$student_id) {
+		if (!$this->_can_claim_free($product_name_id, $student_id)) {
+			if ($student_id) {
+				$claim = $this->db->get_where('products', array(
+					'student_id' => $student_id,
+					'product_name_id' => $product_name_id,
+					'sold_amount' => 0
+				))->result_array();
+				if (count($claim) > 0) {
+					$out['reason'] = 'already_claimed';
+				}
+			}
 			return $out;
 		}
 
-		// Already claimed free once
+		$out['unit_price'] = 0;
+		$out['is_free'] = true;
+		$out['reason'] = 'free_rule';
+		return $out;
+	}
+
+	/**
+	 * Free rule = max 1 piece, one-time per student per product (not already sold free).
+	 */
+	private function _can_claim_free($product_name_id, $student_id)
+	{
+		$product_name_id = (int)$product_name_id;
+		$student_id = (int)$student_id;
+		if (!$product_name_id || !$student_id) {
+			return false;
+		}
+
 		$claim = $this->db->get_where('products', array(
 			'student_id' => $student_id,
 			'product_name_id' => $product_name_id,
 			'sold_amount' => 0
 		))->result_array();
-
 		if (count($claim) > 0) {
-			$out['reason'] = 'already_claimed';
-			return $out;
+			return false;
 		}
 
 		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
 		if (!$student || (int)$student['status'] !== 1) {
-			return $out;
+			return false;
 		}
 
 		$class_id = (int)$student['class_id'];
@@ -1096,12 +1120,22 @@ class Posapi extends CI_Controller {
 		$free_check = $this->db->get()->result_array();
 
 		if (count($free_check) > 0 && $student['registration_date'] >= $free_check[0]['student_admission_date']) {
-			$out['unit_price'] = 0;
-			$out['is_free'] = true;
-			$out['reason'] = 'free_rule';
+			return true;
 		}
+		return false;
+	}
 
-		return $out;
+	/**
+	 * Consume at most 1 free unit for this product within the current cart quote.
+	 */
+	private function _take_free_unit($product_name_id, $student_id, &$claimed)
+	{
+		$product_name_id = (int)$product_name_id;
+		if (!$product_name_id) return 0;
+		if (!empty($claimed[$product_name_id])) return 0;
+		if (!$this->_can_claim_free($product_name_id, $student_id)) return 0;
+		$claimed[$product_name_id] = true;
+		return 1;
 	}
 
 	/**
@@ -1110,113 +1144,15 @@ class Posapi extends CI_Controller {
 	public function quote()
 	{
 		$body = $this->_body();
-		$student_id = (int)(isset($body['student_id']) ? $body['student_id'] : 0);
-		$lines = isset($body['lines']) && is_array($body['lines']) ? $body['lines'] : array();
-		$quoted = array();
-		$subtotal = 0;
-
-		foreach ($lines as $line) {
-			$type = isset($line['type']) ? $line['type'] : 'item';
-			$qty = isset($line['quantity']) ? max(1, (int)$line['quantity']) : 1;
-
-			if ($type === 'bundle') {
-				$bundle_id = (int)$line['ref_id'];
-				$bundle = $this->db->get_where('pos_bundles', array('bundle_id' => $bundle_id, 'status' => 1))->row_array();
-				if (!$bundle) continue;
-
-				$items = $this->_bundle_items($bundle_id);
-				$bundle_price = (float)$bundle['price'];
-				$free_parts = 0;
-				$paid_parts = 0;
-				$part_details = array();
-
-				// If bundle has fixed price, still mark free constituent items for stock/claim tracking
-				foreach ($items as $bi) {
-					$pid = (int)$bi['product_name_id'];
-					$bq = max(1, (int)$bi['quantity']) * $qty;
-					$this->db->limit(1);
-					$p = $this->db->get_where('products', array(
-						'product_name_id' => $pid,
-						'saleable' => 1,
-						'sold' => 0,
-						'consume' => 0,
-						'status' => 1,
-					))->row_array();
-					$base = $p ? (float)$p['sale_amount'] : 0;
-					$price_info = $this->_resolve_price($pid, $base, $student_id);
-					$part_details[] = array(
-						'product_name_id' => $pid,
-						'product_name' => $bi['product_name'],
-						'quantity' => $bq,
-						'is_free' => $price_info['is_free'],
-						'unit_price' => $price_info['unit_price'],
-					);
-					if ($price_info['is_free']) {
-						$free_parts += $base * $bq;
-					} else {
-						$paid_parts += $base * $bq;
-					}
-				}
-
-				// Discount free item value from bundle price (never below 0)
-				$line_total = max(0, $bundle_price * $qty - $free_parts);
-				$unit = $qty > 0 ? $line_total / $qty : 0;
-
-				$quoted[] = array(
-					'type' => 'bundle',
-					'ref_id' => $bundle_id,
-					'name' => $bundle['name'],
-					'quantity' => $qty,
-					'unit_price' => round($unit, 2),
-					'line_total' => round($line_total, 2),
-					'is_free' => $line_total <= 0,
-					'parts' => $part_details,
-					'campus_id' => isset($line['campus_id']) ? (int)$line['campus_id'] : null,
-					'room_id' => isset($line['room_id']) ? (int)$line['room_id'] : null,
-					'subroom_id' => isset($line['subroom_id']) ? (int)$line['subroom_id'] : null,
-				);
-				$subtotal += $line_total;
-			} else {
-				$product_name_id = (int)$line['ref_id'];
-				$pn = $this->db->get_where('product_names', array('product_name_id' => $product_name_id))->row_array();
-				$this->db->limit(1);
-				$where = array(
-					'product_name_id' => $product_name_id,
-					'saleable' => 1,
-					'sold' => 0,
-					'consume' => 0,
-					'status' => 1,
-				);
-				if (!empty($line['campus_id'])) $where['campus_id'] = (int)$line['campus_id'];
-				$p = $this->db->get_where('products', $where)->row_array();
-				$base = $p ? (float)$p['sale_amount'] : 0;
-				$price_info = $this->_resolve_price($product_name_id, $base, $student_id);
-				$line_total = $price_info['unit_price'] * $qty;
-
-				$quoted[] = array(
-					'type' => 'item',
-					'ref_id' => $product_name_id,
-					'name' => $pn ? $pn['product_name'] : 'Item',
-					'quantity' => $qty,
-					'unit_price' => $price_info['unit_price'],
-					'line_total' => $line_total,
-					'is_free' => $price_info['is_free'],
-					'campus_id' => isset($line['campus_id']) ? (int)$line['campus_id'] : ($p ? (int)$p['campus_id'] : null),
-					'room_id' => isset($line['room_id']) ? (int)$line['room_id'] : ($p ? (int)$p['room_id'] : null),
-					'subroom_id' => isset($line['subroom_id']) ? (int)$line['subroom_id'] : ($p ? (int)$p['subroom_id'] : null),
-				);
-				$subtotal += $line_total;
-			}
-		}
-
+		$quoted = $this->_quote_internal($body);
 		$this->_json(array(
 			'success' => true,
 			'data' => array(
-				'lines' => $quoted,
-				'subtotal' => round($subtotal, 2),
+				'lines' => $quoted['lines'],
+				'subtotal' => $quoted['subtotal'],
 				'tax' => 0,
 				'service' => 0,
-				'total' => round($subtotal, 2),
+				'total' => $quoted['total'],
 			)
 		));
 	}
@@ -1301,17 +1237,20 @@ class Posapi extends CI_Controller {
 				if ($line['type'] === 'bundle') {
 					$parts = isset($line['parts']) ? $line['parts'] : $this->_expand_bundle_parts($line['ref_id'], $line['quantity'], $student_id);
 					foreach ($parts as $part) {
+						$base = isset($part['base_price']) ? (float)$part['base_price'] : (float)$part['unit_price'];
+						$free_u = isset($part['free_units']) ? (int)$part['free_units'] : 0;
 						$ok = $this->_mark_sold_units(
 							$part['product_name_id'],
 							$part['quantity'],
-							$part['unit_price'],
+							$base,
 							$invoice_no,
 							$student_id,
 							$purchaser_name,
 							$purchaser_phone,
 							isset($line['campus_id']) ? $line['campus_id'] : null,
 							isset($line['room_id']) ? $line['room_id'] : null,
-							isset($line['subroom_id']) ? $line['subroom_id'] : null
+							isset($line['subroom_id']) ? $line['subroom_id'] : null,
+							$free_u
 						);
 						if (!$ok) {
 							$this->db->trans_rollback();
@@ -1319,17 +1258,20 @@ class Posapi extends CI_Controller {
 						}
 					}
 				} else {
+					$base = isset($line['base_price']) ? (float)$line['base_price'] : (float)$line['unit_price'];
+					$free_u = isset($line['free_units']) ? (int)$line['free_units'] : (!empty($line['is_free']) ? (int)$line['quantity'] : 0);
 					$ok = $this->_mark_sold_units(
 						$line['ref_id'],
 						$line['quantity'],
-						$line['unit_price'],
+						$base,
 						$invoice_no,
 						$student_id,
 						$purchaser_name,
 						$purchaser_phone,
 						$line['campus_id'],
 						$line['room_id'],
-						$line['subroom_id']
+						$line['subroom_id'],
+						$free_u
 					);
 					if (!$ok) {
 						$this->db->trans_rollback();
@@ -1361,10 +1303,11 @@ class Posapi extends CI_Controller {
 
 	private function _quote_internal($body)
 	{
-		$student_id = (int)$body['student_id'];
-		$lines = $body['lines'];
+		$student_id = (int)(isset($body['student_id']) ? $body['student_id'] : 0);
+		$lines = isset($body['lines']) && is_array($body['lines']) ? $body['lines'] : array();
 		$quoted = array();
 		$subtotal = 0;
+		$claimed = array(); // product_name_id => free already used in this cart
 
 		foreach ($lines as $line) {
 			$type = isset($line['type']) ? $line['type'] : 'item';
@@ -1376,12 +1319,13 @@ class Posapi extends CI_Controller {
 				if (!$bundle) continue;
 				$items = $this->_bundle_items($bundle_id);
 				$bundle_price = (float)$bundle['price'];
-				$free_parts = 0;
+				$free_discount = 0;
 				$part_details = array();
 
 				foreach ($items as $bi) {
 					$pid = (int)$bi['product_name_id'];
-					$bq = max(1, (int)$bi['quantity']) * $qty;
+					$per = max(1, (int)$bi['quantity']);
+					$total_units = $per * $qty;
 					$this->db->limit(1);
 					$p = $this->db->get_where('products', array(
 						'product_name_id' => $pid,
@@ -1391,20 +1335,24 @@ class Posapi extends CI_Controller {
 						'status' => 1,
 					))->row_array();
 					$base = $p ? (float)$p['sale_amount'] : 0;
-					$price_info = $this->_resolve_price($pid, $base, $student_id);
+					$free_units = $this->_take_free_unit($pid, $student_id, $claimed);
+					$paid_units = max(0, $total_units - $free_units);
+					$free_discount += $base * $free_units;
+
 					$part_details[] = array(
 						'product_name_id' => $pid,
-						'product_name' => $bi['product_name'],
-						'quantity' => $bq,
-						'is_free' => $price_info['is_free'],
-						'unit_price' => $price_info['unit_price'],
+						'product_name' => isset($bi['product_name']) ? $bi['product_name'] : '',
+						'quantity' => $total_units,
+						'free_units' => $free_units,
+						'paid_units' => $paid_units,
+						'base_price' => $base,
+						'is_free' => ($free_units > 0 && $paid_units === 0),
+						'unit_price' => $base,
 					);
-					if ($price_info['is_free']) {
-						$free_parts += $base * $bq;
-					}
 				}
 
-				$line_total = max(0, $bundle_price * $qty - $free_parts);
+				// Discount only 1 free piece value per eligible product — not × bundle qty
+				$line_total = max(0, $bundle_price * $qty - $free_discount);
 				$quoted[] = array(
 					'type' => 'bundle',
 					'ref_id' => $bundle_id,
@@ -1412,7 +1360,8 @@ class Posapi extends CI_Controller {
 					'quantity' => $qty,
 					'unit_price' => $qty ? round($line_total / $qty, 2) : 0,
 					'line_total' => round($line_total, 2),
-					'is_free' => $line_total <= 0,
+					'is_free' => ($line_total <= 0),
+					'free_units' => $free_discount > 0 ? 1 : 0,
 					'parts' => $part_details,
 					'campus_id' => isset($line['campus_id']) ? (int)$line['campus_id'] : null,
 					'room_id' => isset($line['room_id']) ? (int)$line['room_id'] : null,
@@ -1433,16 +1382,22 @@ class Posapi extends CI_Controller {
 				if (!empty($line['campus_id'])) $where['campus_id'] = (int)$line['campus_id'];
 				$p = $this->db->get_where('products', $where)->row_array();
 				$base = $p ? (float)$p['sale_amount'] : 0;
-				$price_info = $this->_resolve_price($product_name_id, $base, $student_id);
-				$line_total = $price_info['unit_price'] * $qty;
+				$free_units = $this->_take_free_unit($product_name_id, $student_id, $claimed);
+				$paid_units = max(0, $qty - $free_units);
+				$line_total = $paid_units * $base;
+				$unit = $qty > 0 ? round($line_total / $qty, 2) : $base;
+
 				$quoted[] = array(
 					'type' => 'item',
 					'ref_id' => $product_name_id,
 					'name' => $pn ? $pn['product_name'] : 'Item',
 					'quantity' => $qty,
-					'unit_price' => $price_info['unit_price'],
-					'line_total' => $line_total,
-					'is_free' => $price_info['is_free'],
+					'unit_price' => $unit,
+					'base_price' => $base,
+					'line_total' => round($line_total, 2),
+					'is_free' => ($free_units > 0 && $paid_units === 0),
+					'free_units' => $free_units,
+					'paid_units' => $paid_units,
 					'campus_id' => isset($line['campus_id']) ? (int)$line['campus_id'] : ($p ? (int)$p['campus_id'] : null),
 					'room_id' => isset($line['room_id']) ? (int)$line['room_id'] : ($p ? (int)$p['room_id'] : null),
 					'subroom_id' => isset($line['subroom_id']) ? (int)$line['subroom_id'] : ($p ? (int)$p['subroom_id'] : null),
@@ -1460,11 +1415,13 @@ class Posapi extends CI_Controller {
 
 	private function _expand_bundle_parts($bundle_id, $qty, $student_id)
 	{
+		$claimed = array();
 		$items = $this->_bundle_items($bundle_id);
 		$parts = array();
 		foreach ($items as $bi) {
 			$pid = (int)$bi['product_name_id'];
-			$bq = max(1, (int)$bi['quantity']) * $qty;
+			$per = max(1, (int)$bi['quantity']);
+			$total_units = $per * $qty;
 			$this->db->limit(1);
 			$p = $this->db->get_where('products', array(
 				'product_name_id' => $pid,
@@ -1474,18 +1431,21 @@ class Posapi extends CI_Controller {
 				'status' => 1,
 			))->row_array();
 			$base = $p ? (float)$p['sale_amount'] : 0;
-			$price_info = $this->_resolve_price($pid, $base, $student_id);
+			$free_units = $this->_take_free_unit($pid, $student_id, $claimed);
 			$parts[] = array(
 				'product_name_id' => $pid,
-				'quantity' => $bq,
-				'unit_price' => $price_info['unit_price'],
+				'quantity' => $total_units,
+				'free_units' => $free_units,
+				'unit_price' => $base,
+				'base_price' => $base,
 			);
 		}
 		return $parts;
 	}
 
-	private function _mark_sold_units($product_name_id, $quantity, $unit_price, $invoice_no, $student_id, $purchaser_name, $purchaser_phone, $campus_id = null, $room_id = null, $subroom_id = null)
+	private function _mark_sold_units($product_name_id, $quantity, $unit_price, $invoice_no, $student_id, $purchaser_name, $purchaser_phone, $campus_id = null, $room_id = null, $subroom_id = null, $free_units = 0)
 	{
+		$free_units = max(0, (int)$free_units);
 		for ($i = 0; $i < $quantity; $i++) {
 			$this->db->limit(1);
 			$where = array(
@@ -1504,10 +1464,12 @@ class Posapi extends CI_Controller {
 				return false;
 			}
 
+			$sold_amount = ($i < $free_units) ? 0 : $unit_price;
+
 			$this->db->where('product_id', $row['product_id'])->update('products', array(
 				'sold' => 1,
 				'sold_date' => date('Y-m-d'),
-				'sold_amount' => $unit_price,
+				'sold_amount' => $sold_amount,
 				'invoice_no' => $invoice_no,
 				'sold_by' => $this->current_user['user_id'],
 				'student_id' => $student_id ? $student_id : 0,
