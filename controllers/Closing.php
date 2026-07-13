@@ -296,7 +296,7 @@ class Closing extends CI_Controller {
                 $this->db->select('sum(asset_sales.sale_amount) as total');
                 $this->db->from('asset_sales');
                 $this->db->join('products','products.product_id = asset_sales.product_id','inner');
-                $this->db->where("asset_sales.sold_date >= '$yesterday 00:00:00' and asset_sales.sold_date <= '$yesterday 23:59:59' and products.campus_id = '".$closing['campus_id']."' and closing_id IS NULL");
+                $this->db->where("asset_sales.sold_date >= '$yesterday 00:00:00' and asset_sales.sold_date <= '$yesterday 23:59:59' and products.campus_id = '".$closing['campus_id']."' and asset_sales.closing_id IS NULL");
                 $asset_sales_sum_yesterday = $this->db->get()->result_array();
 
                 $asset_sale_amount = $asset_sales_sum_today[0]['total'] + $asset_sales_sum_yesterday[0]['total'];
@@ -489,13 +489,13 @@ class Closing extends CI_Controller {
             $this->db->from('asset_sales');
             $this->db->join('products','products.sale_id=asset_sales.id','inner');
             $this->db->join('product_names','product_names.product_name_id  = products.product_name_id','left');
-            $this->db->where('closing_id = "'.$closed[0]['campus_closing_id'].'" and products.campus_id ="'.$campus.'"');
+            $this->db->where('asset_sales.closing_id = "'.$closed[0]['campus_closing_id'].'" and products.campus_id ="'.$campus.'"');
             $data['asset_sales'] = $this->db->get()->result_array();
 
             $this->db->select('sum(asset_sales.sale_amount)  as total');
             $this->db->from('asset_sales');
             $this->db->join('products','products.sale_id=asset_sales.id','inner');
-            $this->db->where('closing_id = "'.$closed[0]['campus_closing_id'].'" and products.campus_id = "'.$campus.'"');
+            $this->db->where('asset_sales.closing_id = "'.$closed[0]['campus_closing_id'].'" and products.campus_id = "'.$campus.'"');
             $data['asset_sales_sum'] = $this->db->get()->result_array();
 
             $this->db->select('*');
