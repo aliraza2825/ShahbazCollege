@@ -183,6 +183,57 @@ class Inventoryapi extends CI_Controller {
 		return rtrim(base_url(), '/') . '/inventory_images/' . rawurlencode($file);
 	}
 
+	/**
+	 * Build a products INSERT row matching legacy CI schema (many NOT NULL cols, no created_by).
+	 */
+	private function _product_insert_row($opts)
+	{
+		$name = '';
+		if ($this->current_user) {
+			$name = trim($this->current_user['first_name'] . ' ' . $this->current_user['last_name']);
+		}
+		$saleable = !empty($opts['saleable']) ? 1 : 0;
+		$sale_amount = isset($opts['sale_amount']) ? $opts['sale_amount'] : ($saleable ? 0 : '');
+		$qr = isset($opts['qr_code']) ? trim((string)$opts['qr_code']) : '';
+		if ($qr !== '' && strpos($qr, 'inv_qr-') !== 0) $qr = 'inv_qr-' . $qr;
+
+		return array(
+			'campus_id' => (int)$opts['campus_id'],
+			'room_id' => !empty($opts['room_id']) ? (int)$opts['room_id'] : 0,
+			'subroom_id' => !empty($opts['subroom_id']) ? (int)$opts['subroom_id'] : 0,
+			'product_name_id' => (int)$opts['product_name_id'],
+			'product_image' => isset($opts['product_image']) ? (string)$opts['product_image'] : '',
+			'online_product_image' => '',
+			'purchase_slip' => '',
+			'online_purchase_slip' => '',
+			'product_quantity' => 1,
+			'remaining_quantity' => 1,
+			'qr_code' => $qr !== '' ? $qr : null,
+			'estimated_price' => isset($opts['estimated_price']) ? (int)$opts['estimated_price'] : 0,
+			'product_guarantee' => 0,
+			'product_guarantee_start_date' => '0000-00-00',
+			'product_guarantee_end_date' => '0000-00-00',
+			'remarks' => isset($opts['remarks']) ? (string)$opts['remarks'] : '',
+			'add_by' => $name !== '' ? $name : 'POS',
+			'last_edit' => $name !== '' ? $name : 'POS',
+			'clear_by' => '',
+			'status' => 1,
+			'consumeable' => 0,
+			'consume' => 0,
+			'consume_reason' => '',
+			'saleable' => $saleable,
+			'sale_amount' => $sale_amount === '' || $sale_amount === null ? null : (int)round((float)$sale_amount),
+			'expire' => 0,
+			'returnable' => 0,
+			'sold_amount' => '',
+			'sold' => 0,
+			'purchase_no' => isset($opts['purchase_no']) ? (string)$opts['purchase_no'] : '',
+			'user_id' => 0,
+			'reponsilble_user_id' => 0,
+			'upload_image' => 0,
+		);
+	}
+
 	private function _purchase_no()
 	{
 		$query = 'SELECT CAST(SUBSTRING(purchase_no,4,LENGTH(purchase_no)) AS UNSIGNED) as n FROM purchase_requests ORDER BY n DESC LIMIT 1';
@@ -292,23 +343,17 @@ class Inventoryapi extends CI_Controller {
 		}
 		$this->_assert_campus_access($campus_id);
 
-		if ($qr !== '' && strpos($qr, 'inv_qr-') !== 0) $qr = 'inv_qr-' . $qr;
-
 		for ($i = 0; $i < $qty; $i++) {
-			$this->db->insert('products', array(
+			$this->db->insert('products', $this->_product_insert_row(array(
 				'product_name_id' => $product_name_id,
 				'campus_id' => $campus_id,
-				'room_id' => $room_id ?: null,
-				'subroom_id' => $subroom_id ?: null,
+				'room_id' => $room_id,
+				'subroom_id' => $subroom_id,
 				'sale_amount' => $sale_amount,
 				'saleable' => $saleable,
-				'qr_code' => $qr !== '' ? $qr : null,
+				'qr_code' => $qr,
 				'product_image' => $image,
-				'sold' => 0,
-				'consume' => 0,
-				'status' => 1,
-				'created_by' => $this->current_user['user_id'],
-			));
+			)));
 		}
 		$this->_json(array('success' => true, 'message' => 'Stock added', 'quantity' => $qty));
 	}
@@ -583,6 +628,155 @@ class Inventoryapi extends CI_Controller {
 		$this->_json(array('success' => true));
 	}
 
+	/**
+	 * Full PR journey: lines + quotes + payments + computed step states.
+	 * GET purchase_journey?purchase_no=PR-1
+	 */
+	public function purchase_journey()
+	{
+		$purchase_no = trim((string)$this->input->get('purchase_no'));
+		if ($purchase_no === '') {
+			$this->_json(array('success' => false, 'message' => 'purchase_no required'), 422);
+		}
+
+		$this->db->select('purchase_requests.*, campuses.campus_name, product_names.product_name, rooms.room_name, subrooms.subroom_name, vendors.name AS vendor_name', false);
+		$this->db->from('purchase_requests');
+		$this->db->join('campuses', 'campuses.campus_id = purchase_requests.campus_id', 'left');
+		$this->db->join('product_names', 'product_names.product_name_id = purchase_requests.product_name_id', 'left');
+		$this->db->join('rooms', 'rooms.room_id = purchase_requests.room_id', 'left');
+		$this->db->join('subrooms', 'subrooms.subroom_id = purchase_requests.subroom_id', 'left');
+		$this->db->join('vendors', 'vendors.id = purchase_requests.purchase_from', 'left');
+		$this->db->where('purchase_requests.purchase_no', $purchase_no);
+		$this->_apply_campus_filter('purchase_requests.campus_id', 0, true);
+		$this->db->order_by('purchase_requests.purchase_request_id', 'ASC');
+		$lines = $this->db->get()->result_array();
+		if (!count($lines)) {
+			$this->_json(array('success' => false, 'message' => 'Purchase request not found'), 404);
+		}
+
+		$this->db->select('purchase_request_prices.*, purchase_request_prices.purchase_request_price_id AS id, purchase_request_prices.approve AS approved, vendors.name AS vendor_name, vendors.shop_name AS company_name, product_names.product_name, purchase_requests.product_quantity, purchase_requests.campus_id', false);
+		$this->db->from('purchase_request_prices');
+		$this->db->join('vendors', 'vendors.id = purchase_request_prices.vendor_id', 'left');
+		$this->db->join('purchase_requests', 'purchase_requests.purchase_request_id = purchase_request_prices.purchase_request_id', 'left');
+		$this->db->join('product_names', 'product_names.product_name_id = purchase_requests.product_name_id', 'left');
+		$this->db->where('purchase_requests.purchase_no', $purchase_no);
+		$quotes = $this->db->get()->result_array();
+
+		$payments = array();
+		if ($this->db->table_exists('payment_aggrements')) {
+			$payments = $this->db->get_where('payment_aggrements', array('purchase_no' => $purchase_no))->result_array();
+		}
+
+		$all_approved = true;
+		$all_vendor = true;
+		$all_final = true;
+		$all_purchased = true;
+		$all_gate = true;
+		$all_grn = true;
+		foreach ($lines as $line) {
+			if ((int)$line['status'] !== 1) $all_approved = false;
+			if (empty($line['purchase_from'])) $all_vendor = false;
+			if ((int)$line['final'] !== 1) $all_final = false;
+			if ((int)$line['purchased'] !== 1) $all_purchased = false;
+			if ((int)$line['gate_approval'] !== 1) $all_gate = false;
+			if ((int)$line['approval'] !== 1) $all_grn = false;
+		}
+		$has_quotes = count($quotes) > 0;
+		$agreement_done = $all_final && $all_purchased;
+
+		$defs = array(
+			array(
+				'id' => 'created',
+				'pending_label' => 'Purchase Request',
+				'done_label' => 'Purchase Request Added',
+				'hint' => 'Request created with product lines',
+				'done' => true,
+			),
+			array(
+				'id' => 'approve',
+				'pending_label' => 'Approve Purchase Request',
+				'done_label' => 'Purchase Request Approved',
+				'hint' => 'Approve all lines to continue',
+				'done' => $all_approved,
+			),
+			array(
+				'id' => 'quote_add',
+				'pending_label' => 'Add Quotation',
+				'done_label' => 'Quotations Added',
+				'hint' => 'Add vendor prices for each line',
+				'done' => $has_quotes,
+			),
+			array(
+				'id' => 'quote_select',
+				'pending_label' => 'Select Quotation',
+				'done_label' => 'Quotation Selected',
+				'hint' => 'Approve the best vendor quote per line',
+				'done' => $all_vendor,
+			),
+			array(
+				'id' => 'payment',
+				'pending_label' => 'Finalise & Payment Agreement',
+				'done_label' => 'Payment Agreement Added',
+				'hint' => 'Finalise quotation then create payment installments',
+				'done' => $agreement_done,
+			),
+			array(
+				'id' => 'gate',
+				'pending_label' => 'Gate Approval',
+				'done_label' => 'Gate Approved',
+				'hint' => 'Approve when goods arrive at campus gate',
+				'done' => $all_gate,
+			),
+			array(
+				'id' => 'grn',
+				'pending_label' => 'GRN / Enter Stock',
+				'done_label' => 'In Inventory',
+				'hint' => 'Enter stock into campus / room / subroom',
+				'done' => $all_grn,
+			),
+		);
+
+		$steps = array();
+		$current = null;
+		$found_current = false;
+		foreach ($defs as $def) {
+			$state = 'upcoming';
+			if ($def['done']) {
+				$state = 'done';
+			} elseif (!$found_current) {
+				$state = 'current';
+				$current = $def['id'];
+				$found_current = true;
+			}
+			$steps[] = array(
+				'id' => $def['id'],
+				'pending_label' => $def['pending_label'],
+				'done_label' => $def['done_label'],
+				'label' => $def['done'] ? $def['done_label'] : $def['pending_label'],
+				'state' => $state,
+				'hint' => $def['hint'],
+			);
+		}
+		if (!$found_current) {
+			$current = 'complete';
+		}
+
+		$title = isset($lines[0]['title']) ? $lines[0]['title'] : $purchase_no;
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'purchase_no' => $purchase_no,
+				'title' => $title,
+				'lines' => $lines,
+				'quotes' => $quotes,
+				'payments' => $payments,
+				'steps' => $steps,
+				'current_step' => $current,
+				'complete' => $all_grn,
+			),
+		));
+	}
+
 	// ─── Quotes ─────────────────────────────────────────────
 
 	public function quotations()
@@ -774,24 +968,68 @@ class Inventoryapi extends CI_Controller {
 	{
 		$body = $this->_body();
 		$id = (int)(isset($body['id']) ? $body['id'] : (isset($body['payment_aggrement_id']) ? $body['payment_aggrement_id'] : 0));
+		// mode: pay (default) | waive — waive = vendor discount / forgiven, no cash out
+		$mode = isset($body['mode']) ? trim((string)$body['mode']) : 'pay';
+		$note = isset($body['note']) ? trim((string)$body['note']) : '';
 		if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
 		$row = $this->db->get_where('payment_aggrements', array('payment_aggrement_id' => $id))->row_array();
 		if (!$row) {
-			// fallback if PK is simply id
 			$row = $this->db->get_where('payment_aggrements', array('id' => $id))->row_array();
 		}
 		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
-		if (!empty($row['paid'])) $this->_json(array('success' => false, 'message' => 'Already paid'), 409);
+		if (!empty($row['paid'])) $this->_json(array('success' => false, 'message' => 'Already settled'), 409);
 
 		$pk_col = isset($row['payment_aggrement_id']) ? 'payment_aggrement_id' : 'id';
 		$pk = isset($row['payment_aggrement_id']) ? (int)$row['payment_aggrement_id'] : (int)$row['id'];
-		$this->db->where($pk_col, $pk)->update('payment_aggrements', array(
-			'paid' => 1,
-			'paid_date' => date('Y-m-d'),
-			'paid_by' => $this->current_user['user_id'],
-		));
-		// Full petty-cash / bank expense side-effects remain in CI Inventory::payment_paid
-		$this->_json(array('success' => true, 'message' => 'Marked paid'));
+
+		$upd = array('paid' => 1);
+		if ($this->db->field_exists('paid_date', 'payment_aggrements')) {
+			$upd['paid_date'] = date('Y-m-d');
+		}
+		if ($this->db->field_exists('paid_by', 'payment_aggrements')) {
+			$upd['paid_by'] = $this->current_user['user_id'];
+		}
+
+		if ($mode === 'waive') {
+			$comment = isset($row['comment']) ? trim((string)$row['comment']) : '';
+			$waive_note = $note !== '' ? $note : 'Vendor discount / waived — no cash paid';
+			$upd['comment'] = $comment !== '' ? ($comment . ' | ' . $waive_note) : $waive_note;
+			if ($this->db->field_exists('paid_type', 'payment_aggrements')) {
+				$upd['paid_type'] = 'waive';
+			}
+			$this->db->where($pk_col, $pk)->update('payment_aggrements', $upd);
+			$this->_json(array(
+				'success' => true,
+				'message' => 'Installment waived (no petty cash / bank cut)',
+				'mode' => 'waive',
+			));
+		}
+
+		// mode=pay: mark settled. Petty-cash / expense side-effects stay in CI Inventory::payment_paid for now.
+		if ($this->db->field_exists('paid_type', 'payment_aggrements')) {
+			$upd['paid_type'] = 'cash';
+		}
+		$this->db->where($pk_col, $pk)->update('payment_aggrements', $upd);
+		$this->_json(array('success' => true, 'message' => 'Marked paid', 'mode' => 'pay'));
+	}
+
+	/** Reduce / correct installment amount before pay (e.g. partial vendor discount). */
+	public function update_installment()
+	{
+		$body = $this->_body();
+		$id = (int)(isset($body['id']) ? $body['id'] : (isset($body['payment_aggrement_id']) ? $body['payment_aggrement_id'] : 0));
+		$amount = isset($body['amount']) ? (float)$body['amount'] : -1;
+		if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
+		if ($amount < 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
+
+		$row = $this->db->get_where('payment_aggrements', array('payment_aggrement_id' => $id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		if (!empty($row['paid'])) $this->_json(array('success' => false, 'message' => 'Already settled — cannot edit'), 409);
+
+		$upd = array('amount' => (int)round($amount));
+		if (isset($body['comment'])) $upd['comment'] = trim((string)$body['comment']);
+		$this->db->where('payment_aggrement_id', $id)->update('payment_aggrements', $upd);
+		$this->_json(array('success' => true, 'message' => 'Installment updated', 'amount' => $upd['amount']));
 	}
 
 	// ─── Gate / GRN ─────────────────────────────────────────
@@ -858,26 +1096,22 @@ class Inventoryapi extends CI_Controller {
 			$sale_amount = isset($body['sale_amount']) ? (float)$body['sale_amount'] : (float)(isset($pr['purchase_price']) ? $pr['purchase_price'] : 0);
 			$saleable = !empty($body['saleable']) ? 1 : 0;
 			$qr = isset($body['qr_code']) ? trim($body['qr_code']) : '';
-			if ($qr !== '' && strpos($qr, 'inv_qr-') !== 0) $qr = 'inv_qr-' . $qr;
 			$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : (int)$pr['campus_id'];
 			$room_id = isset($body['room_id']) && (int)$body['room_id'] > 0 ? (int)$body['room_id'] : (int)$pr['room_id'];
 			$subroom_id = isset($body['subroom_id']) ? (int)$body['subroom_id'] : (int)$pr['subroom_id'];
 
 			for ($i = 0; $i < $qty; $i++) {
-				$this->db->insert('products', array(
+				$this->db->insert('products', $this->_product_insert_row(array(
 					'product_name_id' => $pr['product_name_id'],
 					'campus_id' => $campus_id,
-					'room_id' => $room_id ?: null,
-					'subroom_id' => $subroom_id ?: null,
+					'room_id' => $room_id,
+					'subroom_id' => $subroom_id,
 					'sale_amount' => $sale_amount,
 					'saleable' => $saleable,
-					'qr_code' => $qr !== '' ? $qr : null,
-					'sold' => 0,
-					'consume' => 0,
-					'status' => 1,
-					'purchase_request_id' => $pr_id,
-					'created_by' => $this->current_user['user_id'],
-				));
+					'qr_code' => $qr,
+					'purchase_no' => isset($pr['purchase_no']) ? $pr['purchase_no'] : '',
+					'estimated_price' => (int)round($sale_amount),
+				)));
 			}
 			$this->db->where('purchase_request_id', $pr_id)->update('purchase_requests', array('approval' => 1));
 			$total_qty += $qty;
