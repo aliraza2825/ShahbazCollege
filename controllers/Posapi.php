@@ -139,6 +139,20 @@ class Posapi extends CI_Controller {
 		$campus_ids = array_values(array_unique($campus_ids));
 
 		$has_pos = $is_admin || ($row && !empty($row['pos']));
+		$has_inventory = $is_admin || ($row && !empty($row['inventory']));
+
+		$inventory_campus_ids = array();
+		if ($is_admin) {
+			$inventory_campus_ids = $campus_ids;
+		} elseif ($row && !empty($row['inventory_campuses'])) {
+			foreach (explode(',', $row['inventory_campuses']) as $id) {
+				$id = (int)trim($id);
+				if ($id > 0) $inventory_campus_ids[] = $id;
+			}
+		} elseif ($has_inventory && $user && !empty($user['campus_id'])) {
+			$inventory_campus_ids[] = (int)$user['campus_id'];
+		}
+		$inventory_campus_ids = array_values(array_unique($inventory_campus_ids));
 
 		return array(
 			'is_admin' => $is_admin,
@@ -148,6 +162,8 @@ class Posapi extends CI_Controller {
 			'can_manage_bundles' => $is_admin || ($row && !empty($row['pos_manage_bundles'])),
 			'can_view_history' => $is_admin || ($row && !empty($row['pos_view_history'])),
 			'can_manage_access' => $is_admin, // always via CI /access
+			'can_inventory' => $has_inventory,
+			'inventory_campus_ids' => $inventory_campus_ids,
 		);
 	}
 
