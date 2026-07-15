@@ -916,6 +916,55 @@ class Posapi extends CI_Controller {
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
+	/**
+	 * Global item location search for POS (campus / room / qty).
+	 * Available units only; scoped to user's POS campuses (Admin = all).
+	 */
+	public function stock_search()
+	{
+		$q = trim((string)$this->input->get('q'));
+		if (strlen($q) < 2) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+
+		$perms = $this->_permissions();
+		$campus_id = (int)$this->input->get('campus_id');
+
+		$this->db->select('product_names.product_name_id, product_names.product_name,
+			COUNT(products.product_id) as stock,
+			products.campus_id, products.room_id, products.subroom_id,
+			MAX(campuses.campus_name) as campus_name,
+			MAX(rooms.room_name) as room_name,
+			MAX(subrooms.subroom_name) as subroom_name', false);
+		$this->db->from('products');
+		$this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'inner');
+		$this->db->join('campuses', 'campuses.campus_id = products.campus_id', 'left');
+		$this->db->join('rooms', 'rooms.room_id = products.room_id', 'left');
+		$this->db->join('subrooms', 'subrooms.subroom_id = products.subroom_id', 'left');
+		$this->db->where(array(
+			'products.status' => 1,
+			'products.sold' => 0,
+			'products.consume' => 0,
+		));
+		$this->db->like('product_names.product_name', $q);
+		if ($campus_id > 0) {
+			if (!$perms['is_admin'] && !in_array($campus_id, $perms['campus_ids'], true)) {
+				$this->_json(array('success' => false, 'message' => 'No access to this campus'), 403);
+			}
+			$this->db->where('products.campus_id', $campus_id);
+		} elseif (!$perms['is_admin']) {
+			if (!count($perms['campus_ids'])) {
+				$this->_json(array('success' => true, 'data' => array()));
+			}
+			$this->db->where_in('products.campus_id', $perms['campus_ids']);
+		}
+		$this->db->group_by(array('products.product_name_id', 'products.campus_id', 'products.room_id', 'products.subroom_id'));
+		$this->db->order_by('product_names.product_name', 'ASC');
+		$this->db->limit(500);
+		$rows = $this->db->get()->result_array();
+		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
 	public function campuses()
 	{
 		$perms = $this->_permissions();
