@@ -104,6 +104,7 @@ class Inventoryapi extends CI_Controller {
 			'gate_received_qty' => "ALTER TABLE `purchase_requests` ADD `gate_received_qty` INT(11) NOT NULL DEFAULT 0",
 			'grn_by' => "ALTER TABLE `purchase_requests` ADD `grn_by` VARCHAR(255) NULL DEFAULT NULL",
 			'grn_at' => "ALTER TABLE `purchase_requests` ADD `grn_at` DATETIME NULL DEFAULT NULL",
+			'project_id' => "ALTER TABLE `purchase_requests` ADD `project_id` INT(11) NULL DEFAULT NULL",
 		);
 		foreach ($pr_cols as $col => $sql) {
 			if (!$this->db->field_exists($col, 'purchase_requests')) {
@@ -1020,17 +1021,29 @@ class Inventoryapi extends CI_Controller {
 		$to = $this->input->get('to_date');
 		$final = $this->input->get('final');
 		$campus_id = (int)$this->input->get('campus_id');
+		$project_id = (int)$this->input->get('project_id');
 
-		$this->db->select('purchase_requests.*, campuses.campus_name, product_names.product_name, rooms.room_name, subrooms.subroom_name');
+		$this->_ensure_journey_audit_columns();
+		$select = 'purchase_requests.*, campuses.campus_name, product_names.product_name, rooms.room_name, subrooms.subroom_name';
+		if ($this->db->table_exists('construction_projects') && $this->db->field_exists('project_id', 'purchase_requests')) {
+			$select .= ', construction_projects.project_name';
+		}
+		$this->db->select($select, false);
 		$this->db->from('purchase_requests');
 		$this->db->join('campuses', 'campuses.campus_id = purchase_requests.campus_id', 'left');
 		$this->db->join('product_names', 'product_names.product_name_id = purchase_requests.product_name_id', 'left');
 		$this->db->join('rooms', 'rooms.room_id = purchase_requests.room_id', 'left');
 		$this->db->join('subrooms', 'subrooms.subroom_id = purchase_requests.subroom_id', 'left');
+		if ($this->db->table_exists('construction_projects') && $this->db->field_exists('project_id', 'purchase_requests')) {
+			$this->db->join('construction_projects', 'construction_projects.id = purchase_requests.project_id', 'left');
+		}
 		if ($from) $this->db->where('purchase_requests.created_at >=', $from . ' 00:00:00');
 		if ($to) $this->db->where('purchase_requests.created_at <=', $to . ' 23:59:59');
 		if ($final === '0' || $final === '1') {
 			$this->db->where('purchase_requests.final', (int)$final);
+		}
+		if ($project_id > 0 && $this->db->field_exists('project_id', 'purchase_requests')) {
+			$this->db->where('purchase_requests.project_id', $project_id);
 		}
 		$this->_apply_campus_filter('purchase_requests.campus_id', $campus_id, true);
 		$this->db->order_by('purchase_requests.purchase_request_id', 'DESC');
@@ -1048,6 +1061,8 @@ class Inventoryapi extends CI_Controller {
 		$this->_ensure_journey_audit_columns();
 		$purchase_no = $this->_purchase_no();
 		$name = trim($this->current_user['first_name'] . ' ' . $this->current_user['last_name']);
+		// Optional construction project (header or per-line)
+		$header_project_id = isset($body['project_id']) ? (int)$body['project_id'] : 0;
 		foreach ($lines as $line) {
 			$campus_id = (int)$line['campus_id'];
 			$this->_assert_campus_access($campus_id, true);
@@ -1069,6 +1084,10 @@ class Inventoryapi extends CI_Controller {
 			);
 			if ($this->db->field_exists('gate_received_qty', 'purchase_requests')) {
 				$row['gate_received_qty'] = 0;
+			}
+			$project_id = isset($line['project_id']) ? (int)$line['project_id'] : $header_project_id;
+			if ($project_id > 0 && $this->db->field_exists('project_id', 'purchase_requests')) {
+				$row['project_id'] = $project_id;
 			}
 			$this->db->insert('purchase_requests', $row);
 		}

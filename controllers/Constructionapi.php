@@ -272,6 +272,9 @@ class Constructionapi extends CI_Controller {
 			$name = isset($body['project_name']) ? trim($body['project_name']) : '';
 			if ($name === '') $this->_json(array('success' => false, 'message' => 'project_name required'), 422);
 			$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : (int)$this->current_user['campus_id'];
+			if ($campus_id < 1) {
+				$this->_json(array('success' => false, 'message' => 'Campus is required'), 422);
+			}
 			$this->db->insert('construction_projects', array(
 				'project_name' => $name,
 				'location' => isset($body['location']) ? trim($body['location']) : '',
@@ -280,13 +283,18 @@ class Constructionapi extends CI_Controller {
 				'expected_completion_date' => !empty($body['expected_completion_date']) ? $body['expected_completion_date'] : null,
 				'budget' => isset($body['budget']) ? (float)$body['budget'] : 0,
 				'status' => isset($body['status']) ? $body['status'] : 'Active',
-				'campus_id' => $campus_id ?: null,
+				'campus_id' => $campus_id,
 				'created_by' => (int)$this->current_user['user_id'],
 				'created_at' => date('Y-m-d H:i:s'),
 			));
 			$this->_json(array('success' => true, 'id' => (int)$this->db->insert_id()));
 		}
 
+		$campus_id = (int)$this->input->get('campus_id');
+		if ($campus_id > 0 && $this->db->field_exists('campus_id', 'construction_projects')) {
+			// Strict campus filter — only that campus's projects
+			$this->db->where('campus_id', $campus_id);
+		}
 		$rows = $this->db->order_by('id', 'DESC')->get('construction_projects')->result_array();
 		foreach ($rows as &$r) {
 			$r['summary'] = $this->_project_summary($r['id']);
