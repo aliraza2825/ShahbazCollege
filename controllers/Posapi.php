@@ -968,10 +968,14 @@ class Posapi extends CI_Controller {
 	public function campuses()
 	{
 		$perms = $this->_permissions();
+		$ids = array_values(array_unique(array_merge(
+			$perms['campus_ids'],
+			$perms['inventory_campus_ids']
+		)));
 		$this->db->from('campuses');
 		$this->db->where('status', 1);
-		if (!$perms['is_admin'] && count($perms['campus_ids'])) {
-			$this->db->where_in('campus_id', $perms['campus_ids']);
+		if (!$perms['is_admin'] && count($ids)) {
+			$this->db->where_in('campus_id', $ids);
 		} elseif (!$perms['is_admin']) {
 			$this->_json(array('success' => true, 'data' => array()));
 		}
@@ -987,17 +991,27 @@ class Posapi extends CI_Controller {
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
-	/** Persist selected closing campus for this staff user */
+	/** Persist selected campus for stock + sales (sale posts into that campus closing). */
 	public function set_closing_campus()
 	{
 		$this->_ensure_pos_closing_campus_column();
 		$body = $this->_body();
 		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
 		if ($campus_id <= 0) {
-			$this->_json(array('success' => false, 'message' => 'Closing campus required'), 422);
+			$this->_json(array('success' => false, 'message' => 'Campus required'), 422);
 		}
-		if (!$this->_is_allowed_closing_campus($campus_id)) {
-			$this->_json(array('success' => false, 'message' => 'Campus is not in your active closing_persons list'), 403);
+		// Any accessible campus (POS / inventory) — not limited to closing_persons.
+		$perms = $this->_permissions();
+		$allowed = array_values(array_unique(array_merge(
+			$perms['campus_ids'],
+			$perms['inventory_campus_ids']
+		)));
+		if (!$perms['is_admin'] && !in_array($campus_id, $allowed, true)) {
+			$this->_json(array('success' => false, 'message' => 'No access to this campus'), 403);
+		}
+		$exists = $this->db->get_where('campuses', array('campus_id' => $campus_id, 'status' => 1))->row_array();
+		if (!$exists) {
+			$this->_json(array('success' => false, 'message' => 'Campus not found'), 404);
 		}
 
 		$this->db->where('user_id', $this->current_user['user_id'])->update('users', array(
@@ -1007,7 +1021,7 @@ class Posapi extends CI_Controller {
 
 		$this->_json(array(
 			'success' => true,
-			'message' => 'Closing campus saved',
+			'message' => 'Campus saved',
 			'user' => $this->_user_payload($this->current_user),
 		));
 	}
@@ -1355,7 +1369,7 @@ class Posapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Cart is empty'), 422);
 		}
 
-		// Closing campus required — must be selected in Settings (or sent on checkout)
+		// Selected campus required — sale posts into that campus's closing.
 		$this->_ensure_pos_closing_campus_column();
 		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
 		if ($campus_id <= 0) {
@@ -1364,15 +1378,15 @@ class Posapi extends CI_Controller {
 			))->row_array();
 			$campus_id = $fresh ? (int)$fresh['pos_closing_campus_id'] : 0;
 		}
-		if ($campus_id <= 0 || !$this->_is_allowed_closing_campus($campus_id)) {
+		if ($campus_id <= 0) {
 			$this->_json(array(
 				'success' => false,
-				'message' => 'Select a closing campus in Settings before creating an invoice',
+				'message' => 'Select a campus before creating an invoice',
 			), 422);
 		}
 		$this->_require_campus_access($campus_id);
 
-		// Force all lines onto the selected closing campus
+		// Force all lines onto the selected campus (stock + closing for that campus).
 		foreach ($lines as &$line) {
 			$line['campus_id'] = $campus_id;
 		}
