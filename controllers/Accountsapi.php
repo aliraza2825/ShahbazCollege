@@ -1526,15 +1526,22 @@ class Accountsapi extends CI_Controller {
 		if ($this->_table_exists('product_names')) {
 			$sql .= ", product_names.product_name";
 		}
+		if ($this->_table_exists('users')) {
+			$sql .= ", CONCAT(COALESCE(users.first_name,''),' ',COALESCE(users.last_name,'')) AS sold_by_name";
+		}
 		$sql .= " FROM products";
 		if ($this->_table_exists('product_names')) {
 			$sql .= " LEFT JOIN product_names ON product_names.product_name_id = products.product_name_id";
+		}
+		if ($this->_table_exists('users') && $this->_field_exists('products', 'sold_by')) {
+			$sql .= " LEFT JOIN users ON users.user_id = products.sold_by";
 		}
 		$sql .= " WHERE products.sold = 1 AND products.campus_id = ? AND products.sold_date = ?";
 		$params = array((int)$campus_id, $sold_date);
 		if ($only_unclosed && $this->_field_exists('products', 'closing_id')) {
 			$sql .= " AND (products.closing_id IS NULL OR products.closing_id = '' OR products.closing_id = '0')";
 		}
+		$sql .= " ORDER BY products.invoice_no DESC";
 		return $this->db->query($sql, $params)->result_array();
 	}
 
@@ -1547,12 +1554,84 @@ class Accountsapi extends CI_Controller {
 		if ($this->_table_exists('product_names')) {
 			$sql .= ", product_names.product_name";
 		}
+		if ($this->_table_exists('users')) {
+			$sql .= ", CONCAT(COALESCE(users.first_name,''),' ',COALESCE(users.last_name,'')) AS sold_by_name";
+		}
 		$sql .= " FROM products";
 		if ($this->_table_exists('product_names')) {
 			$sql .= " LEFT JOIN product_names ON product_names.product_name_id = products.product_name_id";
 		}
-		$sql .= " WHERE products.sold = 1 AND products.campus_id = ? AND products.closing_id = ?";
+		if ($this->_table_exists('users') && $this->_field_exists('products', 'sold_by')) {
+			$sql .= " LEFT JOIN users ON users.user_id = products.sold_by";
+		}
+		$sql .= " WHERE products.sold = 1 AND products.campus_id = ? AND products.closing_id = ?
+				 ORDER BY products.invoice_no DESC";
 		return $this->db->query($sql, array((int)$campus_id, $campus_closing_id))->result_array();
+	}
+
+	/** Legacy Closing::viewclosing fee rows (student/course/cnic). */
+	private function _closing_detail_fees_by_ccid($campus_closing_id)
+	{
+		return $this->db->query(
+			"SELECT payments.*, students.first_name, students.last_name, students.roll_no, students.cnic,
+					courses.course_name
+			 FROM payments
+			 LEFT JOIN students ON students.student_id = payments.student_id
+			 LEFT JOIN courses ON courses.course_id = students.course_id
+			 WHERE payments.closing_id = ?",
+			array($campus_closing_id)
+		)->result_array();
+	}
+
+	private function _closing_detail_assets_by_ccid($campus_id, $campus_closing_id)
+	{
+		if (!$this->_table_exists('asset_sales')) return array();
+		$sql = "SELECT asset_sales.*, asset_sales.created_at AS sale_date";
+		if ($this->_table_exists('product_names')) {
+			$sql .= ", product_names.product_name";
+		}
+		$sql .= " FROM asset_sales";
+		if ($this->_table_exists('products')) {
+			$sql .= " INNER JOIN products ON products.sale_id = asset_sales.id";
+			if ($this->_table_exists('product_names')) {
+				$sql .= " LEFT JOIN product_names ON product_names.product_name_id = products.product_name_id";
+			}
+			$sql .= " WHERE asset_sales.closing_id = ? AND products.campus_id = ?";
+			return $this->db->query($sql, array($campus_closing_id, (int)$campus_id))->result_array();
+		}
+		$sql .= " WHERE asset_sales.closing_id = ?";
+		return $this->db->query($sql, array($campus_closing_id))->result_array();
+	}
+
+	private function _closing_detail_sales_by_ccid($campus_id, $campus_closing_id)
+	{
+		if (!$this->_table_exists('sales') || !$this->_field_exists('sales', 'closing_id')) return array();
+		$sql = "SELECT sales.*, sales_payments.payment_amount, people.first_name, people.last_name, people.phone_number
+				FROM sales
+				LEFT JOIN sales_payments ON sales_payments.sale_id = sales.sale_id
+				LEFT JOIN people ON people.person_id = sales.customer_id
+				WHERE sales.closing_id = ? AND sales.campus_id = ?";
+		return $this->db->query($sql, array($campus_closing_id, (int)$campus_id))->result_array();
+	}
+
+	private function _closing_detail_loans_by_ccid($campus_closing_id)
+	{
+		if (!$this->_table_exists('loan_plan')) return array();
+		if ($this->_table_exists('loans') && $this->_table_exists('users')) {
+			return $this->db->query(
+				"SELECT loan_plan.*, loan_plan.id AS id, loans.cash_given, loans.user_id AS loan_user_id,
+						users.first_name, users.last_name, users.father_name, users.cnic, users.mobile, users.emergency_no
+				 FROM loan_plan
+				 INNER JOIN loans ON loans.id = loan_plan.loan_id
+				 INNER JOIN users ON users.user_id = loans.user_id
+				 WHERE loan_plan.closing_id = ?",
+				array($campus_closing_id)
+			)->result_array();
+		}
+		return $this->db->query(
+			'SELECT loan_plan.* FROM loan_plan WHERE closing_id = ?',
+			array($campus_closing_id)
+		)->result_array();
 	}
 
 	private function _upload_url($filename)
@@ -2246,6 +2325,7 @@ class Accountsapi extends CI_Controller {
 	/**
 	 * Legacy: Closing::viewclosing
 	 * GET closing_detail?campus_id&date
+	 * Returns full fee / asset / POS / sales / loan tables like closingdetails.php
 	 */
 	public function closing_detail()
 	{
@@ -2254,61 +2334,48 @@ class Accountsapi extends CI_Controller {
 		if (!$date) $date = date('Y-m-d');
 		if ($campus_id <= 0) $this->_json(array('success' => false, 'message' => 'campus_id required'), 400);
 
+		$campusCols = 'campus_id, campus_name, campus_code';
+		if ($this->_field_exists('campuses', 'logo')) $campusCols .= ', logo';
+		$campus = $this->db->query(
+			"SELECT {$campusCols} FROM campuses WHERE campus_id = ? LIMIT 1",
+			array($campus_id)
+		)->row_array();
+
 		$closed = $this->_closing_for_date($campus_id, $date);
 		if ($closed) {
 			$ccid = $closed['campus_closing_id'];
-			$fees = $this->db->query(
-				"SELECT payments.*, students.first_name, students.last_name, students.roll_no
-				 FROM payments
-				 LEFT JOIN students ON students.student_id = payments.student_id
-				 WHERE closing_id = ?",
-				array($ccid)
-			)->result_array();
-			$assets = array();
-			$asset_amount = 0.0;
-			if ($this->_table_exists('asset_sales')) {
-				$assets = $this->db->query(
-					"SELECT asset_sales.* FROM asset_sales WHERE closing_id = ?",
-					array($ccid)
-				)->result_array();
-				foreach ($assets as $a) $asset_amount += (float)$a['sale_amount'];
-			}
-			$loans = array();
-			$loan_amount = 0.0;
-			if ($this->_table_exists('loan_plan')) {
-				$loans = $this->db->query(
-					"SELECT loan_plan.* FROM loan_plan WHERE closing_id = ?",
-					array($ccid)
-				)->result_array();
-				foreach ($loans as $l) $loan_amount += (float)$l['amount_paid'];
-			}
+			$fees = $this->_closing_detail_fees_by_ccid($ccid);
+			$assets = $this->_closing_detail_assets_by_ccid($campus_id, $ccid);
+			$sales = $this->_closing_detail_sales_by_ccid($campus_id, $ccid);
+			$loans = $this->_closing_detail_loans_by_ccid($ccid);
 			$pos = $this->_pos_sales_by_closing($campus_id, $ccid);
-			$pos_amount = 0.0;
-			foreach ($pos as $p) {
-				$pos_amount += isset($p['sold_amount']) ? (float)$p['sold_amount'] : 0;
-			}
+
 			$fee_amount = 0.0;
 			$fee_ids = array();
 			foreach ($fees as $f) {
 				$fee_amount += (float)$f['actual_amount'];
 				$fee_ids[] = (int)$f['id'];
 			}
-			$sale_amount = 0.0;
-			if ($this->_table_exists('sales') && $this->_table_exists('sales_payments')
-				&& $this->_field_exists('sales', 'closing_id')) {
-				$sale_row = $this->db->query(
-					"SELECT COALESCE(SUM(sales_payments.payment_amount),0) AS total
-					 FROM sales
-					 LEFT JOIN sales_payments ON sales_payments.sale_id = sales.sale_id
-					 WHERE sales.closing_id = ? AND sales.campus_id = ?",
-					array($ccid, $campus_id)
-				)->row_array();
-				$sale_amount = (float)(isset($sale_row['total']) ? $sale_row['total'] : 0);
-			}
+			$asset_amount = 0.0;
 			$sale_ids = array();
-			foreach ($assets as $a) $sale_ids[] = (int)$a['id'];
+			foreach ($assets as $a) {
+				$asset_amount += (float)$a['sale_amount'];
+				$sale_ids[] = (int)$a['id'];
+			}
+			$sale_amount = 0.0;
+			foreach ($sales as $s) {
+				$sale_amount += isset($s['payment_amount']) ? (float)$s['payment_amount'] : 0;
+			}
+			$loan_amount = 0.0;
 			$loan_ids = array();
-			foreach ($loans as $l) $loan_ids[] = (int)$l['id'];
+			foreach ($loans as $l) {
+				$loan_amount += (float)$l['amount_paid'];
+				$loan_ids[] = (int)$l['id'];
+			}
+			$pos_amount = 0.0;
+			foreach ($pos as $p) {
+				$pos_amount += isset($p['sold_amount']) ? (float)$p['sold_amount'] : 0;
+			}
 
 			$img = isset($closed['partialy_closed_image']) ? $closed['partialy_closed_image'] : '';
 			$closed['image_url'] = $this->_upload_url($img);
@@ -2318,9 +2385,13 @@ class Accountsapi extends CI_Controller {
 				'closed' => true,
 				'date' => $date,
 				'campus_id' => $campus_id,
+				'campus_name' => $campus ? $campus['campus_name'] : '',
+				'campus_logo' => $campus && !empty($campus['logo']) ? $this->_upload_url($campus['logo']) : null,
+				'campus_closing_id' => $ccid,
 				'closing' => $closed,
 				'fees' => $fees,
 				'asset_sales' => $assets,
+				'sales' => $sales,
 				'loans' => $loans,
 				'pos' => $pos,
 				'fee_ids' => $fee_ids,
@@ -2334,28 +2405,112 @@ class Accountsapi extends CI_Controller {
 					'pos' => $pos_amount,
 				),
 				'total' => (float)$closed['closed_amount'],
+				'receivable_amount' => isset($closed['receivable_amount'])
+					? (float)$closed['receivable_amount']
+					: (float)$closed['closed_amount'],
 			));
 		}
 
+		// Open day — use bundle lines, but enrich with joins for display
 		$bundle = $this->_campus_closing_bundle($campus_id, $date);
+		$fees = $bundle['fee_lines'];
+		// Enrich fees with course/cnic if missing
+		if (count($fees) && !isset($fees[0]['course_name'])) {
+			$ids = $bundle['fee_ids'];
+			if (count($ids)) {
+				$enriched = $this->db->query(
+					"SELECT payments.*, students.first_name, students.last_name, students.roll_no, students.cnic,
+							courses.course_name
+					 FROM payments
+					 LEFT JOIN students ON students.student_id = payments.student_id
+					 LEFT JOIN courses ON courses.course_id = students.course_id
+					 WHERE payments.id IN (" . implode(',', array_map('intval', $ids)) . ")"
+				)->result_array();
+				if (count($enriched)) $fees = $enriched;
+			}
+		}
+
+		$assets = array();
+		if ($this->_table_exists('asset_sales') && count($bundle['sale_ids'])) {
+			$ids = implode(',', array_map('intval', $bundle['sale_ids']));
+			$sql = "SELECT asset_sales.*, asset_sales.sold_date AS sale_date";
+			if ($this->_table_exists('product_names') && $this->_table_exists('products')) {
+				$sql .= ", product_names.product_name
+						 FROM asset_sales
+						 LEFT JOIN products ON products.product_id = asset_sales.product_id
+						 LEFT JOIN product_names ON product_names.product_name_id = products.product_name_id
+						 WHERE asset_sales.id IN ({$ids})";
+			} else {
+				$sql .= " FROM asset_sales WHERE asset_sales.id IN ({$ids})";
+			}
+			$assets = $this->db->query($sql)->result_array();
+		} else {
+			$assets = $bundle['asset_lines'];
+		}
+
+		$sales = array();
+		$sale_amount = (float)$bundle['sale_amount'];
+		if ($this->_table_exists('sales') && $this->_table_exists('sales_payments')) {
+			$yesterday = date('Y-m-d', strtotime($date . ' -1 day'));
+			$yest_closed = $this->_closing_for_date($campus_id, $yesterday);
+			$dates = array($date);
+			if ($yest_closed) $dates[] = $yesterday;
+			foreach ($dates as $d) {
+				$rows = $this->db->query(
+					"SELECT sales.*, sales_payments.payment_amount, people.first_name, people.last_name, people.phone_number
+					 FROM sales
+					 LEFT JOIN sales_payments ON sales_payments.sale_id = sales.sale_id
+					 LEFT JOIN people ON people.person_id = sales.customer_id
+					 WHERE sales.campus_id = ?
+					   AND sales.sale_time >= ? AND sales.sale_time <= ?",
+					array($campus_id, $d . ' 00:00:00', $d . ' 23:59:59')
+				)->result_array();
+				$sales = array_merge($sales, $rows);
+			}
+		}
+
+		$loans = $bundle['loan_lines'];
+		if (count($loans) && $this->_table_exists('loans') && !isset($loans[0]['cnic'])) {
+			$ids = $bundle['loan_ids'];
+			if (count($ids)) {
+				$enriched = $this->db->query(
+					"SELECT loan_plan.*, loan_plan.id AS id, loans.cash_given,
+							users.first_name, users.last_name, users.father_name, users.cnic, users.mobile, users.emergency_no
+					 FROM loan_plan
+					 INNER JOIN loans ON loans.id = loan_plan.loan_id
+					 INNER JOIN users ON users.user_id = loans.user_id
+					 WHERE loan_plan.id IN (" . implode(',', array_map('intval', $ids)) . ")"
+				)->result_array();
+				if (count($enriched)) $loans = $enriched;
+			}
+		}
+
+		$pos = $bundle['pos_lines'];
+		$next_ccid = $this->_next_campus_closing_id($campus_id);
+
 		$this->_json(array(
 			'success' => true,
 			'closed' => false,
 			'date' => $date,
 			'campus_id' => $campus_id,
+			'campus_name' => $campus ? $campus['campus_name'] : '',
+			'campus_logo' => $campus && !empty($campus['logo']) ? $this->_upload_url($campus['logo']) : null,
+			'campus_closing_id' => $next_ccid,
 			'closing' => null,
-			'fees' => $bundle['fee_lines'],
-			'asset_sales' => $bundle['asset_lines'],
-			'loans' => $bundle['loan_lines'],
-			'pos' => $bundle['pos_lines'],
+			'fees' => $fees,
+			'asset_sales' => $assets,
+			'sales' => $sales,
+			'loans' => $loans,
+			'pos' => $pos,
 			'breakdown' => array(
 				'fees' => $bundle['fee_amount'],
-				'sales' => $bundle['sale_amount'],
+				'sales' => $sale_amount,
 				'asset_sales' => $bundle['asset_amount'],
 				'loans' => $bundle['loan_amount'],
 				'pos' => $bundle['pos_amount'],
 			),
 			'total' => $bundle['total'],
+			'receivable_amount' => $bundle['total'],
 			'fee_ids' => $bundle['fee_ids'],
 			'sale_ids' => $bundle['sale_ids'],
 			'loan_ids' => $bundle['loan_ids'],
@@ -4476,37 +4631,17 @@ class Accountsapi extends CI_Controller {
 		if (!$from) $from = date('Y-m-01');
 		if (!$to) $to = date('Y-m-d');
 
-		$campuses = $this->db->query(
-			'SELECT campus_id, campus_name, campus_code FROM campuses WHERE status = 1 ORDER BY campus_name ASC'
-		)->result_array();
+		$sql = 'SELECT campus_id, campus_name, campus_code FROM campuses';
+		if ($this->_field_exists('campuses', 'status')) {
+			$sql .= ' WHERE status = 1';
+		}
+		$sql .= ' ORDER BY campus_name ASC';
+		$campuses = $this->db->query($sql)->result_array();
 		$out = array();
 		foreach ($campuses as $c) {
 			$cid = (int)$c['campus_id'];
-			$expense = 0.0;
-			$recovery = 0.0;
-			if (function_exists('totalExpense')) {
-				$expense = (float)totalExpense($cid, $from, $to);
-			} else {
-				$row = $this->db->query(
-					"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
-					 WHERE campus_id = ? AND actual_date >= ? AND actual_date <= ? AND approved_status = '1'",
-					array($cid, $from, $to)
-				)->row_array();
-				$expense = (float)$row['amount'];
-			}
-			if (function_exists('totalRecovery')) {
-				$recovery = (float)totalRecovery($cid, $from, $to);
-			} else {
-				$row = $this->db->query(
-					"SELECT COALESCE(SUM(actual_amount),0) AS amount FROM payments
-					 INNER JOIN students ON students.student_id = payments.student_id
-					 INNER JOIN classes ON classes.class_id = students.class_id
-					 WHERE classes.campus_id = ? AND payments.actual_paid_date >= ?
-					   AND payments.actual_paid_date <= ? AND payments.paid = 1",
-					array($cid, $from, $to)
-				)->row_array();
-				$recovery = (float)$row['amount'];
-			}
+			$expense = $this->_profit_total_expense($cid, $from, $to);
+			$recovery = $this->_profit_total_recovery($cid, $from, $to);
 			$out[] = array(
 				'campus_id' => $cid,
 				'campus_name' => $c['campus_name'],
@@ -4519,6 +4654,75 @@ class Accountsapi extends CI_Controller {
 			);
 		}
 		$this->_json(array('success' => true, 'from' => $from, 'to' => $to, 'campuses' => $out));
+	}
+
+	/** Safe expense total for profit screens (avoids legacy totalExpense notice on missing campus_partners). */
+	private function _profit_total_expense($campus_id, $from, $to)
+	{
+		$campus_id = (int)$campus_id;
+		if (!$this->_table_exists('expenses')) return 0.0;
+		$dateCol = $this->_field_exists('expenses', 'actual_date') ? 'actual_date' : 'date';
+		$row = $this->db->query(
+			"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
+			 WHERE campus_id = ? AND {$dateCol} >= ? AND {$dateCol} <= ?
+			   AND (approved_status = '1' OR approved_status = 1)",
+			array($campus_id, $from, $to)
+		)->row_array();
+		$total = (float)(isset($row['amount']) ? $row['amount'] : 0);
+
+		// Subtract special partner expenses when campus_partners row exists (legacy totalExpense)
+		if ($this->_table_exists('campus_partners')) {
+			$cp = $this->db->query(
+				'SELECT special_expense_ids FROM campus_partners WHERE campus_id = ? LIMIT 1',
+				array($campus_id)
+			)->row_array();
+			if ($cp && !empty($cp['special_expense_ids'])) {
+				$ids = json_decode($cp['special_expense_ids'], true);
+				if (is_array($ids) && count($ids)) {
+					$ids = array_map('intval', $ids);
+					$ids = array_filter($ids);
+					if (count($ids)) {
+						$in = implode(',', $ids);
+						$spec = $this->db->query(
+							"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
+							 WHERE campus_id = ? AND {$dateCol} >= ? AND {$dateCol} <= ?
+							   AND (approved_status = '1' OR approved_status = 1)
+							   AND expense_category_id IN ({$in})",
+							array($campus_id, $from, $to)
+						)->row_array();
+						$total -= (float)(isset($spec['amount']) ? $spec['amount'] : 0);
+					}
+				}
+			}
+		}
+		return $total;
+	}
+
+	private function _profit_total_recovery($campus_id, $from, $to)
+	{
+		$campus_id = (int)$campus_id;
+		$recovery = 0.0;
+		if ($this->_table_exists('payments') && $this->_table_exists('students') && $this->_table_exists('classes')) {
+			$row = $this->db->query(
+				"SELECT COALESCE(SUM(CASE WHEN payments.actual_amount > 0 THEN payments.actual_amount ELSE payments.amount END),0) AS amount
+				 FROM payments
+				 INNER JOIN students ON students.student_id = payments.student_id
+				 INNER JOIN classes ON classes.class_id = students.class_id
+				 WHERE classes.campus_id = ?
+				   AND payments.actual_paid_date >= ? AND payments.actual_paid_date <= ?
+				   AND payments.paid = 1",
+				array($campus_id, $from, $to)
+			)->row_array();
+			$recovery = (float)(isset($row['amount']) ? $row['amount'] : 0);
+		}
+		if (function_exists('totalRecoveryContractors')) {
+			try {
+				$recovery += (float)totalRecoveryContractors($campus_id, $from, $to);
+			} catch (Exception $e) {
+				// ignore contractor helper failures
+			}
+		}
+		return $recovery;
 	}
 
 	/**
@@ -4544,15 +4748,19 @@ class Accountsapi extends CI_Controller {
 			array($campus_id)
 		)->row_array();
 
-		$expense = function_exists('totalExpense') ? (float)totalExpense($campus_id, $from, $to) : 0;
-		$recovery = function_exists('totalRecovery') ? (float)totalRecovery($campus_id, $from, $to) : 0;
-		if (function_exists('totalRecoveryContractors')) {
-			$recovery += (float)totalRecoveryContractors($campus_id, $from, $to);
-		}
+		$expense = $this->_profit_total_expense($campus_id, $from, $to);
+		$recovery = $this->_profit_total_recovery($campus_id, $from, $to);
 		$net = $recovery - $expense;
 		$not_approved = 0.0;
-		if (function_exists('getNotApprovedExpenses')) {
-			$not_approved = (float)getNotApprovedExpenses($campus_id, $from, $to);
+		if ($this->_table_exists('expenses')) {
+			$dateCol = $this->_field_exists('expenses', 'actual_date') ? 'actual_date' : 'date';
+			$na = $this->db->query(
+				"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
+				 WHERE campus_id = ? AND {$dateCol} >= ? AND {$dateCol} <= ?
+				   AND (approved_status = '0' OR approved_status = 0 OR approved_status IS NULL)",
+				array($campus_id, $from, $to)
+			)->row_array();
+			$not_approved = (float)(isset($na['amount']) ? $na['amount'] : 0);
 		}
 
 		$partners = array();
@@ -4607,7 +4815,7 @@ class Accountsapi extends CI_Controller {
 			'not_approved_expenses' => $not_approved,
 			'can_distribute' => $net > 0 && $not_approved <= 0 && count($partners) > 0,
 			'partners' => $partners,
-			'distributions' => $distributions,
+			'distributions' => is_array($distributions) ? $distributions : array(),
 		));
 	}
 
