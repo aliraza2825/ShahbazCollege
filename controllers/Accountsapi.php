@@ -2788,13 +2788,15 @@ class Accountsapi extends CI_Controller {
 	private function _brs_payment_rows($brs_id)
 	{
 		if (!$this->_table_exists('payments') || (int)$brs_id <= 0) return array();
+		// Legacy bank_statement.php — payments PK is `id` (not payment_id)
 		return $this->db->query(
-			"SELECT payments.payment_id, payments.actual_amount, payments.amount, payments.challan_no,
+			"SELECT payments.id, payments.actual_amount, payments.challan_no,
 					payments.paid_challans, payments.tid_no, payments.paid_date, payments.contract_id,
 					students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile,
+					students.emergency_no, students.father_name,
 					campuses.campus_name, classes.name AS class_name, courses.course_name
 			 FROM payments
-			 LEFT JOIN students ON students.student_id = payments.student_id
+			 INNER JOIN students ON students.student_id = payments.student_id
 			 LEFT JOIN classes ON classes.class_id = students.class_id
 			 LEFT JOIN campuses ON campuses.campus_id = classes.campus_id
 			 LEFT JOIN courses ON courses.course_id = students.course_id
@@ -2828,12 +2830,15 @@ class Accountsapi extends CI_Controller {
 			$detail = array();
 			foreach ($payments as $p) {
 				$detail[] = array(
+					'id' => isset($p['id']) ? (int)$p['id'] : 0,
 					'challan_no' => !empty($p['paid_challans']) ? $p['paid_challans'] : $p['challan_no'],
-					'amount' => isset($p['actual_amount']) ? $p['actual_amount'] : $p['amount'],
+					'amount' => isset($p['actual_amount']) ? $p['actual_amount'] : 0,
 					'tid_no' => $p['tid_no'],
 					'paid_date' => $p['paid_date'],
 					'roll_no' => $p['roll_no'],
 					'name' => trim((isset($p['first_name']) ? $p['first_name'] : '') . ' ' . (isset($p['last_name']) ? $p['last_name'] : '')),
+					'cnic' => isset($p['cnic']) ? $p['cnic'] : '',
+					'mobile' => isset($p['mobile']) ? $p['mobile'] : '',
 					'campus_name' => $p['campus_name'],
 					'class_name' => $p['class_name'],
 					'course_name' => $p['course_name'],
