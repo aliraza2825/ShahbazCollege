@@ -159,7 +159,7 @@ class Accountsapi extends CI_Controller {
 			|| $this->_can_access_account_id($accountId, 'allowed_bank_account_ids');
 	}
 
-	/** Save multipart image/proof to uploads/; returns filename or '' */
+	/** Save multipart image/proof/record to uploads/; returns filename or '' */
 	private function _upload_proof()
 	{
 		$fileKey = null;
@@ -167,6 +167,8 @@ class Accountsapi extends CI_Controller {
 			$fileKey = 'image';
 		} elseif (!empty($_FILES['proof']['name']) && is_uploaded_file($_FILES['proof']['tmp_name'])) {
 			$fileKey = 'proof';
+		} elseif (!empty($_FILES['record']['name']) && is_uploaded_file($_FILES['record']['tmp_name'])) {
+			$fileKey = 'record';
 		}
 		if (!$fileKey) return '';
 
@@ -1435,6 +1437,209 @@ class Accountsapi extends CI_Controller {
 		return (float)(isset($row['total']) ? $row['total'] : 0);
 	}
 
+	private function _pos_sales_rows($campus_id, $sold_date, $only_unclosed = true)
+	{
+		if (!$this->_table_exists('products')) return array();
+		$sql = "SELECT products.*";
+		if ($this->_table_exists('product_names')) {
+			$sql .= ", product_names.product_name";
+		}
+		$sql .= " FROM products";
+		if ($this->_table_exists('product_names')) {
+			$sql .= " LEFT JOIN product_names ON product_names.product_name_id = products.product_name_id";
+		}
+		$sql .= " WHERE products.sold = 1 AND products.campus_id = ? AND products.sold_date = ?";
+		$params = array((int)$campus_id, $sold_date);
+		if ($only_unclosed && $this->_field_exists('products', 'closing_id')) {
+			$sql .= " AND (products.closing_id IS NULL OR products.closing_id = '' OR products.closing_id = '0')";
+		}
+		return $this->db->query($sql, $params)->result_array();
+	}
+
+	private function _pos_sales_by_closing($campus_id, $campus_closing_id)
+	{
+		if (!$this->_table_exists('products') || !$this->_field_exists('products', 'closing_id')) {
+			return array();
+		}
+		$sql = "SELECT products.*";
+		if ($this->_table_exists('product_names')) {
+			$sql .= ", product_names.product_name";
+		}
+		$sql .= " FROM products";
+		if ($this->_table_exists('product_names')) {
+			$sql .= " LEFT JOIN product_names ON product_names.product_name_id = products.product_name_id";
+		}
+		$sql .= " WHERE products.sold = 1 AND products.campus_id = ? AND products.closing_id = ?";
+		return $this->db->query($sql, array((int)$campus_id, $campus_closing_id))->result_array();
+	}
+
+	private function _upload_url($filename)
+	{
+		if (!$filename) return null;
+		if (preg_match('#^https?://#i', $filename)) return $filename;
+		return base_url('uploads/' . ltrim($filename, '/'));
+	}
+
+	private function _closing_flags()
+	{
+		$is_admin = $this->_is_admin();
+		$access = $this->_access();
+		$can_cash = $is_admin || (!empty($access['dailyclosing']) && (string)$access['dailyclosing'] === '1');
+		$can_bank = $is_admin || (!empty($access['dailybankclosing']) && (string)$access['dailybankclosing'] === '1');
+		$can_conciliation_edit = $is_admin
+			|| (!empty($access['closing_conciliation_edit']) && (string)$access['closing_conciliation_edit'] === '1');
+		$can_closing_amount_edit = $is_admin
+			|| (!empty($access['closing_amount_edit']) && (string)$access['closing_amount_edit'] === '1');
+		return array(
+			'is_admin' => $is_admin,
+			'can_dailyclosing' => $can_cash,
+			'can_dailybankclosing' => $can_bank,
+			'can_conciliation_edit' => $can_conciliation_edit,
+			'can_closing_amount_edit' => $can_closing_amount_edit,
+		);
+	}
+
+	private function _bank_accounts_rows()
+	{
+		if (!$this->_table_exists('accounts')) return array();
+		return $this->db->query(
+			"SELECT id, account_name, account_title, amount, type
+			 FROM accounts WHERE type = '1' OR type = 1
+			 ORDER BY account_title ASC, account_name ASC"
+		)->result_array();
+	}
+
+	/** Same SQL as Closing::index / accountsclosing side panels */
+	private function _campus_last_closings()
+	{
+		if (!$this->_table_exists('closing_perday')) return array();
+		$sql = 'SELECT closing_perday.campus_id, campus_name,
+				(SELECT for_day FROM closing_perday WHERE campus_id = campuses.campus_id
+					ORDER BY closing_perday.for_year DESC, closing_perday.for_month DESC, closing_perday.for_day DESC LIMIT 1) AS day,
+				(SELECT for_month FROM closing_perday WHERE campus_id = campuses.campus_id
+					ORDER BY closing_perday.for_year DESC, closing_perday.for_month DESC, closing_perday.for_day DESC LIMIT 1) AS month,
+				MAX(for_year) AS year
+				FROM closing_perday
+				LEFT JOIN campuses ON campuses.campus_id = closing_perday.campus_id
+				WHERE (SELECT COUNT(*) FROM closing_persons
+					WHERE closing_persons.campus_id = closing_perday.campus_id
+					  AND closing_persons.active_status = 1) > 0
+				GROUP BY closing_perday.campus_id';
+		return $this->db->query($sql)->result_array();
+	}
+
+	private function _campus_last_verified()
+	{
+		if (!$this->_table_exists('closing_perday')) return array();
+		$sql = 'SELECT closing_perday.campus_id, campus_name,
+				(SELECT for_day FROM closing_perday WHERE campus_id = campuses.campus_id AND checked_by = "1"
+					ORDER BY closing_perday.for_year DESC, closing_perday.for_month DESC, closing_perday.for_day DESC LIMIT 1) AS day,
+				(SELECT for_month FROM closing_perday WHERE campus_id = campuses.campus_id AND checked_by = "1"
+					ORDER BY closing_perday.for_year DESC, closing_perday.for_month DESC, closing_perday.for_day DESC LIMIT 1) AS month,
+				(SELECT for_year FROM closing_perday WHERE campus_id = campuses.campus_id AND checked_by = "1"
+					ORDER BY closing_perday.for_year DESC, closing_perday.for_month DESC, closing_perday.for_day DESC LIMIT 1) AS year
+				FROM closing_perday
+				LEFT JOIN campuses ON campuses.campus_id = closing_perday.campus_id
+				WHERE (SELECT COUNT(*) FROM closing_persons
+					WHERE closing_persons.campus_id = closing_perday.campus_id
+					  AND closing_persons.active_status = 1) > 0
+				GROUP BY closing_perday.campus_id';
+		return $this->db->query($sql)->result_array();
+	}
+
+	private function _ymd_from_parts($row)
+	{
+		if (!$row || empty($row['year']) || empty($row['month']) || empty($row['day'])) return null;
+		return sprintf('%04d-%02d-%02d', (int)$row['year'], (int)$row['month'], (int)$row['day']);
+	}
+
+	private function _date_picker_min($verified_rows)
+	{
+		if ($this->_is_admin()) return null;
+		$min = null;
+		foreach ($verified_rows as $row) {
+			$d = $this->_ymd_from_parts($row);
+			if (!$d) continue;
+			if ($min === null || $d < $min) $min = $d;
+		}
+		return $min;
+	}
+
+	private function _is_checked($val)
+	{
+		return $val !== null && $val !== '' && (string)$val !== '0' && strtoupper((string)$val) !== 'NULL';
+	}
+
+	private function _closing_status_label($closed, $close_type, $transaction_no)
+	{
+		if (!$closed) return 'OPEN';
+		if ((string)$close_type !== '2' && ($transaction_no === null || $transaction_no === '')) {
+			return 'PARTIALLY_CLOSED';
+		}
+		return 'CLOSED';
+	}
+
+	private function _accounts_status_label($closed, $checked_by)
+	{
+		if (!$closed) return null;
+		return $this->_is_checked($checked_by) ? 'Verified' : 'UnVerified';
+	}
+
+	private function _next_verify_date($campus_id, $verified_rows)
+	{
+		foreach ($verified_rows as $row) {
+			if ((int)$row['campus_id'] === (int)$campus_id) {
+				$d = $this->_ymd_from_parts($row);
+				if (!$d) return null;
+				return date('Y-m-d', strtotime($d . ' +1 day'));
+			}
+		}
+		return null;
+	}
+
+	/** Legacy closingsheet: close only when selected_date === last_closing + 1 day */
+	private function _next_close_date($campus_id, $last_closings)
+	{
+		foreach ($last_closings as $row) {
+			if ((int)$row['campus_id'] === (int)$campus_id) {
+				$d = $this->_ymd_from_parts($row);
+				if (!$d) return null;
+				return date('Y-m-d', strtotime($d . ' +1 day'));
+			}
+		}
+		return null;
+	}
+
+	private function _assert_sequential_verify($campus_id, $closing_date, $verified_rows)
+	{
+		$next = $this->_next_verify_date((int)$campus_id, $verified_rows);
+		if ($next !== null && $closing_date !== $next) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Verify sequentially: next day after last verification is ' . $next,
+			), 400);
+		}
+	}
+
+	private function _closing_ymd_from_row($row)
+	{
+		return sprintf(
+			'%04d-%02d-%02d',
+			(int)$row['for_year'],
+			(int)$row['for_month'],
+			(int)$row['for_day']
+		);
+	}
+
+	private function _user_can_close_campus($campus_id)
+	{
+		$persons = $this->_closing_persons_rows(true);
+		foreach ($persons as $p) {
+			if ((int)$p['campus_id'] === (int)$campus_id) return true;
+		}
+		return false;
+	}
+
 	/** Collect unclosed fee/asset/loan/pos lines + totals for a campus/date (Closing::index / viewclosing). */
 	private function _campus_closing_bundle($campus_id, $date)
 	{
@@ -1452,6 +1657,7 @@ class Accountsapi extends CI_Controller {
 		$fee_lines = array();
 		$asset_lines = array();
 		$loan_lines = array();
+		$pos_lines = array();
 
 		// Fee payments (college) — today + yesterday orphans if yesterday was closed
 		$dates = array($date);
@@ -1459,18 +1665,20 @@ class Accountsapi extends CI_Controller {
 
 		foreach ($dates as $d) {
 			$only_unclosed = ($d === $yesterday);
-			$merged = $this->db->query(
-				"SELECT payments.* FROM payments
+			$feeSelect = "SELECT payments.*, students.first_name, students.last_name, students.roll_no
+				 FROM payments
+				 LEFT JOIN students ON students.student_id = payments.student_id
 				 WHERE submitted_fee_campus_id = ?
 				   AND merged_challan IS NOT NULL AND actual_amount > 0
 				   AND fee_pay_through = 'college'
 				   AND actual_paid_date = ?"
 				 . ($only_unclosed ? " AND closing_id IS NULL" : "")
-				 . " GROUP BY CASE WHEN merged_challan IS NOT NULL THEN merged_challan ELSE '' END",
-				array($campus_id, $d)
-			)->result_array();
+				 . " GROUP BY CASE WHEN merged_challan IS NOT NULL THEN merged_challan ELSE '' END";
+			$merged = $this->db->query($feeSelect, array($campus_id, $d))->result_array();
 			$single = $this->db->query(
-				"SELECT payments.* FROM payments
+				"SELECT payments.*, students.first_name, students.last_name, students.roll_no
+				 FROM payments
+				 LEFT JOIN students ON students.student_id = payments.student_id
 				 WHERE submitted_fee_campus_id = ?
 				   AND merged_challan IS NULL
 				   AND fee_pay_through = 'college'
@@ -1523,11 +1731,19 @@ class Accountsapi extends CI_Controller {
 		if ($this->_table_exists('loan_plan')) {
 			foreach ($dates as $d) {
 				$only_unclosed = ($d === $yesterday);
-				$sql = "SELECT * FROM loan_plan
-						WHERE paid_date = ? AND campus_id = ? AND paid_at = 'cash'";
+				$sql = "SELECT loan_plan.*";
+				if ($this->_table_exists('loans') && $this->_table_exists('users')) {
+					$sql .= ", users.first_name, users.last_name, loan_plan.id AS id
+							 FROM loan_plan
+							 LEFT JOIN loans ON loans.id = loan_plan.loan_id
+							 LEFT JOIN users ON users.user_id = loans.user_id
+							 WHERE loan_plan.paid_date = ? AND loan_plan.campus_id = ? AND loan_plan.paid_at = 'cash'";
+				} else {
+					$sql .= " FROM loan_plan WHERE paid_date = ? AND campus_id = ? AND paid_at = 'cash'";
+				}
 				$params = array($d, $campus_id);
 				if ($only_unclosed && $this->_field_exists('loan_plan', 'closing_id')) {
-					$sql .= ' AND closing_id IS NULL';
+					$sql .= ' AND loan_plan.closing_id IS NULL';
 				}
 				$rows = $this->db->query($sql, $params)->result_array();
 				foreach ($rows as $r) {
@@ -1539,8 +1755,10 @@ class Accountsapi extends CI_Controller {
 		}
 
 		$pos_amount = $this->_pos_sales_sum($campus_id, $date, true);
+		$pos_lines = $this->_pos_sales_rows($campus_id, $date, true);
 		if ($yest_closed) {
 			$pos_amount += $this->_pos_sales_sum($campus_id, $yesterday, true);
+			$pos_lines = array_merge($pos_lines, $this->_pos_sales_rows($campus_id, $yesterday, true));
 		}
 
 		$total = $fee_amount + $sale_amount + $asset_amount + $loan_amount + $pos_amount;
@@ -1557,6 +1775,7 @@ class Accountsapi extends CI_Controller {
 			'fee_lines' => $fee_lines,
 			'asset_lines' => $asset_lines,
 			'loan_lines' => $loan_lines,
+			'pos_lines' => $pos_lines,
 			'yest_closed' => (bool)$yest_closed,
 		);
 	}
@@ -1620,30 +1839,66 @@ class Accountsapi extends CI_Controller {
 	{
 		$date = $this->input->get('date');
 		if (!$date) $date = date('Y-m-d');
+		$flags = $this->_closing_flags();
 		$persons = $this->_closing_persons_rows(true);
+		$campus_last_closings = $this->_campus_last_closings();
+		$campus_last_verified = $this->_campus_last_verified();
+		$bank_accounts = $this->_bank_accounts_rows();
 		$out = array();
+
 		foreach ($persons as $row) {
 			$campus_id = (int)$row['campus_id'];
 			$closed = $this->_closing_for_date($campus_id, $date);
+			$person_name = trim(isset($row['person_name']) ? $row['person_name'] : '');
+			$next_close = $this->_next_close_date($campus_id, $campus_last_closings);
+			// Legacy: close buttons only when date is exactly last_closing+1 (or first close ever)
+			$sequential_close_ok = ($next_close === null || $date === $next_close);
 			$item = array(
 				'person_id' => isset($row['id']) ? (int)$row['id'] : 0,
 				'campus_id' => $campus_id,
 				'campus_name' => isset($row['campus_name']) ? $row['campus_name'] : '',
 				'user_id' => isset($row['user_id']) ? (int)$row['user_id'] : 0,
-				'person_name' => trim(isset($row['person_name']) ? $row['person_name'] : ''),
+				'person_name' => $person_name,
 				'date' => $date,
+				'next_close_date' => $next_close,
+				'can_close_sequential' => $sequential_close_ok,
 			);
+
 			if ($closed) {
+				$close_type = isset($closed['close_type']) ? (string)$closed['close_type'] : '0';
+				$txn = isset($closed['transaction_no']) ? $closed['transaction_no'] : null;
+				$img = isset($closed['partialy_closed_image']) ? $closed['partialy_closed_image'] : '';
+				$checked = isset($closed['checked_by']) ? $closed['checked_by'] : null;
+				$unchecked = !$this->_is_checked($checked);
 				$item['closed'] = true;
 				$item['closed_status'] = '1';
 				$item['closing_id'] = (int)$closed['id'];
 				$item['campus_closing_id'] = $closed['campus_closing_id'];
 				$item['closing_amount'] = (float)$closed['closed_amount'];
-				$item['close_type'] = $closed['close_type'];
+				$item['received_amount'] = isset($closed['receivable_amount'])
+					? (float)$closed['receivable_amount']
+					: (float)$closed['closed_amount'];
+				$item['close_type'] = $close_type;
 				$item['closed_by'] = $closed['closed_by'];
-				$item['checked_by'] = $closed['checked_by'];
+				$item['checked_by'] = $checked;
 				$item['account_id'] = $closed['account_id'];
-				$item['transaction_no'] = $closed['transaction_no'];
+				$item['transaction_no'] = $txn;
+				$item['partialy_closed_image'] = $img;
+				$item['image_url'] = $this->_upload_url($img);
+				$item['status_label'] = $this->_closing_status_label(true, $close_type, $txn);
+				$item['accounts_status'] = $this->_accounts_status_label(true, $checked);
+				$item['breakdown'] = null;
+				$item['can_close_cash'] = false;
+				$item['can_close_bank'] = false;
+				$item['can_add_bank_details'] = ($close_type !== '2' && ($txn === null || $txn === ''));
+				$item['can_edit_bank_details'] = ($close_type !== '2' && $txn !== null && $txn !== '' && $unchecked);
+				// Legacy closingdetails updatenow — convert type while unverified
+				$item['can_update_to_cash'] = $unchecked && !empty($flags['can_dailyclosing']) && $close_type !== '2';
+				$item['can_update_to_bank'] = $unchecked && !empty($flags['can_dailybankclosing']) && $close_type !== '1';
+				$item['can_update_to_paypro'] = $unchecked && (
+					(!empty($flags['can_dailyclosing']) && $close_type === '1')
+					|| (!empty($flags['can_dailybankclosing']) && ($close_type === '2' || $close_type === '3'))
+				);
 			} else {
 				$bundle = $this->_campus_closing_bundle($campus_id, $date);
 				$item['closed'] = false;
@@ -1651,6 +1906,7 @@ class Accountsapi extends CI_Controller {
 				$item['closing_id'] = null;
 				$item['campus_closing_id'] = null;
 				$item['closing_amount'] = $bundle['total'];
+				$item['received_amount'] = $bundle['total'];
 				$item['breakdown'] = array(
 					'fees' => $bundle['fee_amount'],
 					'sales' => $bundle['sale_amount'],
@@ -1661,27 +1917,78 @@ class Accountsapi extends CI_Controller {
 				$item['close_type'] = '0';
 				$item['closed_by'] = '';
 				$item['checked_by'] = '';
+				$item['account_id'] = null;
+				$item['transaction_no'] = null;
+				$item['partialy_closed_image'] = '';
+				$item['image_url'] = null;
+				$item['status_label'] = 'OPEN';
+				$item['accounts_status'] = null;
+				$item['can_close_cash'] = $sequential_close_ok && !empty($flags['can_dailyclosing']);
+				$item['can_close_bank'] = $sequential_close_ok && !empty($flags['can_dailybankclosing']);
+				$item['can_add_bank_details'] = false;
+				$item['can_edit_bank_details'] = false;
+				$item['can_update_to_cash'] = false;
+				$item['can_update_to_bank'] = false;
+				$item['can_update_to_paypro'] = false;
 			}
 			$out[] = $item;
 		}
-		$this->_json(array('success' => true, 'date' => $date, 'closings' => $out));
+
+		$this->_json(array(
+			'success' => true,
+			'date' => $date,
+			'closings' => $out,
+			'campus_last_closings' => $campus_last_closings,
+			'campus_last_verified' => $campus_last_verified,
+			'date_picker_min' => $this->_date_picker_min($campus_last_verified),
+			'bank_accounts' => $bank_accounts,
+			'flags' => $flags,
+		));
 	}
 
 	/**
 	 * Legacy: Closing::closenow
-	 * POST close_day — body campus_id, date, close_type?
+	 * POST close_day — body campus_id, date, close_type (1|2|3), receivable_amount?, fee_ids?, sale_ids?, loan_ids?
 	 */
 	public function close_day()
 	{
 		$body = $this->_body();
 		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
 		$date = isset($body['date']) ? $body['date'] : date('Y-m-d');
-		$close_type = isset($body['close_type']) ? $body['close_type'] : '2';
+		$close_type = isset($body['close_type']) ? (string)$body['close_type'] : '2';
 		if ($campus_id <= 0) $this->_json(array('success' => false, 'message' => 'campus_id required'), 400);
+		if (!in_array($close_type, array('1', '2', '3'), true)) {
+			$this->_json(array('success' => false, 'message' => 'close_type must be 1 (Bank), 2 (Cash), or 3 (PayPro)'), 400);
+		}
+		if (!$this->_user_can_close_campus($campus_id)) {
+			$this->_json(array('success' => false, 'message' => 'No closing access for this campus'), 403);
+		}
 
-		$existing = $this->_closing_for_date($campus_id, $date);
+		$flags = $this->_closing_flags();
+		if ($close_type === '2' && empty($flags['can_dailyclosing'])) {
+			$this->_json(array('success' => false, 'message' => 'No permission for cash closing'), 403);
+		}
+		if (($close_type === '1' || $close_type === '3') && empty($flags['can_dailybankclosing'])) {
+			$this->_json(array('success' => false, 'message' => 'No permission for bank/PayPro closing'), 403);
+		}
+
+		$next_close = $this->_next_close_date($campus_id, $this->_campus_last_closings());
+		if ($next_close !== null && $date !== $next_close) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Must close sequentially: next closing day for this campus is ' . $next_close,
+			), 400);
+		}
+
+		$this->db->trans_start();
+		$existing = $this->_closing_for_date($campus_id, $date, true);
 		if ($existing) {
-			$this->_json(array('success' => false, 'message' => 'Closing already exists for this campus/date', 'closing_id' => (int)$existing['id']), 409);
+			$this->db->trans_complete();
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Closing already exists for this campus/date',
+				'closing_id' => (int)$existing['id'],
+			), 409);
 		}
 
 		$bundle = $this->_campus_closing_bundle($campus_id, $date);
@@ -1689,17 +1996,20 @@ class Accountsapi extends CI_Controller {
 		$fee_ids = !empty($body['fee_ids']) ? $body['fee_ids'] : $bundle['fee_ids'];
 		$sale_ids = !empty($body['sale_ids']) ? $body['sale_ids'] : $bundle['sale_ids'];
 		$loan_ids = !empty($body['loan_ids']) ? $body['loan_ids'] : $bundle['loan_ids'];
+		if (!is_array($fee_ids)) $fee_ids = array_filter(explode(',', (string)$fee_ids));
+		if (!is_array($sale_ids)) $sale_ids = array_filter(explode(',', (string)$sale_ids));
+		if (!is_array($loan_ids)) $loan_ids = array_filter(explode(',', (string)$loan_ids));
+		$fee_ids = array_map('intval', $fee_ids);
+		$sale_ids = array_map('intval', $sale_ids);
+		$loan_ids = array_map('intval', $loan_ids);
 
 		$day = date('d', strtotime($date));
 		$month = date('m', strtotime($date));
 		$year = date('Y', strtotime($date));
 		$campus_closing_id = $this->_next_campus_closing_id($campus_id);
 
-		$this->db->trans_start();
-
 		if (count($fee_ids)) {
 			$this->db->where_in('id', $fee_ids)->set('closing_id', $campus_closing_id)->update('payments');
-			// Mark sibling merged challans
 			$merged = $this->db->query(
 				"SELECT * FROM payments WHERE closing_id = ? AND merged_challan IS NOT NULL",
 				array($campus_closing_id)
@@ -1755,7 +2065,99 @@ class Accountsapi extends CI_Controller {
 			'message' => 'Day closed',
 			'closing_id' => (int)$inserted,
 			'campus_closing_id' => $campus_closing_id,
+			'close_type' => $close_type,
 			'closed_amount' => $total,
+		));
+	}
+
+	/**
+	 * Legacy: Closing::add_closing_details
+	 * POST add_closing_details — closing_id, account_id, transaction_no; proof_image filename OR multipart image
+	 */
+	public function add_closing_details()
+	{
+		$body = $this->_body();
+		$closing_id = (int)(isset($body['closing_id']) ? $body['closing_id'] : (isset($body['closingid']) ? $body['closingid'] : 0));
+		$account_id = (int)(isset($body['account_id']) ? $body['account_id'] : 0);
+		$trans_no = isset($body['transaction_no'])
+			? $body['transaction_no']
+			: (isset($body['trans_id']) ? $body['trans_id'] : '');
+		if ($closing_id <= 0) $this->_json(array('success' => false, 'message' => 'closing_id required'), 400);
+		if ($account_id <= 0) $this->_json(array('success' => false, 'message' => 'account_id required'), 400);
+		if ($trans_no === '' || $trans_no === null) {
+			$this->_json(array('success' => false, 'message' => 'transaction_no required'), 400);
+		}
+
+		$row = $this->db->query('SELECT * FROM closing_perday WHERE id = ? LIMIT 1', array($closing_id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Closing not found'), 404);
+		if ((string)$row['close_type'] === '2') {
+			$this->_json(array('success' => false, 'message' => 'Cash closings do not need bank details'), 400);
+		}
+
+		$image = $this->_upload_proof();
+		if ($image === '' && !empty($body['proof_image'])) $image = $body['proof_image'];
+		if ($image === '' && !empty($body['partialy_closed_image'])) $image = $body['partialy_closed_image'];
+
+		$update = array(
+			'account_id' => $account_id,
+			'transaction_no' => $trans_no,
+		);
+		if ($image !== '') $update['partialy_closed_image'] = $image;
+		$this->db->where('id', $closing_id)->update('closing_perday', $update);
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Closing bank details saved',
+			'closing_id' => $closing_id,
+			'partialy_closed_image' => $image !== '' ? $image : (isset($row['partialy_closed_image']) ? $row['partialy_closed_image'] : ''),
+			'image_url' => $this->_upload_url($image !== '' ? $image : (isset($row['partialy_closed_image']) ? $row['partialy_closed_image'] : '')),
+		));
+	}
+
+	/**
+	 * Legacy: Closing::updatenow — change close_type while unverified
+	 * POST update_closing_type — closing_id, close_type (1|2|3)
+	 */
+	public function update_closing_type()
+	{
+		$body = $this->_body();
+		$closing_id = (int)(isset($body['closing_id']) ? $body['closing_id'] : 0);
+		$close_type = isset($body['close_type']) ? (string)$body['close_type'] : '';
+		if ($closing_id <= 0) $this->_json(array('success' => false, 'message' => 'closing_id required'), 400);
+		if (!in_array($close_type, array('1', '2', '3'), true)) {
+			$this->_json(array('success' => false, 'message' => 'close_type must be 1|2|3'), 400);
+		}
+
+		$row = $this->db->query('SELECT * FROM closing_perday WHERE id = ? LIMIT 1', array($closing_id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Closing not found'), 404);
+		if ($this->_is_checked(isset($row['checked_by']) ? $row['checked_by'] : null)) {
+			$this->_json(array('success' => false, 'message' => 'Cannot change type of a verified closing'), 400);
+		}
+		if (!$this->_user_can_close_campus((int)$row['campus_id'])) {
+			$this->_json(array('success' => false, 'message' => 'No closing access for this campus'), 403);
+		}
+
+		$flags = $this->_closing_flags();
+		if ($close_type === '2' && empty($flags['can_dailyclosing'])) {
+			$this->_json(array('success' => false, 'message' => 'No permission for cash closing'), 403);
+		}
+		if (($close_type === '1' || $close_type === '3') && empty($flags['can_dailybankclosing']) && empty($flags['can_dailyclosing'])) {
+			$this->_json(array('success' => false, 'message' => 'No permission to update closing type'), 403);
+		}
+
+		$update = array('close_type' => $close_type);
+		if ($close_type === '2') {
+			$update['partialy_closed_image'] = null;
+			$update['transaction_no'] = null;
+			$update['account_id'] = null;
+		}
+		$this->db->where('id', $closing_id)->update('closing_perday', $update);
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Closing type updated',
+			'closing_id' => $closing_id,
+			'close_type' => $close_type,
 		));
 	}
 
@@ -1781,19 +2183,54 @@ class Accountsapi extends CI_Controller {
 				array($ccid)
 			)->result_array();
 			$assets = array();
+			$asset_amount = 0.0;
 			if ($this->_table_exists('asset_sales')) {
 				$assets = $this->db->query(
 					"SELECT asset_sales.* FROM asset_sales WHERE closing_id = ?",
 					array($ccid)
 				)->result_array();
+				foreach ($assets as $a) $asset_amount += (float)$a['sale_amount'];
 			}
 			$loans = array();
+			$loan_amount = 0.0;
 			if ($this->_table_exists('loan_plan')) {
 				$loans = $this->db->query(
 					"SELECT loan_plan.* FROM loan_plan WHERE closing_id = ?",
 					array($ccid)
 				)->result_array();
+				foreach ($loans as $l) $loan_amount += (float)$l['amount_paid'];
 			}
+			$pos = $this->_pos_sales_by_closing($campus_id, $ccid);
+			$pos_amount = 0.0;
+			foreach ($pos as $p) {
+				$pos_amount += isset($p['sold_amount']) ? (float)$p['sold_amount'] : 0;
+			}
+			$fee_amount = 0.0;
+			$fee_ids = array();
+			foreach ($fees as $f) {
+				$fee_amount += (float)$f['actual_amount'];
+				$fee_ids[] = (int)$f['id'];
+			}
+			$sale_amount = 0.0;
+			if ($this->_table_exists('sales') && $this->_table_exists('sales_payments')
+				&& $this->_field_exists('sales', 'closing_id')) {
+				$sale_row = $this->db->query(
+					"SELECT COALESCE(SUM(sales_payments.payment_amount),0) AS total
+					 FROM sales
+					 LEFT JOIN sales_payments ON sales_payments.sale_id = sales.sale_id
+					 WHERE sales.closing_id = ? AND sales.campus_id = ?",
+					array($ccid, $campus_id)
+				)->row_array();
+				$sale_amount = (float)(isset($sale_row['total']) ? $sale_row['total'] : 0);
+			}
+			$sale_ids = array();
+			foreach ($assets as $a) $sale_ids[] = (int)$a['id'];
+			$loan_ids = array();
+			foreach ($loans as $l) $loan_ids[] = (int)$l['id'];
+
+			$img = isset($closed['partialy_closed_image']) ? $closed['partialy_closed_image'] : '';
+			$closed['image_url'] = $this->_upload_url($img);
+
 			$this->_json(array(
 				'success' => true,
 				'closed' => true,
@@ -1803,6 +2240,17 @@ class Accountsapi extends CI_Controller {
 				'fees' => $fees,
 				'asset_sales' => $assets,
 				'loans' => $loans,
+				'pos' => $pos,
+				'fee_ids' => $fee_ids,
+				'sale_ids' => $sale_ids,
+				'loan_ids' => $loan_ids,
+				'breakdown' => array(
+					'fees' => $fee_amount,
+					'sales' => $sale_amount,
+					'asset_sales' => $asset_amount,
+					'loans' => $loan_amount,
+					'pos' => $pos_amount,
+				),
 				'total' => (float)$closed['closed_amount'],
 			));
 		}
@@ -1817,6 +2265,7 @@ class Accountsapi extends CI_Controller {
 			'fees' => $bundle['fee_lines'],
 			'asset_sales' => $bundle['asset_lines'],
 			'loans' => $bundle['loan_lines'],
+			'pos' => $bundle['pos_lines'],
 			'breakdown' => array(
 				'fees' => $bundle['fee_amount'],
 				'sales' => $bundle['sale_amount'],
@@ -1832,8 +2281,9 @@ class Accountsapi extends CI_Controller {
 	}
 
 	/**
-	 * Legacy: Closing::accountsclosing (awaiting verify)
-	 * GET closings_conciliation?date=
+	 * Legacy: Closing::accountsclosing
+	 * GET closings_conciliation?from_date&to_date&campus_id&tag_type=
+	 * tag_type empty/2 = ALL; tag_type=0 = Bank UNTagged
 	 */
 	public function closings_conciliation()
 	{
@@ -1843,24 +2293,121 @@ class Accountsapi extends CI_Controller {
 		$to = $this->input->get('to_date');
 		if (!$from) $from = $date;
 		if (!$to) $to = $date;
+		$campus_id = $this->input->get('campus_id');
+		$tag_type = $this->input->get('tag_type');
+		if ($tag_type === null || $tag_type === '') $tag_type = '2';
 
-		$sql = "SELECT closing_perday.*, campuses.campus_name
+		$flags = $this->_closing_flags();
+		$campus_last_closings = $this->_campus_last_closings();
+		$campus_last_verified = $this->_campus_last_verified();
+		$bank_accounts = $this->_bank_accounts_rows();
+
+		$campuses = array();
+		if ($this->_table_exists('closing_persons')) {
+			$campuses = $this->db->query(
+				"SELECT campuses.campus_id, campuses.campus_name
+				 FROM closing_persons
+				 JOIN campuses ON campuses.campus_id = closing_persons.campus_id
+				 GROUP BY closing_persons.campus_id
+				 ORDER BY campuses.campus_name ASC"
+			)->result_array();
+		}
+
+		$sql = "SELECT closing_perday.*, campuses.campus_name,
+					bank_reconciliation_statement.credit AS brs_credit,
+					bank_reconciliation_statement.description AS brs_description,
+					bank_reconciliation_statement.id AS brs_id
 				FROM closing_perday
 				LEFT JOIN campuses ON campuses.campus_id = closing_perday.campus_id
+				LEFT JOIN bank_reconciliation_statement
+					ON bank_reconciliation_statement.closing_id = closing_perday.id
 				WHERE STR_TO_DATE(CONCAT(closing_perday.for_year,'-',closing_perday.for_month,'-',closing_perday.for_day), '%Y-%m-%d') >= ?
 				  AND STR_TO_DATE(CONCAT(closing_perday.for_year,'-',closing_perday.for_month,'-',closing_perday.for_day), '%Y-%m-%d') <= ?";
 		$params = array($from, $to);
-		if ($this->_field_exists('closing_perday', 'checked_by')) {
-			$sql .= ' AND (closing_perday.checked_by IS NULL OR closing_perday.checked_by = \'\' OR closing_perday.checked_by = \'0\')';
+		if ($campus_id !== null && $campus_id !== '' && (int)$campus_id > 0) {
+			$sql .= ' AND closing_perday.campus_id = ?';
+			$params[] = (int)$campus_id;
+		}
+		if ((string)$tag_type === '0') {
+			$sql .= ' AND (closing_perday.close_type = 1 AND bank_reconciliation_statement.closing_id IS NULL)';
 		}
 		$sql .= ' ORDER BY closing_perday.id DESC';
 		$rows = $this->db->query($sql, $params)->result_array();
-		$this->_json(array('success' => true, 'date' => $date, 'from_date' => $from, 'to_date' => $to, 'rows' => $rows));
+
+		$out = array();
+		foreach ($rows as $r) {
+			$close_type = isset($r['close_type']) ? (string)$r['close_type'] : '2';
+			$checked = isset($r['checked_by']) ? $r['checked_by'] : null;
+			$img = isset($r['partialy_closed_image']) ? $r['partialy_closed_image'] : '';
+			$closing_date = sprintf(
+				'%04d-%02d-%02d',
+				(int)$r['for_year'],
+				(int)$r['for_month'],
+				(int)$r['for_day']
+			);
+			$next_verify = $this->_next_verify_date((int)$r['campus_id'], $campus_last_verified);
+			// Legacy accountsclosingsheet: verify button only when closing_date === last_verified+1 (no Admin bypass)
+			$sequential_ok = ($next_verify === null || $closing_date === $next_verify);
+			$unchecked = !$this->_is_checked($checked);
+
+			if ($close_type === '1') {
+				$close_type_label = 'Bank Closed';
+			} elseif ($close_type === '3') {
+				$close_type_label = 'PayPro Closed';
+			} else {
+				$close_type_label = 'Cash Closed';
+			}
+
+			$can_verify_cash = $unchecked && $close_type === '2' && $sequential_ok;
+			$can_verify_bank = $unchecked && $close_type === '1' && $img !== '' && $sequential_ok;
+			$can_edit_amount = !empty($flags['can_conciliation_edit']) || !empty($flags['can_closing_amount_edit']);
+
+			$out[] = array(
+				'id' => (int)$r['id'],
+				'campus_id' => (int)$r['campus_id'],
+				'campus_name' => isset($r['campus_name']) ? $r['campus_name'] : '',
+				'for_day' => $r['for_day'],
+				'for_month' => $r['for_month'],
+				'for_year' => $r['for_year'],
+				'closing_date' => $closing_date,
+				'campus_closing_id' => $r['campus_closing_id'],
+				'receivable_amount' => isset($r['receivable_amount']) ? (float)$r['receivable_amount'] : (float)$r['closed_amount'],
+				'closed_amount' => (float)$r['closed_amount'],
+				'close_type' => $close_type,
+				'close_type_label' => $close_type_label,
+				'transaction_no' => isset($r['transaction_no']) ? $r['transaction_no'] : null,
+				'account_id' => isset($r['account_id']) ? $r['account_id'] : null,
+				'partialy_closed_image' => $img,
+				'image_url' => $this->_upload_url($img),
+				'closed_by' => isset($r['closed_by']) ? $r['closed_by'] : '',
+				'checked_by' => $checked,
+				'accounts_status' => $this->_accounts_status_label(true, $checked),
+				'brs_credit' => isset($r['brs_credit']) ? $r['brs_credit'] : null,
+				'brs_description' => isset($r['brs_description']) ? $r['brs_description'] : null,
+				'can_verify_cash' => $can_verify_cash,
+				'can_verify_bank' => $can_verify_bank,
+				'can_edit_amount' => $can_edit_amount && $can_verify_cash,
+			);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'date' => $date,
+			'from_date' => $from,
+			'to_date' => $to,
+			'tag_type' => $tag_type,
+			'rows' => $out,
+			'campus_last_closings' => $campus_last_closings,
+			'campus_last_verified' => $campus_last_verified,
+			'campuses' => $campuses,
+			'bank_accounts' => $bank_accounts,
+			'flags' => $flags,
+		));
 	}
 
 	/**
 	 * Legacy: Closing::verify_closing_now
-	 * POST verify_closing — closing_id or campus_id+date; amount optional
+	 * POST verify_closing — closing_id; amount optional (cash path)
 	 */
 	public function verify_closing()
 	{
@@ -1880,9 +2427,61 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Closing not found or already verified'), 404);
 		}
 
+		$close_type = (string)$check['close_type'];
+		$flags = $this->_closing_flags();
 		$amount = isset($body['amount']) ? (float)$body['amount'] : (float)$check['closed_amount'];
+		$closing_date = $this->_closing_ymd_from_row($check);
+		$this->_assert_sequential_verify((int)$check['campus_id'], $closing_date, $this->_campus_last_verified());
 
-		if ((string)$check['close_type'] === '2' && $this->_table_exists('college_closing_rules')) {
+		if ($close_type === '1') {
+			$tagged = false;
+			if ($this->_table_exists('bank_reconciliation_statement')) {
+				$brs = $this->db->query(
+					'SELECT id FROM bank_reconciliation_statement WHERE closing_id = ? LIMIT 1',
+					array($id)
+				)->row_array();
+				$tagged = (bool)$brs;
+			}
+			if (!$tagged) {
+				$this->_json(array(
+					'success' => false,
+					'message' => 'Bank closing must be verified via tag_closing_bank (find and tag a bank deposit)',
+				), 400);
+			}
+			$this->db->where('id', $id)->update('closing_perday', array(
+				'checked_by' => '1',
+				'created_at' => date('Y-m-d H:i:s'),
+			));
+			$this->_json(array('success' => true, 'message' => 'Closing verified successfully.', 'closing_id' => $id));
+		}
+
+		if ($close_type === '3') {
+			$paid = true;
+			if ($this->_table_exists('students_payments')) {
+				$sp = $this->db->query(
+					"SELECT transaction_status FROM students_payments WHERE closing_id = ? LIMIT 1",
+					array($id)
+				)->row_array();
+				if ($sp && strtoupper((string)$sp['transaction_status']) !== 'PAID') {
+					$paid = false;
+				}
+			}
+			if (!$paid) {
+				$this->_json(array('success' => false, 'message' => 'PayPro closing is not paid yet'), 400);
+			}
+			$this->db->where('id', $id)->update('closing_perday', array(
+				'checked_by' => '1',
+				'created_at' => date('Y-m-d H:i:s'),
+			));
+			$this->_json(array('success' => true, 'message' => 'Closing verified successfully.', 'closing_id' => $id));
+		}
+
+		// Cash path (close_type=2)
+		if (isset($body['amount']) && empty($flags['can_conciliation_edit']) && empty($flags['is_admin'])) {
+			$amount = (float)$check['closed_amount'];
+		}
+
+		if ($this->_table_exists('college_closing_rules')) {
 			$rule = $this->db->query(
 				'SELECT * FROM college_closing_rules WHERE campus_id = ? LIMIT 1',
 				array((int)$check['campus_id'])
@@ -1923,6 +2522,105 @@ class Accountsapi extends CI_Controller {
 			'created_at' => date('Y-m-d H:i:s'),
 		));
 		$this->_json(array('success' => true, 'message' => 'Closing verified successfully.', 'closing_id' => $id));
+	}
+
+	/**
+	 * Legacy: Closing::find_transactions
+	 * POST find_closing_bank_transactions — closing_id, from_date, to_date, amount
+	 */
+	public function find_closing_bank_transactions()
+	{
+		$body = $this->_body();
+		$closing_id = (int)(isset($body['closing_id']) ? $body['closing_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
+		$from_date = isset($body['from_date']) ? date('Y-m-d', strtotime($body['from_date'])) : date('Y-m-d');
+		$to_date = isset($body['to_date']) ? date('Y-m-d', strtotime($body['to_date'])) : date('Y-m-d');
+		$amount = isset($body['amount']) ? $body['amount'] : 0;
+		if ($closing_id <= 0) $this->_json(array('success' => false, 'message' => 'closing_id required'), 400);
+
+		$closing = $this->db->query('SELECT * FROM closing_perday WHERE id = ? LIMIT 1', array($closing_id))->row_array();
+		if (!$closing) $this->_json(array('success' => false, 'message' => 'Closing not found'), 404);
+		if (empty($closing['account_id'])) {
+			$this->_json(array('success' => false, 'message' => 'Closing has no bank account set'), 400);
+		}
+		if (!$this->_table_exists('bank_reconciliation_statement')) {
+			$this->_json(array('success' => true, 'entries' => array()));
+		}
+
+		$amount_clean = str_replace(',', '', (string)$amount);
+		$sql = "SELECT bank_reconciliation_statement.*, bank_reconciliation_statement.id AS tidx
+				FROM bank_reconciliation_statement
+				LEFT JOIN payments ON payments.statement_id = bank_reconciliation_statement.id
+				WHERE bank_reconciliation_statement.trans_date >= ?
+				  AND bank_reconciliation_statement.trans_date <= ?
+				  AND bank_reconciliation_statement.account_id = ?
+				  AND bank_reconciliation_statement.closing_id IS NULL
+				  AND CONVERT(REPLACE(bank_reconciliation_statement.credit, ',', ''), SIGNED) = ?
+				GROUP BY bank_reconciliation_statement.description
+				ORDER BY bank_reconciliation_statement.trans_date ASC, bank_reconciliation_statement.id ASC";
+		$entries = $this->db->query($sql, array(
+			$from_date,
+			$to_date,
+			(int)$closing['account_id'],
+			$amount_clean,
+		))->result_array();
+
+		$this->_json(array(
+			'success' => true,
+			'closing_id' => $closing_id,
+			'account_id' => (int)$closing['account_id'],
+			'from_date' => $from_date,
+			'to_date' => $to_date,
+			'amount' => $amount_clean,
+			'entries' => $entries,
+		));
+	}
+
+	/**
+	 * Legacy: Closing::tag_bank_trans
+	 * POST tag_closing_bank — closing_id, tag_id (BRS id)
+	 */
+	public function tag_closing_bank()
+	{
+		$body = $this->_body();
+		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : 0);
+		$closing_id = (int)(isset($body['closing_id']) ? $body['closing_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
+		if ($tag_id <= 0 || $closing_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'tag_id and closing_id required'), 400);
+		}
+
+		$bank = $this->db->query('SELECT * FROM bank_reconciliation_statement WHERE id = ?', array($tag_id))->row_array();
+		$closing = $this->db->query('SELECT * FROM closing_perday WHERE id = ?', array($closing_id))->row_array();
+		if (!$bank || !$closing) $this->_json(array('success' => false, 'message' => 'Record not found'), 404);
+		if ($this->_is_checked(isset($closing['checked_by']) ? $closing['checked_by'] : null)) {
+			$this->_json(array('success' => false, 'message' => 'Closing already verified'), 400);
+		}
+		$closing_date = $this->_closing_ymd_from_row($closing);
+		$this->_assert_sequential_verify((int)$closing['campus_id'], $closing_date, $this->_campus_last_verified());
+
+		$credit = (int)str_replace(',', '', (string)$bank['credit']);
+		$closed_amt = (int)str_replace(',', '', number_format((float)$closing['closed_amount']));
+		if ($credit < $closed_amt && $this->_table_exists('expenses')) {
+			$this->db->insert('expenses', array(
+				'campus_id' => $closing['campus_id'],
+				'expense_category_id' => 122,
+				'title' => 'Expense against Closing ' . $closing['campus_closing_id'],
+				'date' => date('Y-m-d'),
+				'amount' => $closed_amt - $credit,
+				'purpose' => 'Expense due to Cash short in Closing',
+				'actual_date' => date('Y-m-d H:i:s'),
+				'image' => '',
+				'paid_type' => 'bank',
+				'approved_status' => '1',
+				'add_by_id' => (int)$this->current_user['user_id'],
+				'add_by' => $this->_actor_name(),
+			));
+		}
+		$this->db->where('id', $tag_id)->update('bank_reconciliation_statement', array('closing_id' => $closing_id));
+		$this->db->where('id', $closing_id)->update('closing_perday', array(
+			'checked_by' => '1',
+			'created_at' => date('Y-m-d H:i:s'),
+		));
+		$this->_json(array('success' => true, 'message' => 'Bank deposit tagged and closing verified', 'closing_id' => $closing_id));
 	}
 
 	/**
@@ -2029,9 +2727,530 @@ class Accountsapi extends CI_Controller {
 
 	/* ===================== Phase 3 — bank recon / PayPro ===================== */
 
+	/* ─── Bank statement reconciliation helpers ─── */
+
+	private function _brs_num($v)
+	{
+		if ($v === null || $v === '') return 0.0;
+		return (float)str_replace(array(',', ' '), '', (string)$v);
+	}
+
+	private function _brs_empty($v)
+	{
+		return $v === null || $v === '' || $v === '0' || $v === 0 || $v === 'NULL';
+	}
+
+	private function _brs_cash_accounts()
+	{
+		if (!$this->_table_exists('accounts')) return array();
+		return $this->db->query(
+			"SELECT id, account_name, account_title, amount, type
+			 FROM accounts WHERE type = '0' OR type = 0
+			 ORDER BY account_title ASC, account_name ASC"
+		)->result_array();
+	}
+
+	private function _brs_expense_categories()
+	{
+		if (!$this->_table_exists('expense_category')) return array();
+		return $this->db->query(
+			'SELECT expense_category_id, name, sub_of FROM expense_category ORDER BY name ASC'
+		)->result_array();
+	}
+
+	private function _brs_campuses()
+	{
+		if (!$this->_table_exists('campuses')) return array();
+		return $this->db->query(
+			'SELECT campus_id, campus_name FROM campuses WHERE status = 1 ORDER BY campus_name ASC'
+		)->result_array();
+	}
+
+	private function _brs_is_tagged_row($row, $has_payment = false)
+	{
+		if ($has_payment) return true;
+		if (!$this->_brs_empty(isset($row['expense_id']) ? $row['expense_id'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['salary_expense_ids']) ? $row['salary_expense_ids'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['closing_id']) ? $row['closing_id'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['bank_transfer_id']) ? $row['bank_transfer_id'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['paypro_id']) ? $row['paypro_id'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['statement_id']) ? $row['statement_id'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['is_council_fee']) ? $row['is_council_fee'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['profit_distribution_id']) ? $row['profit_distribution_id'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['loan_id']) ? $row['loan_id'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['reversal_payroll_trans_id']) ? $row['reversal_payroll_trans_id'] : null)) return true;
+		if (!$this->_brs_empty(isset($row['reversal_payroll_id']) ? $row['reversal_payroll_id'] : null)) return true;
+		$related = isset($row['related_to']) ? $row['related_to'] : 0;
+		if ($related !== null && $related !== '' && (int)$related !== 0) return true;
+		return false;
+	}
+
+	private function _brs_payment_rows($brs_id)
+	{
+		if (!$this->_table_exists('payments') || (int)$brs_id <= 0) return array();
+		return $this->db->query(
+			"SELECT payments.payment_id, payments.actual_amount, payments.amount, payments.challan_no,
+					payments.paid_challans, payments.tid_no, payments.paid_date, payments.contract_id,
+					students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile,
+					campuses.campus_name, classes.name AS class_name, courses.course_name
+			 FROM payments
+			 LEFT JOIN students ON students.student_id = payments.student_id
+			 LEFT JOIN classes ON classes.class_id = students.class_id
+			 LEFT JOIN campuses ON campuses.campus_id = classes.campus_id
+			 LEFT JOIN courses ON courses.course_id = students.course_id
+			 WHERE payments.statement_id = ?
+			 LIMIT 50",
+			array((int)$brs_id)
+		)->result_array();
+	}
+
+	private function _brs_enrich_entry($row)
+	{
+		$id = (int)$row['id'];
+		$debit = $this->_brs_num(isset($row['debit']) ? $row['debit'] : 0);
+		$credit = $this->_brs_num(isset($row['credit']) ? $row['credit'] : 0);
+		$payments = $this->_brs_payment_rows($id);
+		$has_payment = count($payments) > 0;
+		$is_tagged = $this->_brs_is_tagged_row($row, $has_payment);
+
+		$account_title = isset($row['account_title']) ? $row['account_title'] : '';
+		$account_name = isset($row['account_name']) ? $row['account_name'] : '';
+		$bank_label = trim($account_title . ' ' . $account_name);
+
+		$relate = array(
+			'relate_type' => 'none',
+			'relate_label' => '',
+			'relate_detail' => array(),
+			'untag_type' => null,
+		);
+
+		if ($has_payment) {
+			$detail = array();
+			foreach ($payments as $p) {
+				$detail[] = array(
+					'challan_no' => !empty($p['paid_challans']) ? $p['paid_challans'] : $p['challan_no'],
+					'amount' => isset($p['actual_amount']) ? $p['actual_amount'] : $p['amount'],
+					'tid_no' => $p['tid_no'],
+					'paid_date' => $p['paid_date'],
+					'roll_no' => $p['roll_no'],
+					'name' => trim((isset($p['first_name']) ? $p['first_name'] : '') . ' ' . (isset($p['last_name']) ? $p['last_name'] : '')),
+					'campus_name' => $p['campus_name'],
+					'class_name' => $p['class_name'],
+					'course_name' => $p['course_name'],
+				);
+			}
+			$relate = array(
+				'relate_type' => 'payment',
+				'relate_label' => 'Fee payment',
+				'relate_detail' => $detail,
+				'untag_type' => 'payment',
+			);
+		} elseif (!$this->_brs_empty(isset($row['expense_id']) ? $row['expense_id'] : null)) {
+			$expense = null;
+			if ($this->_table_exists('expenses')) {
+				$expense = $this->db->query(
+					"SELECT expenses.*, expense_category.name AS category_name, campuses.campus_name
+					 FROM expenses
+					 LEFT JOIN expense_category ON expense_category.expense_category_id = expenses.expense_category_id
+					 LEFT JOIN campuses ON campuses.campus_id = expenses.campus_id
+					 WHERE expenses.expense_id = ? LIMIT 1",
+					array((int)$row['expense_id'])
+				)->row_array();
+			}
+			$is_council = !$this->_brs_empty(isset($row['is_council_fee']) ? $row['is_council_fee'] : null);
+			$relate = array(
+				'relate_type' => $is_council ? 'council_fee' : 'expense',
+				'relate_label' => $is_council ? 'Council fee expense' : 'Expense',
+				'relate_detail' => $expense ? array(
+					'category' => isset($expense['category_name']) ? $expense['category_name'] : '',
+					'campus_name' => isset($expense['campus_name']) ? $expense['campus_name'] : '',
+					'title' => isset($expense['title']) ? $expense['title'] : '',
+					'purpose' => isset($expense['purpose']) ? $expense['purpose'] : '',
+					'amount' => isset($expense['amount']) ? $expense['amount'] : '',
+					'add_by' => isset($expense['add_by']) ? $expense['add_by'] : '',
+					'expense_id' => (int)$row['expense_id'],
+				) : array('expense_id' => (int)$row['expense_id']),
+				'untag_type' => 'expense',
+			);
+		} elseif (!$this->_brs_empty(isset($row['bank_transfer_id']) ? $row['bank_transfer_id'] : null)) {
+			$other = $this->db->query(
+				"SELECT brs.*, accounts.account_name, accounts.account_title
+				 FROM bank_reconciliation_statement brs
+				 LEFT JOIN accounts ON accounts.id = brs.account_id
+				 WHERE brs.id = ? LIMIT 1",
+				array((int)$row['bank_transfer_id'])
+			)->row_array();
+			$other_credit = $other ? $this->_brs_num($other['credit']) : 0;
+			$relate = array(
+				'relate_type' => 'bank',
+				'relate_label' => ($other && $other_credit > 0) ? 'Transferred to account' : 'Received from account',
+				'relate_detail' => $other ? array(
+					'account_name' => isset($other['account_name']) ? $other['account_name'] : '',
+					'account_title' => isset($other['account_title']) ? $other['account_title'] : '',
+					'trans_date' => $other['trans_date'],
+					'debit' => $other['debit'],
+					'credit' => $other['credit'],
+					'related_id' => (int)$row['bank_transfer_id'],
+				) : array(),
+				'untag_type' => 'bank',
+			);
+		} elseif (!$this->_brs_empty(isset($row['statement_id']) ? $row['statement_id'] : null) && $this->_table_exists('transactions_history')) {
+			$join_col = ($credit <= 0) ? 'to_account_id' : 'from_account_id';
+			$tx = $this->db->query(
+				"SELECT th.*, th.amount AS trans_amount, accounts.account_name, accounts.account_title
+				 FROM transactions_history th
+				 LEFT JOIN accounts ON accounts.id = th.{$join_col}
+				 WHERE th.id = ? LIMIT 1",
+				array((int)$row['statement_id'])
+			)->row_array();
+			$relate = array(
+				'relate_type' => ($credit <= 0) ? 'cash' : 'cash_deposit',
+				'relate_label' => ($credit <= 0) ? 'Cash withdrawal' : 'Cash deposit',
+				'relate_detail' => $tx ? array(
+					'account_name' => isset($tx['account_name']) ? $tx['account_name'] : '',
+					'date' => !empty($tx['created_at']) ? date('Y-m-d', strtotime($tx['created_at'])) : '',
+					'amount' => isset($tx['trans_amount']) ? $tx['trans_amount'] : '',
+					'reason' => isset($tx['reason']) ? $tx['reason'] : '',
+					'history_id' => (int)$row['statement_id'],
+				) : array('history_id' => (int)$row['statement_id']),
+				'untag_type' => 'entry',
+			);
+		} elseif (!$this->_brs_empty(isset($row['closing_id']) ? $row['closing_id'] : null)) {
+			$closing = null;
+			if ($this->_table_exists('closing_perday')) {
+				$closing = $this->db->query(
+					"SELECT closing_perday.*, campuses.campus_name
+					 FROM closing_perday
+					 LEFT JOIN campuses ON campuses.campus_id = closing_perday.campus_id
+					 WHERE closing_perday.id = ? LIMIT 1",
+					array((int)$row['closing_id'])
+				)->row_array();
+			}
+			$relate = array(
+				'relate_type' => 'closing',
+				'relate_label' => 'Closing deposit',
+				'relate_detail' => $closing ? array(
+					'campus_name' => $closing['campus_name'],
+					'campus_closing_id' => $closing['campus_closing_id'],
+					'amount' => isset($row['credit']) ? $row['credit'] : '',
+					'closing_id' => (int)$row['closing_id'],
+				) : array('closing_id' => (int)$row['closing_id']),
+				'untag_type' => 'closing',
+			);
+		} elseif (!$this->_brs_empty(isset($row['is_council_fee']) ? $row['is_council_fee'] : null)) {
+			$relate = array(
+				'relate_type' => 'council_fee',
+				'relate_label' => 'Council fee (not tagged)',
+				'relate_detail' => array('message' => 'Selected as Council Fee Not Tagged'),
+				'untag_type' => 'council_fee',
+			);
+		} elseif (!$this->_brs_empty(isset($row['paypro_id']) ? $row['paypro_id'] : null)) {
+			$pp = null;
+			if ($this->_table_exists('pay_pro_settlement')) {
+				$pp = $this->db->query(
+					'SELECT * FROM pay_pro_settlement WHERE id = ? LIMIT 1',
+					array((int)$row['paypro_id'])
+				)->row_array();
+			}
+			$relate = array(
+				'relate_type' => 'pay_pro',
+				'relate_label' => 'PayPro settlement',
+				'relate_detail' => $pp ? array(
+					'settlement_date' => $pp['settlement_date'],
+					'tagged_credit' => isset($row['credit']) ? $row['credit'] : '',
+					'paid_amount' => $pp['paid_amount'],
+					'link_amount' => $pp['link_amount'],
+					'card_amount' => $pp['card_amount'],
+					'total_amount' => $pp['total_amount'],
+					'paypro_id' => (int)$row['paypro_id'],
+				) : array('paypro_id' => (int)$row['paypro_id']),
+				'untag_type' => 'paypro',
+			);
+		} elseif (!$this->_brs_empty(isset($row['salary_expense_ids']) ? $row['salary_expense_ids'] : null)) {
+			$salaries = array();
+			if ($this->_table_exists('expenses')) {
+				$salaries = $this->db->query(
+					"SELECT expenses.expense_id, expenses.amount, expenses.add_by, expenses.title,
+							expense_category.name AS category_name, campuses.campus_name
+					 FROM expenses
+					 LEFT JOIN expense_category ON expense_category.expense_category_id = expenses.expense_category_id
+					 LEFT JOIN campuses ON campuses.campus_id = expenses.campus_id
+					 WHERE expenses.bank_statement_id = ?",
+					array($id)
+				)->result_array();
+			}
+			$relate = array(
+				'relate_type' => 'expense_tag',
+				'relate_label' => 'Salary expense',
+				'relate_detail' => array('expenses' => $salaries, 'salary_expense_ids' => $row['salary_expense_ids']),
+				'untag_type' => 'salary_expense',
+			);
+		} elseif (!$this->_brs_empty(isset($row['profit_distribution_id']) ? $row['profit_distribution_id'] : null)) {
+			$entry = null;
+			if ($this->_table_exists('profit_distribution')) {
+				$entry = $this->db->query(
+					"SELECT profit_distribution.*, campuses.campus_name, users.first_name, users.last_name
+					 FROM profit_distribution
+					 LEFT JOIN campuses ON campuses.campus_id = profit_distribution.campus_id
+					 LEFT JOIN users ON users.user_id = profit_distribution.user_id
+					 WHERE profit_distribution_id = ? LIMIT 1",
+					array((int)$row['profit_distribution_id'])
+				)->row_array();
+			}
+			$relate = array(
+				'relate_type' => 'share_distribution',
+				'relate_label' => 'Share profit distribution',
+				'relate_detail' => $entry ? array(
+					'name' => trim((isset($entry['first_name']) ? $entry['first_name'] : '') . ' ' . (isset($entry['last_name']) ? $entry['last_name'] : '')),
+					'from_date' => $entry['from_date'],
+					'to_date' => $entry['to_date'],
+					'campus_name' => $entry['campus_name'],
+					'amount' => $entry['amount'],
+					'profit_distribution_id' => (int)$row['profit_distribution_id'],
+				) : array(),
+				'untag_type' => 'profit',
+			);
+		} elseif (!$this->_brs_empty(isset($row['loan_id']) ? $row['loan_id'] : null)) {
+			$entry = null;
+			if ($this->_table_exists('loans')) {
+				$entry = $this->db->query(
+					"SELECT loans.*, users.first_name, users.last_name, expenses.date AS expense_date
+					 FROM loans
+					 LEFT JOIN users ON users.user_id = loans.user_id
+					 LEFT JOIN expenses ON expenses.loan_id = loans.id
+					 WHERE loans.id = ? LIMIT 1",
+					array((int)$row['loan_id'])
+				)->row_array();
+			}
+			$relate = array(
+				'relate_type' => 'tag_loan',
+				'relate_label' => 'Loan',
+				'relate_detail' => $entry ? array(
+					'loan_id' => (int)$entry['id'],
+					'name' => trim((isset($entry['first_name']) ? $entry['first_name'] : '') . ' ' . (isset($entry['last_name']) ? $entry['last_name'] : '')),
+					'amount' => $entry['cash_given'],
+					'months' => $entry['months_approved'],
+					'expense_date' => isset($entry['expense_date']) ? $entry['expense_date'] : '',
+				) : array('loan_id' => (int)$row['loan_id']),
+				'untag_type' => 'loan',
+			);
+		} elseif (!$this->_brs_empty(isset($row['reversal_payroll_trans_id']) ? $row['reversal_payroll_trans_id'] : null)
+			|| !$this->_brs_empty(isset($row['reversal_payroll_id']) ? $row['reversal_payroll_id'] : null)) {
+			$src = null;
+			$payroll = null;
+			if (!$this->_brs_empty(isset($row['reversal_payroll_trans_id']) ? $row['reversal_payroll_trans_id'] : null)) {
+				$src = $this->db->query(
+					"SELECT brs.*, accounts.account_name
+					 FROM bank_reconciliation_statement brs
+					 LEFT JOIN accounts ON accounts.id = brs.account_id
+					 WHERE brs.id = ? LIMIT 1",
+					array((int)$row['reversal_payroll_trans_id'])
+				)->row_array();
+			}
+			if ($this->_table_exists('payroll') && !$this->_brs_empty(isset($row['reversal_payroll_id']) ? $row['reversal_payroll_id'] : null)) {
+				$payroll = $this->db->query(
+					"SELECT payroll.*, users.first_name, users.last_name
+					 FROM payroll
+					 LEFT JOIN users ON users.user_id = payroll.user_id
+					 WHERE payroll.id = ? LIMIT 1",
+					array((int)$row['reversal_payroll_id'])
+				)->row_array();
+			}
+			$relate = array(
+				'relate_type' => 'salary_reverse',
+				'relate_label' => 'Salary reverse',
+				'relate_detail' => array(
+					'account_name' => $src ? $src['account_name'] : '',
+					'amount' => $src ? $src['debit'] : '',
+					'person' => $payroll ? trim($payroll['first_name'] . ' ' . $payroll['last_name']) : '',
+					'month' => $payroll ? ($payroll['payroll_year'] . '-' . $payroll['payroll_month']) : '',
+					'salary' => $payroll ? $payroll['earned_salary'] : '',
+				),
+				'untag_type' => 'salary_reverse',
+			);
+		}
+
+		$can_tag_debit = array();
+		$can_tag_credit = array();
+		if (!$is_tagged) {
+			if ($debit > 0 && $credit <= 0) {
+				$can_tag_debit = array('expense', 'bank', 'cash', 'council_fee', 'expense_tag', 'share_distribution', 'tag_loan');
+			}
+			if ($credit > 0) {
+				$can_tag_credit = array('pay_pro', 'cash_deposit', 'salary_reverse');
+			}
+		}
+
+		return array(
+			'id' => $id,
+			'trans_id' => $id,
+			'statement_no' => isset($row['statement_no']) ? $row['statement_no'] : null,
+			'account_id' => isset($row['account_id']) ? (int)$row['account_id'] : 0,
+			'account_name' => $account_name,
+			'account_title' => $account_title,
+			'bank_name' => $bank_label,
+			'trans_date' => isset($row['trans_date']) ? $row['trans_date'] : '',
+			'description' => isset($row['description']) ? $row['description'] : '',
+			'reference_no' => isset($row['reference_no']) ? $row['reference_no'] : '',
+			'transaction_type' => trim((isset($row['description']) ? $row['description'] : '') . ' ' . (isset($row['reference_no']) ? $row['reference_no'] : '')),
+			'debit' => isset($row['debit']) ? $row['debit'] : '',
+			'credit' => isset($row['credit']) ? $row['credit'] : '',
+			'debit_num' => $debit,
+			'credit_num' => $credit,
+			'balance' => isset($row['balance']) ? $row['balance'] : '',
+			'tagged_amount' => isset($row['tagged_amount']) ? $row['tagged_amount'] : 0,
+			'expense_id' => isset($row['expense_id']) ? $row['expense_id'] : null,
+			'closing_id' => isset($row['closing_id']) ? $row['closing_id'] : null,
+			'bank_transfer_id' => isset($row['bank_transfer_id']) ? $row['bank_transfer_id'] : null,
+			'paypro_id' => isset($row['paypro_id']) ? $row['paypro_id'] : null,
+			'salary_expense_ids' => isset($row['salary_expense_ids']) ? $row['salary_expense_ids'] : null,
+			'statement_id' => isset($row['statement_id']) ? $row['statement_id'] : null,
+			'is_council_fee' => isset($row['is_council_fee']) ? $row['is_council_fee'] : null,
+			'profit_distribution_id' => isset($row['profit_distribution_id']) ? $row['profit_distribution_id'] : null,
+			'loan_id' => isset($row['loan_id']) ? $row['loan_id'] : null,
+			'reversal_payroll_id' => isset($row['reversal_payroll_id']) ? $row['reversal_payroll_id'] : null,
+			'reversal_payroll_trans_id' => isset($row['reversal_payroll_trans_id']) ? $row['reversal_payroll_trans_id'] : null,
+			'payment_relate_to' => $relate,
+			'relate_type' => $relate['relate_type'],
+			'relate_label' => $relate['relate_label'],
+			'relate_detail' => $relate['relate_detail'],
+			'is_tagged' => $is_tagged,
+			'can_tag_debit_actions' => $can_tag_debit,
+			'can_tag_credit_actions' => $can_tag_credit,
+			'can_untag' => $is_tagged && !empty($relate['untag_type']),
+			'untag_type' => $relate['untag_type'],
+		);
+	}
+
+	private function _brs_parse_csv_lines($account_id, $filepath)
+	{
+		$lines = array();
+		$fh = @fopen($filepath, 'r');
+		if (!$fh) return $lines;
+		$row = 0;
+		$account_id = (int)$account_id;
+		while (($index = fgetcsv($fh)) !== false) {
+			$row++;
+			if (!is_array($index) || !count(array_filter($index, function ($v) { return $v !== null && $v !== ''; }))) {
+				continue;
+			}
+			try {
+				if ($account_id === 3) {
+					if ($row == 14 && (!isset($index[0]) || $index[0] !== 'Transaction Date')) {
+						fclose($fh);
+						return array('error' => 'Wrong Csv Format.');
+					}
+					if ($row <= 14) continue;
+					$newDate = date('Y-m-d', strtotime($index[0]));
+					if ($newDate === date('Y-m-d') && date('Y-m-d', strtotime($index[0])) === date('Y-m-d')) {
+						// allow same-day; legacy skipped when strtotime fails to today incorrectly — keep legacy skip when empty desc
+					}
+					if (!isset($index[2]) || $index[2] === '' || $index[2] === null) break;
+					$parsed = date('Y-m-d', strtotime($index[0]));
+					if (!$parsed || $parsed === '1970-01-01') continue;
+					$lines[] = array(
+						'trans_date' => $parsed,
+						'description' => $index[2],
+						'debit' => str_replace('-', '', isset($index[3]) ? $index[3] : ''),
+						'credit' => str_replace('-', '', isset($index[4]) ? $index[4] : ''),
+						'balance' => isset($index[5]) ? $index[5] : '',
+					);
+				} elseif (in_array($account_id, array(5, 10, 12), true)) {
+					if ($row == 4 && (!isset($index[0]) || $index[0] !== 'Date')) {
+						fclose($fh);
+						return array('error' => 'Wrong Csv Format.');
+					}
+					if ($row <= 4) continue;
+					if (!isset($index[0]) || $index[0] === '') continue;
+					$parsed = date('Y-m-d', strtotime($index[0]));
+					if (!$parsed || $parsed === '1970-01-01') continue;
+					$dr = (isset($index[5]) && $index[5] === 'Dr');
+					$amt = str_replace('-', '', isset($index[4]) ? $index[4] : '');
+					$lines[] = array(
+						'trans_date' => $parsed,
+						'description' => isset($index[1]) ? $index[1] : '',
+						'reference_no' => isset($index[2]) ? $index[2] : '',
+						'debit' => $dr ? $amt : '',
+						'credit' => $dr ? '' : $amt,
+						'balance' => isset($index[7]) ? $index[7] : '',
+					);
+				} elseif ($account_id === 4) {
+					if ($row == 4 && (!isset($index[0]) || $index[0] !== 'Date/Time')) {
+						fclose($fh);
+						return array('error' => 'Wrong Csv Format.');
+					}
+					if ($row <= 4) continue;
+					if (!isset($index[0]) || $index[0] === '') continue;
+					$dt = date_create_from_format('d/m/Y', $index[0]);
+					if (!$dt) continue;
+					$parsed = date_format($dt, 'Y-m-d');
+					$lines[] = array(
+						'trans_date' => $parsed,
+						'description' => trim((isset($index[2]) ? $index[2] : '') . ' ' . (isset($index[3]) ? $index[3] : '')),
+						'reference_no' => isset($index[1]) ? $index[1] : '',
+						'debit' => str_replace('-', '', isset($index[4]) ? $index[4] : ''),
+						'credit' => str_replace('-', '', isset($index[5]) ? $index[5] : ''),
+						'balance' => isset($index[6]) ? $index[6] : '',
+					);
+				} elseif (in_array($account_id, array(6, 11), true)) {
+					if ($row == 1 && (!isset($index[0]) || $index[0] !== 'Date')) {
+						fclose($fh);
+						return array('error' => 'Wrong Csv Format.');
+					}
+					if ($row <= 2) continue;
+					if (!isset($index[0]) || $index[0] === '') continue;
+					$parsed = date('Y-m-d', strtotime($index[0]));
+					if (!$parsed || $parsed === '1970-01-01') continue;
+					$lines[] = array(
+						'trans_date' => $parsed,
+						'description' => isset($index[1]) ? $index[1] : '',
+						'debit' => str_replace('-', '', isset($index[2]) ? $index[2] : ''),
+						'credit' => str_replace('-', '', isset($index[3]) ? $index[3] : ''),
+						'balance' => isset($index[4]) ? $index[4] : '',
+					);
+				} elseif ($account_id === 7) {
+					if ($row == 4 && (!isset($index[0]) || $index[0] !== 'Date/Time')) {
+						fclose($fh);
+						return array('error' => 'Wrong Csv Format.');
+					}
+					if ($row <= 4) continue;
+					if (!isset($index[0]) || $index[0] === '') continue;
+					$date = substr($index[0], 0, 10);
+					$dt = date_create_from_format('d-m-Y', $date);
+					if (!$dt) continue;
+					$parsed = date_format($dt, 'Y-m-d');
+					$lines[] = array(
+						'trans_date' => $parsed,
+						'description' => isset($index[1]) ? $index[1] : '',
+						'reference_no' => isset($index[2]) ? $index[2] : '',
+						'debit' => str_replace('-', '', isset($index[5]) ? $index[5] : ''),
+						'credit' => str_replace('-', '', isset($index[4]) ? $index[4] : ''),
+						'balance' => '',
+					);
+				} else {
+					// Generic: date, description, debit, credit, balance (skip header-ish first row)
+					if ($row === 1 && isset($index[0]) && stripos((string)$index[0], 'date') !== false) continue;
+					$parsed = date('Y-m-d', strtotime($index[0]));
+					if (!$parsed || $parsed === '1970-01-01') continue;
+					$lines[] = array(
+						'trans_date' => $parsed,
+						'description' => isset($index[1]) ? $index[1] : (isset($index[2]) ? $index[2] : ''),
+						'debit' => isset($index[2]) ? str_replace(array(',', '-'), '', $index[2]) : '',
+						'credit' => isset($index[3]) ? str_replace(array(',', '-'), '', $index[3]) : '',
+						'balance' => isset($index[4]) ? $index[4] : '',
+					);
+				}
+			} catch (Exception $e) {
+				continue;
+			}
+		}
+		fclose($fh);
+		return $lines;
+	}
+
 	/**
-	 * Legacy: Accounts bank statement list / Reports bank recon views
 	 * GET bank_statement?from_date&to_date&account_id&tagged=0|1|
+	 * Full legacy-shaped rows + accounts/campuses/categories for SPA tagging UI.
 	 */
 	public function bank_statement()
 	{
@@ -2042,42 +3261,69 @@ class Accountsapi extends CI_Controller {
 		if (!$from) $from = date('Y-m-01');
 		if (!$to) $to = date('Y-m-d');
 
+		$meta = array(
+			'accounts' => $this->_bank_accounts_rows(),
+			'cash_accounts' => $this->_brs_cash_accounts(),
+			'campuses' => $this->_brs_campuses(),
+			'expense_categories' => $this->_brs_expense_categories(),
+			'flags' => array(
+				'is_admin' => $this->_is_admin(),
+				'can_upload' => $this->_is_admin(),
+			),
+		);
+
 		if (!$this->_table_exists('bank_reconciliation_statement')) {
-			$this->_json(array('success' => true, 'from_date' => $from, 'to_date' => $to, 'entries' => array()));
+			$this->_json(array_merge(array(
+				'success' => true,
+				'from_date' => $from,
+				'to_date' => $to,
+				'entries' => array(),
+			), $meta));
 		}
 
-		$sql = "SELECT brs.*, accounts.account_name
+		$sql = "SELECT brs.*, brs.id AS trans_id, brs.statement_id AS str_id, brs.closing_id AS closing_bank_id,
+					accounts.account_name, accounts.account_title
 				FROM bank_reconciliation_statement brs
 				LEFT JOIN accounts ON accounts.id = brs.account_id
 				WHERE brs.trans_date >= ? AND brs.trans_date <= ?";
 		$params = array($from, $to);
 		if ($account_id !== null && $account_id !== '') {
-			$sql .= ' AND brs.account_id = ?';
-			$params[] = (int)$account_id;
+			// support single id or comma list
+			$ids = array_filter(array_map('intval', explode(',', (string)$account_id)));
+			if (count($ids) === 1) {
+				$sql .= ' AND brs.account_id = ?';
+				$params[] = $ids[0];
+			} elseif (count($ids) > 1) {
+				$sql .= ' AND brs.account_id IN (' . implode(',', $ids) . ')';
+			}
 		}
-		if ($tagged === '0' || $tagged === 0) {
-			$sql .= ' AND brs.closing_id IS NULL AND (brs.bank_transfer_id IS NULL OR brs.bank_transfer_id = 0)
-					  AND (brs.statement_id IS NULL OR brs.statement_id = 0)
-					  AND (brs.paypro_id IS NULL OR brs.paypro_id = 0)';
-		} elseif ($tagged === '1' || $tagged === 1) {
-			$sql .= ' AND (brs.closing_id IS NOT NULL OR brs.bank_transfer_id IS NOT NULL
-					  OR brs.statement_id IS NOT NULL OR brs.paypro_id IS NOT NULL)';
+		$sql .= ' ORDER BY brs.trans_date ASC, brs.id ASC LIMIT 3000';
+		$raw = $this->db->query($sql, $params)->result_array();
+
+		$entries = array();
+		foreach ($raw as $row) {
+			$enriched = $this->_brs_enrich_entry($row);
+			if ($tagged === '0' || $tagged === 0) {
+				if ($enriched['is_tagged']) continue;
+			} elseif ($tagged === '1' || $tagged === 1) {
+				if (!$enriched['is_tagged']) continue;
+			}
+			$entries[] = $enriched;
 		}
-		$sql .= ' ORDER BY brs.trans_date ASC, brs.id ASC LIMIT 2000';
-		$entries = $this->db->query($sql, $params)->result_array();
-		$this->_json(array(
+
+		$this->_json(array_merge(array(
 			'success' => true,
 			'from_date' => $from,
 			'to_date' => $to,
 			'account_id' => $account_id,
 			'tagged' => $tagged,
 			'entries' => $entries,
-		));
+		), $meta));
 	}
 
 	/**
-	 * Legacy: Accounts::upload_bank_statement (JSON lines preferred for SPA)
-	 * POST upload_bank_statement — multipart file+account_id OR JSON {account_id, lines:[{trans_date,description,debit,credit,balance}]}
+	 * Legacy: Accounts::upload_bank_statement
+	 * POST upload_bank_statement — multipart file+account_id OR JSON {account_id, lines:[...]}
 	 */
 	public function upload_bank_statement()
 	{
@@ -2086,6 +3332,7 @@ class Accountsapi extends CI_Controller {
 		if ($account_id <= 0) $this->_json(array('success' => false, 'message' => 'account_id required'), 400);
 
 		$lines = array();
+		$file_name = null;
 		if (!empty($body['lines']) && is_array($body['lines'])) {
 			$lines = $body['lines'];
 		} elseif (!empty($_FILES['file']['tmp_name']) || !empty($_FILES['statement']['tmp_name'])) {
@@ -2096,28 +3343,15 @@ class Accountsapi extends CI_Controller {
 			if (!is_dir($dir)) @mkdir($dir, 0777, true);
 			$ext = pathinfo($name, PATHINFO_EXTENSION);
 			$stored = 'stmt_' . date('YmdHis') . '_' . mt_rand(1000, 9999) . ($ext ? '.' . $ext : '');
-			@move_uploaded_file($tmp, $dir . $stored);
-
-			// Simple CSV: trans_date,description,debit,credit,balance
-			$fh = @fopen($dir . $stored, 'r');
-			if ($fh) {
-				$header = fgetcsv($fh);
-				while (($row = fgetcsv($fh)) !== false) {
-					if (!count(array_filter($row))) continue;
-					// Heuristic: if first cell looks like date
-					$date = isset($row[0]) ? date('Y-m-d', strtotime($row[0])) : null;
-					if (!$date || $date === '1970-01-01') continue;
-					$lines[] = array(
-						'trans_date' => $date,
-						'description' => isset($row[1]) ? $row[1] : (isset($row[2]) ? $row[2] : ''),
-						'debit' => isset($row[2]) ? str_replace(array(',', '-'), '', $row[2]) : (isset($row[3]) ? str_replace(',', '', $row[3]) : ''),
-						'credit' => isset($row[3]) ? str_replace(array(',', '-'), '', $row[3]) : (isset($row[4]) ? str_replace(',', '', $row[4]) : ''),
-						'balance' => isset($row[4]) ? $row[4] : (isset($row[5]) ? $row[5] : ''),
-					);
-				}
-				fclose($fh);
+			if (!@move_uploaded_file($tmp, $dir . $stored)) {
+				$this->_json(array('success' => false, 'message' => 'Failed to store upload'), 500);
 			}
 			$file_name = $stored;
+			$parsed = $this->_brs_parse_csv_lines($account_id, $dir . $stored);
+			if (isset($parsed['error'])) {
+				$this->_json(array('success' => false, 'message' => $parsed['error']), 400);
+			}
+			$lines = $parsed;
 		} else {
 			$this->_json(array('success' => false, 'message' => 'Provide lines[] JSON or CSV file'), 400);
 		}
@@ -2127,7 +3361,7 @@ class Accountsapi extends CI_Controller {
 			$this->db->insert('statement_upload_record', array(
 				'date' => date('Y-m-d'),
 				'account_id' => $account_id,
-				'file' => isset($file_name) ? $file_name : 'json_upload',
+				'file' => $file_name ? $file_name : 'json_upload',
 				'add_by' => $this->_actor_name(),
 			));
 			$statement_no = $this->db->insert_id();
@@ -2136,7 +3370,7 @@ class Accountsapi extends CI_Controller {
 		$inserted = 0;
 		foreach ($lines as $line) {
 			$trans_date = isset($line['trans_date']) ? date('Y-m-d', strtotime($line['trans_date'])) : null;
-			if (!$trans_date) continue;
+			if (!$trans_date || $trans_date === '1970-01-01') continue;
 			$row = array(
 				'account_id' => $account_id,
 				'trans_date' => $trans_date,
@@ -2159,8 +3393,8 @@ class Accountsapi extends CI_Controller {
 	}
 
 	/**
-	 * Legacy: Closing::tag_bank_trans + Accounts::tag_bank_trans
-	 * POST tag_bank_trans — {type, id/tag_id, closing_id/bank_trans_id, ...}
+	 * Legacy: Closing::tag_bank_trans + Accounts::tag_bank_trans (mutual / paypro / closing)
+	 * POST tag_bank_trans — kept for conciliation + mutual compatibility
 	 */
 	public function tag_bank_trans()
 	{
@@ -2203,7 +3437,7 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => true, 'message' => 'Closing deposit tagged'));
 		}
 
-		if ($type === 'bank_transfer' || $type === 'transfer') {
+		if ($type === 'bank_transfer' || $type === 'transfer' || $type === 'bank') {
 			$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : (isset($body['related_id']) ? $body['related_id'] : 0));
 			if ($tag_id <= 0 || $trans_id <= 0) {
 				$this->_json(array('success' => false, 'message' => 'tag_id and bank_trans_id required'), 400);
@@ -2213,13 +3447,14 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => true, 'message' => 'Bank transfer tagged'));
 		}
 
-		if ($type === 'paypro') {
-			$paypro_id = (int)(isset($body['paypro_id']) ? $body['paypro_id'] : (isset($body['related_id']) ? $body['related_id'] : 0));
+		if ($type === 'paypro' || $type === 'pay_pro') {
+			$paypro_id = (int)(isset($body['paypro_id']) ? $body['paypro_id'] : (isset($body['related_id']) ? $body['related_id'] : (isset($body['tag_id']) ? $body['tag_id'] : 0)));
+			$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : (isset($body['id']) ? $body['id'] : $tag_id));
 			$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
-			if ($tag_id <= 0 || $paypro_id <= 0) {
-				$this->_json(array('success' => false, 'message' => 'id and paypro_id required'), 400);
+			if ($trans_id <= 0 || $paypro_id <= 0) {
+				$this->_json(array('success' => false, 'message' => 'bank_trans_id and paypro_id required'), 400);
 			}
-			$this->db->where('id', $tag_id)->update('bank_reconciliation_statement', array('paypro_id' => $paypro_id));
+			$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('paypro_id' => $paypro_id));
 			if ($this->_table_exists('pay_pro_settlement') && $amount > 0) {
 				$this->db->set('tagged_amount', 'tagged_amount + ' . $amount, false);
 				$this->db->where('id', $paypro_id);
@@ -2254,6 +3489,755 @@ class Accountsapi extends CI_Controller {
 			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('paypro_id' => null));
 		}
 		$this->_json(array('success' => true, 'message' => 'Successfully untagged'));
+	}
+
+	/**
+	 * Unified untag — mirrors untag_payment / untag_bank_entry / untagentry / expense clears
+	 * POST bank_untag — {statement_id, untag_type}
+	 */
+	public function bank_untag()
+	{
+		$body = $this->_body();
+		$id = (int)(isset($body['statement_id']) ? $body['statement_id'] : (isset($body['id']) ? $body['id'] : 0));
+		$type = isset($body['untag_type']) ? $body['untag_type'] : 'auto';
+		if ($id <= 0) $this->_json(array('success' => false, 'message' => 'statement_id required'), 400);
+		$row = $this->db->query('SELECT * FROM bank_reconciliation_statement WHERE id = ?', array($id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+
+		if ($type === 'auto') {
+			$enriched = $this->_brs_enrich_entry($row);
+			$type = $enriched['untag_type'] ? $enriched['untag_type'] : '';
+		}
+
+		if ($type === 'payment') {
+			if ($this->_table_exists('payments')) {
+				$this->db->where('statement_id', $id)->update('payments', array(
+					'paid' => 0,
+					'paid_date' => null,
+					'tid_no' => null,
+					'paid_challans' => null,
+					'merged_challan' => null,
+					'statement_id' => null,
+				));
+			}
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('statement_id' => null));
+			$this->_json(array('success' => true, 'message' => 'Payment untagged'));
+		}
+
+		if ($type === 'bank') {
+			if (!empty($row['bank_transfer_id'])) {
+				$this->db->where('id', (int)$row['bank_transfer_id'])->update('bank_reconciliation_statement', array('bank_transfer_id' => null));
+			}
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('bank_transfer_id' => null));
+			$this->_json(array('success' => true, 'message' => 'Bank transfer untagged'));
+		}
+
+		if ($type === 'entry') {
+			if (empty($row['statement_id']) || !$this->_table_exists('transactions_history')) {
+				$this->_json(array('success' => false, 'message' => 'No cash entry to untag'), 400);
+			}
+			$transaction = $this->db->query(
+				'SELECT * FROM transactions_history WHERE id = ? LIMIT 1',
+				array((int)$row['statement_id'])
+			)->row_array();
+			if (!$transaction) {
+				$this->db->where('id', $id)->update('bank_reconciliation_statement', array('statement_id' => null));
+				$this->_json(array('success' => true, 'message' => 'Cleared orphan statement link'));
+			}
+			$transaction_account_id = (int)$transaction['transaction_account_id'];
+			$account = $this->db->query('SELECT * FROM accounts WHERE id = ? LIMIT 1', array($transaction_account_id))->row_array();
+			$balance = $account ? (float)$account['amount'] : 0;
+			$debit_amount = (int)str_replace(',', '', (string)$row['debit']);
+			if ($debit_amount > 0 && $balance <= $debit_amount) {
+				$this->_json(array('success' => false, 'message' => 'There is not enough amount in account.'), 400);
+			}
+			if ($debit_amount > 0) {
+				$this->db->set('amount', "amount - {$debit_amount}", false);
+				$this->db->where('id', $transaction_account_id);
+				$this->db->update('accounts');
+			} else {
+				// cash deposit: credit entry — restore cash account
+				$credit_amount = (int)str_replace(',', '', (string)$row['credit']);
+				if ($credit_amount > 0) {
+					$this->db->set('amount', 'amount + ' . $credit_amount, false);
+					$this->db->where('id', $transaction_account_id);
+					$this->db->update('accounts');
+				}
+			}
+			$this->db->where('id', (int)$row['statement_id'])->delete('transactions_history');
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('statement_id' => null));
+			$this->_json(array('success' => true, 'message' => 'Successfully untagged'));
+		}
+
+		if ($type === 'expense') {
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('expense_id' => null));
+			$this->_json(array('success' => true, 'message' => 'Expense untagged'));
+		}
+
+		if ($type === 'salary_expense') {
+			if ($this->_table_exists('expenses')) {
+				$this->db->where('bank_statement_id', $id)->update('expenses', array('bank_statement_id' => null));
+			}
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('salary_expense_ids' => null));
+			$this->_json(array('success' => true, 'message' => 'Salary expenses untagged'));
+		}
+
+		if ($type === 'paypro') {
+			$amount = $this->_brs_num($row['credit']);
+			if (!empty($row['paypro_id']) && $this->_table_exists('pay_pro_settlement') && $amount > 0) {
+				$this->db->set('tagged_amount', 'GREATEST(0, tagged_amount - ' . $amount . ')', false);
+				$this->db->where('id', (int)$row['paypro_id']);
+				$this->db->update('pay_pro_settlement');
+			}
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('paypro_id' => null));
+			$this->_json(array('success' => true, 'message' => 'PayPro untagged'));
+		}
+
+		if ($type === 'closing') {
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('closing_id' => null));
+			$this->_json(array('success' => true, 'message' => 'Closing untagged'));
+		}
+
+		if ($type === 'council_fee') {
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('is_council_fee' => null));
+			$this->_json(array('success' => true, 'message' => 'Council fee flag cleared'));
+		}
+
+		if ($type === 'profit') {
+			if (!empty($row['profit_distribution_id']) && $this->_table_exists('profit_distribution')) {
+				$this->db->where('profit_distribution_id', (int)$row['profit_distribution_id'])->update('profit_distribution', array(
+					'tagged' => 'no',
+					'take_profit' => 0,
+				));
+			}
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('profit_distribution_id' => null));
+			$this->_json(array('success' => true, 'message' => 'Profit untagged'));
+		}
+
+		if ($type === 'loan') {
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('loan_id' => null));
+			$this->_json(array('success' => true, 'message' => 'Loan link cleared (loan record left intact)'));
+		}
+
+		if ($type === 'salary_reverse') {
+			$this->db->where('id', $id)->update('bank_reconciliation_statement', array(
+				'reversal_payroll_id' => null,
+				'reversal_payroll_expense_id' => null,
+				'reversal_payroll_trans_id' => null,
+			));
+			$this->_json(array('success' => true, 'message' => 'Salary reverse cleared'));
+		}
+
+		$this->_json(array('success' => false, 'message' => 'Unknown or unsupported untag_type: ' . $type), 400);
+	}
+
+	/**
+	 * Legacy: Accounts::add_expense
+	 * POST bank_add_expense — multipart or JSON
+	 */
+	public function bank_add_expense()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['trans_id']) ? $body['trans_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : $this->input->post('trans_id')));
+		$campus_id = (int)(isset($body['ac_campus_id']) ? $body['ac_campus_id'] : (isset($body['campus_id']) ? $body['campus_id'] : $this->input->post('ac_campus_id')));
+		$title = isset($body['title']) ? $body['title'] : $this->input->post('title');
+		$purpose = isset($body['reason_disc']) ? $body['reason_disc'] : (isset($body['purpose']) ? $body['purpose'] : $this->input->post('reason_disc'));
+		$amount = isset($body['amount']) ? $body['amount'] : $this->input->post('amount');
+
+		$exp_cat = isset($body['expense_category_id']) ? $body['expense_category_id'] : $this->input->post('expense_category_id');
+		if (is_array($exp_cat)) {
+			$exp_cat = $exp_cat[count($exp_cat) - 1];
+		}
+		$exp_cat = (int)$exp_cat;
+
+		if ($trans_id <= 0 || $campus_id <= 0 || $exp_cat <= 0 || $title === null || $title === '') {
+			$this->_json(array('success' => false, 'message' => 'trans_id, campus, category, title required'), 400);
+		}
+		if (!$this->_table_exists('expenses')) {
+			$this->_json(array('success' => false, 'message' => 'expenses table missing'), 500);
+		}
+
+		$brs = $this->db->query('SELECT * FROM bank_reconciliation_statement WHERE id = ?', array($trans_id))->row_array();
+		if (!$brs) $this->_json(array('success' => false, 'message' => 'Statement row not found'), 404);
+		if ($amount === null || $amount === '') {
+			$amount = $this->_brs_num($brs['debit']);
+		}
+
+		$image = $this->_upload_proof();
+		$this->db->insert('expenses', array(
+			'campus_id' => $campus_id,
+			'expense_category_id' => $exp_cat,
+			'title' => $title,
+			'date' => date('Y-m-d'),
+			'amount' => $amount,
+			'purpose' => $purpose,
+			'paid_type' => 'bank',
+			'actual_date' => date('Y-m-d H:i:s'),
+			'image' => $image,
+			'approved_status' => '1',
+			'add_by_id' => (int)$this->current_user['user_id'],
+			'add_by' => $this->_actor_name(),
+		));
+		$insert_id = (int)$this->db->insert_id();
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('expense_id' => $insert_id));
+
+		$expense = $this->db->query(
+			"SELECT expenses.*, expense_category.name AS category_name, campuses.campus_name
+			 FROM expenses
+			 LEFT JOIN expense_category ON expense_category.expense_category_id = expenses.expense_category_id
+			 LEFT JOIN campuses ON campuses.campus_id = expenses.campus_id
+			 WHERE expenses.expense_id = ? LIMIT 1",
+			array($insert_id)
+		)->row_array();
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Expense tagged',
+			'expense_id' => $insert_id,
+			'expense' => $expense,
+		));
+	}
+
+	/** POST bank_find_mutual — {bank_trans_id, bank_id} */
+	public function bank_find_mutual()
+	{
+		$body = $this->_body();
+		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$bank_id = (int)(isset($body['bank_id']) ? $body['bank_id'] : (isset($body['account_id']) ? $body['account_id'] : 0));
+		if ($bank_trans_id <= 0 || $bank_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'bank_trans_id and bank_id required'), 400);
+		}
+		$transaction = $this->db->query(
+			'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
+			array($bank_trans_id)
+		)->row_array();
+		if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+
+		$entries = $this->db->query(
+			"SELECT brs.*, brs.id AS tidx, accounts.account_name, accounts.account_title
+			 FROM bank_reconciliation_statement brs
+			 LEFT JOIN accounts ON accounts.id = brs.account_id
+			 WHERE brs.trans_date = ? AND brs.account_id = ? AND brs.debit = ?
+			 GROUP BY brs.description, brs.id
+			 ORDER BY brs.id ASC",
+			array($transaction['trans_date'], $bank_id, $transaction['credit'])
+		)->result_array();
+
+		$out = array();
+		foreach ($entries as $e) {
+			$out[] = array(
+				'id' => (int)$e['tidx'],
+				'tidx' => (int)$e['tidx'],
+				'trans_date' => $e['trans_date'],
+				'description' => $e['description'],
+				'debit' => $e['debit'],
+				'credit' => $e['credit'],
+				'balance' => $e['balance'],
+				'account_name' => isset($e['account_name']) ? $e['account_name'] : '',
+				'account_title' => isset($e['account_title']) ? $e['account_title'] : '',
+			);
+		}
+		$this->_json(array('success' => true, 'entries' => $out));
+	}
+
+	/** POST bank_tag_mutual — {bank_trans_id, tag_id} */
+	public function bank_tag_mutual()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : 0);
+		if ($trans_id <= 0 || $tag_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'bank_trans_id and tag_id required'), 400);
+		}
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('bank_transfer_id' => $tag_id));
+		$this->db->where('id', $tag_id)->update('bank_reconciliation_statement', array('bank_transfer_id' => $trans_id));
+		$other = $this->db->query(
+			"SELECT brs.*, accounts.account_name FROM bank_reconciliation_statement brs
+			 LEFT JOIN accounts ON accounts.id = brs.account_id WHERE brs.id = ?",
+			array($tag_id)
+		)->row_array();
+		$this->_json(array('success' => true, 'message' => 'Bank transfer tagged', 'related' => $other));
+	}
+
+	/** POST bank_find_expenses — {bank_trans_id} */
+	public function bank_find_expenses()
+	{
+		$body = $this->_body();
+		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id required'), 400);
+		$transaction = $this->db->query(
+			'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
+			array($bank_trans_id)
+		)->row_array();
+		if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		if (!$this->_table_exists('expenses')) {
+			$this->_json(array('success' => true, 'entries' => array()));
+		}
+		$time = strtotime($transaction['trans_date']);
+		$date = date('Y-m-01', $time);
+		$enddate = date('Y-m-t', $time);
+		$entries = $this->db->query(
+			"SELECT expenses.*, expense_category.name AS category_name, campuses.campus_name
+			 FROM expenses
+			 LEFT JOIN expense_category ON expense_category.expense_category_id = expenses.expense_category_id
+			 LEFT JOIN campuses ON campuses.campus_id = expenses.campus_id
+			 WHERE paid_type = 'bank' AND date >= ? AND date <= ? AND bank_statement_id IS NULL
+			 ORDER BY expenses.date ASC, expenses.expense_id ASC",
+			array($date, $enddate)
+		)->result_array();
+		$this->_json(array(
+			'success' => true,
+			'statement_amount' => $this->_brs_num($transaction['debit']),
+			'month_start' => $date,
+			'month_end' => $enddate,
+			'entries' => $entries,
+		));
+	}
+
+	/** POST bank_tag_expenses — {bank_trans_id, expense_ids:[]|comma} */
+	public function bank_tag_expenses()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$ids = isset($body['expense_ids']) ? $body['expense_ids'] : (isset($body['expense_user_ids']) ? $body['expense_user_ids'] : '');
+		if (is_string($ids)) $ids = array_filter(array_map('intval', explode(',', $ids)));
+		if (!is_array($ids)) $ids = array();
+		$ids = array_values(array_filter(array_map('intval', $ids)));
+		if ($trans_id <= 0 || !count($ids)) {
+			$this->_json(array('success' => false, 'message' => 'bank_trans_id and expense_ids required'), 400);
+		}
+		$this->db->where_in('expense_id', $ids)->update('expenses', array('bank_statement_id' => $trans_id));
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array(
+			'salary_expense_ids' => implode(',', $ids),
+		));
+		$salary_expenses = $this->db->query(
+			"SELECT expenses.*, expense_category.name AS category_name, campuses.campus_name
+			 FROM expenses
+			 LEFT JOIN expense_category ON expense_category.expense_category_id = expenses.expense_category_id
+			 LEFT JOIN campuses ON campuses.campus_id = expenses.campus_id
+			 WHERE bank_statement_id = ?",
+			array($trans_id)
+		)->result_array();
+		$this->_json(array('success' => true, 'message' => 'Salary expenses tagged', 'expenses' => $salary_expenses));
+	}
+
+	/** POST bank_find_paypro — {bank_trans_id, from_date} */
+	public function bank_find_paypro()
+	{
+		$body = $this->_body();
+		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$from_date = isset($body['from_date']) ? $body['from_date'] : date('Y-m-d');
+		if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id required'), 400);
+		$transaction = $this->db->query(
+			'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
+			array($bank_trans_id)
+		)->row_array();
+		if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		if (!$this->_table_exists('pay_pro_settlement')) {
+			$this->_json(array('success' => true, 'entries' => array()));
+		}
+		$amount = (int)$this->_brs_num($transaction['credit']);
+		$entries = $this->db->query(
+			"SELECT * FROM pay_pro_settlement
+			 WHERE settlement_date = ? AND (total_amount - tagged_amount) <= ?
+			 ORDER BY id DESC",
+			array($from_date, $amount)
+		)->result_array();
+		$this->_json(array(
+			'success' => true,
+			'amount' => $amount,
+			'entries' => $entries,
+		));
+	}
+
+	/** POST bank_tag_paypro — {bank_trans_id, tag_id/paypro_id, amount?} */
+	public function bank_tag_paypro()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : (isset($body['paypro_id']) ? $body['paypro_id'] : 0));
+		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
+		if ($trans_id <= 0 || $tag_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'bank_trans_id and tag_id required'), 400);
+		}
+		if ($amount <= 0) {
+			$brs = $this->db->query('SELECT credit FROM bank_reconciliation_statement WHERE id = ?', array($trans_id))->row_array();
+			$amount = $brs ? $this->_brs_num($brs['credit']) : 0;
+		}
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('paypro_id' => $tag_id));
+		if ($this->_table_exists('pay_pro_settlement') && $amount > 0) {
+			$this->db->set('tagged_amount', 'tagged_amount + ' . $amount, false);
+			$this->db->where('id', $tag_id);
+			$this->db->update('pay_pro_settlement');
+		}
+		$this->_json(array('success' => true, 'message' => 'PayPro tagged'));
+	}
+
+	/** POST bank_cash_withdrawal — legacy add_cash_in_hand */
+	public function bank_cash_withdrawal()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['cash_trans_id']) ? $body['cash_trans_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
+		$to = (int)(isset($body['cash_account_id']) ? $body['cash_account_id'] : 0);
+		$accountamount = isset($body['amount']) ? (float)$body['amount'] : 0;
+		$trasfer_reason = isset($body['reason_disc']) ? $body['reason_disc'] : (isset($body['reason']) ? $body['reason'] : '');
+		if ($trans_id <= 0 || $to <= 0) {
+			$this->_json(array('success' => false, 'message' => 'cash_trans_id and cash_account_id required'), 400);
+		}
+		$transaction = $this->db->query(
+			'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
+			array($trans_id)
+		)->row_array();
+		if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		if ($accountamount <= 0) $accountamount = $this->_brs_num($transaction['debit']);
+
+		$image = $this->_upload_proof();
+		$this->db->set('amount', 'amount + ' . $accountamount, false);
+		$this->db->where('id', $to);
+		$this->db->update('accounts');
+
+		$this->db->insert('transactions_history', array(
+			'from_account_id' => $transaction['account_id'],
+			'to_account_id' => $to,
+			'transaction_account_id' => $to,
+			'amount' => $accountamount,
+			'debit_credit' => 'D',
+			'transaction_by' => $this->_actor_name(),
+			'reason' => 'Funds Receive ' . $trasfer_reason,
+			'proof_image' => $image,
+			'created_at' => $transaction['trans_date'] . ' ' . date('H:i:s'),
+		));
+		$idf = (int)$this->db->insert_id();
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('statement_id' => $idf));
+		$this->_json(array('success' => true, 'message' => 'Cash withdrawal tagged', 'history_id' => $idf));
+	}
+
+	/** POST bank_cash_deposit — legacy add_cash_deposit */
+	public function bank_cash_deposit()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['cash_trans_id']) ? $body['cash_trans_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
+		$cash_account_id = (int)(isset($body['cash_account_id']) ? $body['cash_account_id'] : 0);
+		$reason = isset($body['reason_disc']) ? $body['reason_disc'] : (isset($body['reason']) ? $body['reason'] : '');
+		$cash_deposit_amount = isset($body['cash_deposit_amount']) ? (float)$body['cash_deposit_amount'] : (isset($body['amount']) ? (float)$body['amount'] : 0);
+		if ($trans_id <= 0 || $cash_account_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'cash_trans_id and cash_account_id required'), 400);
+		}
+		$transaction = $this->db->query(
+			'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
+			array($trans_id)
+		)->row_array();
+		if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		if ($cash_deposit_amount <= 0) $cash_deposit_amount = $this->_brs_num($transaction['credit']);
+
+		$this->db->insert('transactions_history', array(
+			'from_account_id' => $cash_account_id,
+			'to_account_id' => $transaction['account_id'],
+			'transaction_account_id' => $cash_account_id,
+			'amount' => $cash_deposit_amount,
+			'debit_credit' => 'C',
+			'transaction_by' => $this->_actor_name(),
+			'reason' => 'Funds Transfer ' . $reason,
+			'proof_image' => '',
+			'created_at' => $transaction['trans_date'] . ' ' . date('H:i:s'),
+		));
+		$idf = (int)$this->db->insert_id();
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('statement_id' => $idf));
+		$this->db->set('amount', 'amount - ' . $cash_deposit_amount, false);
+		$this->db->where('id', $cash_account_id);
+		$this->db->update('accounts');
+		$this->_json(array('success' => true, 'message' => 'Cash deposit tagged', 'history_id' => $idf));
+	}
+
+	/** POST bank_council_fee — {trans_id} */
+	public function bank_council_fee()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['trans_id']) ? $body['trans_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
+		if ($trans_id <= 0) $this->_json(array('success' => false, 'message' => 'trans_id required'), 400);
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('is_council_fee' => '1'));
+		$this->_json(array('success' => true, 'message' => 'Selected as Council Fee Not Tagged'));
+	}
+
+	/** POST bank_find_profit — {bank_trans_id, amount?} */
+	public function bank_find_profit()
+	{
+		$body = $this->_body();
+		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id required'), 400);
+		$transaction = $this->db->query(
+			'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
+			array($bank_trans_id)
+		)->row_array();
+		if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$amount = isset($body['amount']) ? (int)$body['amount'] : (int)$this->_brs_num($transaction['debit']);
+		if (!$this->_table_exists('profit_distribution')) {
+			$this->_json(array('success' => true, 'entries' => array()));
+		}
+		$entries = $this->db->query(
+			"SELECT profit_distribution.*, campuses.campus_name, users.first_name, users.last_name
+			 FROM profit_distribution
+			 JOIN campuses ON campuses.campus_id = profit_distribution.campus_id
+			 JOIN users ON users.user_id = profit_distribution.user_id
+			 WHERE close_type = 'bank' AND tagged = 'no' AND CAST(amount AS SIGNED INTEGER) = ?
+			 ORDER BY profit_distribution_id DESC",
+			array($amount)
+		)->result_array();
+		$this->_json(array('success' => true, 'amount' => $amount, 'entries' => $entries));
+	}
+
+	/** POST bank_tag_profit — {bank_trans_id, tag_id} */
+	public function bank_tag_profit()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$profit_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : (isset($body['profit_distribution_id']) ? $body['profit_distribution_id'] : 0));
+		if ($trans_id <= 0 || $profit_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'bank_trans_id and tag_id required'), 400);
+		}
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('profit_distribution_id' => $profit_id));
+		$this->db->where('profit_distribution_id', $profit_id)->update('profit_distribution', array(
+			'tagged' => 'yes',
+			'take_profit' => 1,
+		));
+		$this->_json(array('success' => true, 'message' => 'Profit distribution tagged'));
+	}
+
+	/** POST bank_find_loan — {bank_trans_id, amount?} */
+	public function bank_find_loan()
+	{
+		$body = $this->_body();
+		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id required'), 400);
+		$transaction = $this->db->query(
+			'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
+			array($bank_trans_id)
+		)->row_array();
+		if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$amount = isset($body['amount']) ? (float)$body['amount'] : $this->_brs_num($transaction['debit']);
+		if (!$this->_table_exists('loans')) {
+			$this->_json(array('success' => true, 'entries' => array()));
+		}
+		$entries = $this->db->query(
+			"SELECT users.first_name, users.last_name, users.cnic, loans.*
+			 FROM loans
+			 INNER JOIN users ON loans.user_id = users.user_id
+			 WHERE loans.status = 1 AND cash_given IS NULL AND amount_approved = ?
+			 ORDER BY loans.id DESC",
+			array($amount)
+		)->result_array();
+		$this->_json(array('success' => true, 'amount' => $amount, 'entries' => $entries));
+	}
+
+	/** POST bank_tag_loan — {bank_trans_id, tag_id} — mirrors add_loan_deposit */
+	public function bank_tag_loan()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$loan_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : (isset($body['loan_id']) ? $body['loan_id'] : 0));
+		if ($trans_id <= 0 || $loan_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'bank_trans_id and tag_id required'), 400);
+		}
+		$my_loan = $this->db->query('SELECT * FROM loans WHERE id = ? LIMIT 1', array($loan_id))->row_array();
+		if (!$my_loan) $this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
+
+		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('loan_id' => $loan_id));
+
+		$approve_amount = (float)$my_loan['amount_approved'];
+		$months = (int)$my_loan['months_approved'];
+		if ($months < 1) $months = 1;
+		$amountavg = $approve_amount / $months;
+
+		$this->db->where('id', $loan_id)->update('loans', array(
+			'cash_given' => $approve_amount,
+			'give_through' => 'bank',
+			'cash_given_by' => 1,
+		));
+
+		$entry = $this->db->query(
+			"SELECT users.*, loans.* FROM loans
+			 JOIN users ON users.user_id = loans.user_id WHERE loans.id = ?",
+			array($loan_id)
+		)->row_array();
+
+		$time = date('Y-m-d');
+		for ($i = 1; $i <= $months; $i++) {
+			if ($my_loan['type'] === 'ADVANCE') {
+				$dead_line = $time;
+			} else {
+				$ts = strtotime(date('Y-m-d'));
+				$dead_line = date('Y-m-30', strtotime("+{$i} month", $ts));
+			}
+			$this->db->insert('loan_plan', array(
+				'amount' => $amountavg,
+				'due_date' => $dead_line,
+				'loan_id' => $loan_id,
+				'created_by' => (int)$this->current_user['user_id'],
+			));
+		}
+
+		if ($this->_table_exists('expenses')) {
+			$cat = (isset($my_loan['type']) && $my_loan['type'] === 'ADVANCE') ? '30' : '31';
+			$this->db->insert('expenses', array(
+				'campus_id' => isset($entry['campus_id']) ? $entry['campus_id'] : null,
+				'expense_category_id' => $cat,
+				'title' => 'Advance / Loan',
+				'date' => date('Y-m-d'),
+				'amount' => $approve_amount,
+				'purpose' => 'Advance / Loan Given to Employee',
+				'user_id' => $my_loan['user_id'],
+				'actual_date' => date('Y-m-d H:i:s'),
+				'image' => '',
+				'approved_status' => '1',
+				'paid_type' => 'bank',
+				'loan_id' => $loan_id,
+				'add_by_id' => (int)$this->current_user['user_id'],
+				'add_by' => $this->_actor_name(),
+			));
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Loan tagged',
+			'loan' => array(
+				'id' => $loan_id,
+				'name' => $entry ? trim($entry['first_name'] . ' ' . $entry['last_name']) : '',
+				'amount' => $approve_amount,
+				'months' => $months,
+			),
+		));
+	}
+
+	/** GET/POST bank_find_salaries?expense_id= — payrolls for a salary expense */
+	public function bank_find_salaries()
+	{
+		$body = $this->_body();
+		$exp_id = (int)(isset($body['expense_id']) ? $body['expense_id'] : $this->input->get('expense_id'));
+		if ($exp_id <= 0) $this->_json(array('success' => false, 'message' => 'expense_id required'), 400);
+		if (!$this->_table_exists('payroll')) {
+			$this->_json(array('success' => true, 'entries' => array()));
+		}
+		$entries = $this->db->query(
+			"SELECT payroll.*, users.first_name, users.last_name
+			 FROM payroll
+			 LEFT JOIN users ON users.user_id = payroll.user_id
+			 WHERE payroll.expense_id = ?
+			 ORDER BY payroll.id DESC",
+			array($exp_id)
+		)->result_array();
+		$this->_json(array('success' => true, 'entries' => $entries));
+	}
+
+	/**
+	 * POST bank_find_salary_reverse
+	 * Without payroll_id: list payrolls matching credit amount of bank_trans_id
+	 * With payroll_id + from/to: find matching bank credits (legacy find_reverse_transactions)
+	 */
+	public function bank_find_salary_reverse()
+	{
+		$body = $this->_body();
+		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$payroll_id = (int)(isset($body['payroll_id']) ? $body['payroll_id'] : (isset($body['tag_id']) ? $body['tag_id'] : 0));
+		$from_date = isset($body['from_date']) ? $body['from_date'] : date('Y-m-01');
+		$to_date = isset($body['to_date']) ? $body['to_date'] : date('Y-m-d');
+		$expense_id = (int)(isset($body['expense_id']) ? $body['expense_id'] : 0);
+
+		if ($expense_id > 0 && $payroll_id <= 0) {
+			if (!$this->_table_exists('payroll')) {
+				$this->_json(array('success' => true, 'mode' => 'payrolls', 'entries' => array()));
+			}
+			$entries = $this->db->query(
+				"SELECT payroll.*, users.first_name, users.last_name
+				 FROM payroll
+				 LEFT JOIN users ON users.user_id = payroll.user_id
+				 WHERE payroll.expense_id = ?
+				 ORDER BY payroll.id DESC",
+				array($expense_id)
+			)->result_array();
+			$this->_json(array('success' => true, 'mode' => 'payrolls', 'entries' => $entries));
+		}
+
+		if ($payroll_id <= 0) {
+			if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id or payroll_id required'), 400);
+			$transaction = $this->db->query(
+				'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
+				array($bank_trans_id)
+			)->row_array();
+			if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+			$amount = (int)$this->_brs_num($transaction['credit']);
+			$entries = array();
+			if ($this->_table_exists('payroll')) {
+				$entries = $this->db->query(
+					"SELECT payroll.*, users.first_name, users.last_name
+					 FROM payroll
+					 LEFT JOIN users ON users.user_id = payroll.user_id
+					 WHERE CAST(earned_salary AS SIGNED) = ? AND expense_id IS NOT NULL
+					 ORDER BY payroll.id DESC LIMIT 100",
+					array($amount)
+				)->result_array();
+			}
+			$this->_json(array('success' => true, 'mode' => 'payrolls', 'amount' => $amount, 'entries' => $entries));
+		}
+
+		$entry = $this->db->query('SELECT * FROM payroll WHERE id = ? LIMIT 1', array($payroll_id))->row_array();
+		if (!$entry) $this->_json(array('success' => false, 'message' => 'Payroll not found'), 404);
+		$salary = (int)$this->_brs_num($entry['earned_salary']);
+		$entries = $this->db->query(
+			"SELECT brs.*, brs.id AS tidx, accounts.account_name, accounts.account_title
+			 FROM bank_reconciliation_statement brs
+			 LEFT JOIN accounts ON accounts.id = brs.account_id
+			 WHERE brs.trans_date >= ? AND brs.trans_date <= ?
+			   AND CAST(REPLACE(credit, ',', '') AS SIGNED INTEGER) = ?
+			 GROUP BY brs.description, brs.id
+			 ORDER BY brs.trans_date ASC",
+			array($from_date, $to_date, $salary)
+		)->result_array();
+		$out = array();
+		foreach ($entries as $e) {
+			$out[] = array(
+				'id' => (int)$e['tidx'],
+				'tidx' => (int)$e['tidx'],
+				'account_name' => isset($e['account_name']) ? $e['account_name'] : '',
+				'account_title' => isset($e['account_title']) ? $e['account_title'] : '',
+				'trans_date' => $e['trans_date'],
+				'description' => $e['description'],
+				'debit' => $e['debit'],
+				'credit' => $e['credit'],
+				'balance' => $e['balance'],
+				'payroll_id' => $payroll_id,
+			);
+		}
+		$this->_json(array(
+			'success' => true,
+			'mode' => 'bank_entries',
+			'payroll' => $entry,
+			'entries' => $out,
+		));
+	}
+
+	/** POST bank_tag_salary_reverse — {bank_trans_id, tag_id, payroll_id} */
+	public function bank_tag_salary_reverse()
+	{
+		$body = $this->_body();
+		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
+		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : 0);
+		$payroll_id = (int)(isset($body['payroll_id']) ? $body['payroll_id'] : 0);
+		if ($trans_id <= 0 || $tag_id <= 0 || $payroll_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'bank_trans_id, tag_id, payroll_id required'), 400);
+		}
+		$entry = $this->db->query('SELECT * FROM payroll WHERE id = ? LIMIT 1', array($payroll_id))->row_array();
+		if (!$entry) $this->_json(array('success' => false, 'message' => 'Payroll not found'), 404);
+
+		$this->db->where('id', $tag_id)->update('bank_reconciliation_statement', array(
+			'reversal_payroll_id' => $payroll_id,
+			'reversal_payroll_expense_id' => $entry['expense_id'],
+			'reversal_payroll_trans_id' => $trans_id,
+		));
+		$this->db->where('id', $payroll_id)->update('payroll', array(
+			'expense_id' => null,
+			'disburse_through' => 'pending',
+		));
+		$this->_json(array('success' => true, 'message' => 'Salary reverse tagged'));
 	}
 
 	/**
@@ -2462,15 +4446,59 @@ class Accountsapi extends CI_Controller {
 		$to = $this->input->get('to');
 		if (!$to) $to = $this->input->get('to_date');
 		if ($campus_id <= 0) $this->_json(array('success' => false, 'message' => 'campus_id required'), 400);
+		if (!$from && function_exists('getFromDateProfitDistribution')) {
+			$from = getFromDateProfitDistribution($campus_id);
+		}
 		if (!$from) $from = date('Y-m-01');
 		if (!$to) $to = date('Y-m-d');
 
+		$campus = $this->db->query(
+			'SELECT campus_id, campus_name, campus_code FROM campuses WHERE campus_id = ? LIMIT 1',
+			array($campus_id)
+		)->row_array();
+
 		$expense = function_exists('totalExpense') ? (float)totalExpense($campus_id, $from, $to) : 0;
 		$recovery = function_exists('totalRecovery') ? (float)totalRecovery($campus_id, $from, $to) : 0;
+		if (function_exists('totalRecoveryContractors')) {
+			$recovery += (float)totalRecoveryContractors($campus_id, $from, $to);
+		}
+		$net = $recovery - $expense;
+		$not_approved = 0.0;
+		if (function_exists('getNotApprovedExpenses')) {
+			$not_approved = (float)getNotApprovedExpenses($campus_id, $from, $to);
+		}
+
+		$partners = array();
+		if ($this->_table_exists('campus_partners')) {
+			$cp = $this->db->query(
+				'SELECT partners FROM campus_partners WHERE campus_id = ? LIMIT 1',
+				array($campus_id)
+			)->row_array();
+			$raw = ($cp && !empty($cp['partners'])) ? json_decode($cp['partners'], true) : null;
+			if (is_array($raw)) {
+				for ($i = 0; $i + 1 < count($raw); $i += 2) {
+					$user_id = (int)$raw[$i];
+					$pct = (float)$raw[$i + 1];
+					if ($user_id <= 0) continue;
+					$u = $this->db->query(
+						'SELECT first_name, last_name FROM users WHERE user_id = ? LIMIT 1',
+						array($user_id)
+					)->row_array();
+					$partners[] = array(
+						'user_id' => $user_id,
+						'name' => $u ? trim($u['first_name'] . ' ' . $u['last_name']) : ('User #' . $user_id),
+						'percentage' => $pct,
+						'amount' => round(($pct / 100.0) * $net, 2),
+					);
+				}
+			}
+		}
+
 		$distributions = array();
 		if ($this->_table_exists('profit_distribution')) {
 			$distributions = $this->db->query(
-				"SELECT profit_distribution.*, users.first_name, users.last_name
+				"SELECT profit_distribution.*, users.first_name, users.last_name,
+						CONCAT(COALESCE(users.first_name,''),' ',COALESCE(users.last_name,'')) AS partner_name
 				 FROM profit_distribution
 				 LEFT JOIN users ON users.user_id = profit_distribution.user_id
 				 WHERE profit_distribution.campus_id = ?
@@ -2482,11 +4510,16 @@ class Accountsapi extends CI_Controller {
 		$this->_json(array(
 			'success' => true,
 			'campus_id' => $campus_id,
+			'campus_name' => $campus ? $campus['campus_name'] : '',
+			'campus_code' => $campus && isset($campus['campus_code']) ? $campus['campus_code'] : '',
 			'from' => $from,
 			'to' => $to,
 			'total_expense' => $expense,
 			'total_recovery' => $recovery,
-			'net_profit' => $recovery - $expense,
+			'net_profit' => $net,
+			'not_approved_expenses' => $not_approved,
+			'can_distribute' => $net > 0 && $not_approved <= 0 && count($partners) > 0,
+			'partners' => $partners,
 			'distributions' => $distributions,
 		));
 	}
@@ -2494,6 +4527,7 @@ class Accountsapi extends CI_Controller {
 	/**
 	 * Legacy: Accounts::insert_campus_profit (simplified payload)
 	 * POST insert_campus_profit — {campus_id, from_date, to_date, total_expense, total_recovery, net_profit, shares:[{user_id,amount,percentage}]}
+	 * Also accepts multipart FormData (optional record/image/proof file; shares as JSON string).
 	 */
 	public function insert_campus_profit()
 	{
@@ -2507,15 +4541,21 @@ class Accountsapi extends CI_Controller {
 		$total_expense = (float)(isset($body['total_expense']) ? $body['total_expense'] : 0);
 		$total_recovery = (float)(isset($body['total_recovery']) ? $body['total_recovery'] : 0);
 		$net_profit = (float)(isset($body['net_profit']) ? $body['net_profit'] : ($total_recovery - $total_expense));
-		$shares = isset($body['shares']) && is_array($body['shares']) ? $body['shares'] : array();
+		$shares = isset($body['shares']) ? $body['shares'] : array();
+		if (is_string($shares)) {
+			$decoded = json_decode($shares, true);
+			$shares = is_array($decoded) ? $decoded : array();
+		}
+		if (!is_array($shares)) $shares = array();
 		$type = isset($body['close_type']) ? $body['close_type'] : (isset($body['section']) ? $body['section'] : 'bank');
 		$tagged = ($type === 'cash') ? 'yes' : 'no';
+		$record = $this->_upload_proof();
 
 		$ids = array();
 		foreach ($shares as $share) {
 			$user_id = (int)(isset($share['user_id']) ? $share['user_id'] : 0);
 			if ($user_id <= 0) continue;
-			$this->db->insert('profit_distribution', array(
+			$row = array(
 				'campus_id' => $campus_id,
 				'from_date' => $from_date,
 				'to_date' => $to_date,
@@ -2527,8 +4567,13 @@ class Accountsapi extends CI_Controller {
 				'percentage' => (float)(isset($share['percentage']) ? $share['percentage'] : 0),
 				'close_type' => $type,
 				'tagged' => $tagged,
-			));
+			);
+			if ($record !== '') $row['record'] = $record;
+			$this->db->insert('profit_distribution', $row);
 			$ids[] = (int)$this->db->insert_id();
+		}
+		if (!count($ids)) {
+			$this->_json(array('success' => false, 'message' => 'No partner shares to save'), 400);
 		}
 		if ($this->_table_exists('profit_distribution_date')) {
 			$this->db->insert('profit_distribution_date', array(
@@ -2606,14 +4651,31 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => true, 'loans' => array()));
 		}
 		$rows = $this->db->query(
-			"SELECT loans.*, users.first_name, users.last_name, users.campus_id AS user_campus_id,
-					CONCAT(users.first_name,' ',users.last_name) AS staff_name
+			"SELECT loans.*,
+					users.first_name, users.last_name, users.cnic, users.mobile, users.emergency_no,
+					users.campus_id AS user_campus_id,
+					CONCAT(users.first_name,' ',users.last_name) AS staff_name,
+					CONCAT(COALESCE(approver.first_name,''),' ',COALESCE(approver.last_name,'')) AS approved_by_name
 			 FROM loans
 			 INNER JOIN users ON loans.user_id = users.user_id
+			 LEFT JOIN users approver ON approver.user_id = loans.updated_by
 			 WHERE loans.status = 1 AND loans.cash_given IS NULL
 			 ORDER BY loans.id DESC"
 		)->result_array();
-		$this->_json(array('success' => true, 'loans' => $rows));
+		$out = array();
+		foreach ($rows as $row) {
+			$status = isset($row['status']) ? (string)$row['status'] : '';
+			$status_label = 'PENDING';
+			if ($status === '2') $status_label = 'REJECTED';
+			elseif ($status === '1') $status_label = 'APPROVED';
+			elseif ($status === '0') $status_label = 'PENDING';
+			$row['status_label'] = $status_label;
+			$row['months_applied'] = isset($row['months']) ? $row['months'] : (isset($row['in_month']) ? $row['in_month'] : null);
+			$row['amount_applied'] = isset($row['amount_applied']) ? $row['amount_applied'] : (isset($row['amount']) ? $row['amount'] : 0);
+			$row['detail_url'] = site_url('loans/loans_detail_view/' . (int)$row['id']);
+			$out[] = $row;
+		}
+		$this->_json(array('success' => true, 'loans' => $out));
 	}
 
 	/**
@@ -2629,9 +4691,20 @@ class Accountsapi extends CI_Controller {
 		$loan = $this->db->query('SELECT * FROM loans WHERE id = ? LIMIT 1', array($loan_id))->row_array();
 		if (!$loan) $this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
 
-		$approve_amount = isset($body['amount_given']) ? (float)$body['amount_given'] : (float)$loan['amount'];
-		$months = isset($body['in_month']) ? (int)$body['in_month'] : (isset($loan['in_month']) ? (int)$loan['in_month'] : 1);
+		$default_amount = isset($loan['amount_approved']) && $loan['amount_approved'] !== '' && $loan['amount_approved'] !== null
+			? (float)$loan['amount_approved']
+			: (isset($loan['amount']) ? (float)$loan['amount'] : 0);
+		$default_months = isset($loan['months_approved']) && (int)$loan['months_approved'] > 0
+			? (int)$loan['months_approved']
+			: (isset($loan['months']) && (int)$loan['months'] > 0
+				? (int)$loan['months']
+				: (isset($loan['in_month']) ? (int)$loan['in_month'] : 1));
+		$approve_amount = isset($body['amount_given']) ? (float)$body['amount_given'] : $default_amount;
+		$months = isset($body['in_month']) ? (int)$body['in_month'] : $default_months;
 		if ($months < 1) $months = 1;
+		if ($approve_amount <= 0) {
+			$this->_json(array('success' => false, 'message' => 'amount_given required'), 400);
+		}
 
 		$uid = (int)$this->current_user['user_id'];
 		$petty = $this->db->query(
