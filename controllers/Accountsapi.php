@@ -874,7 +874,7 @@ class Accountsapi extends CI_Controller {
 			)->row_array();
 			$loans_pending = (int)(isset($loanCnt['cnt']) ? $loanCnt['cnt'] : 0);
 			$loanRows = $this->db->query(
-				"SELECT loans.id, loans.amount, loans.amount_applied, loans.amount_approved,
+				"SELECT loans.id, loans.amount_applied, loans.amount_approved,
 						CONCAT(users.first_name,' ',users.last_name) AS staff_name,
 						campuses.campus_name
 				 FROM loans
@@ -888,7 +888,7 @@ class Accountsapi extends CI_Controller {
 				if (count($loans_attention) >= 6) break;
 				$amt = isset($lr['amount_approved']) && $lr['amount_approved'] !== null && $lr['amount_approved'] !== ''
 					? (float)$lr['amount_approved']
-					: (isset($lr['amount_applied']) ? (float)$lr['amount_applied'] : (float)$lr['amount']);
+					: (isset($lr['amount_applied']) ? (float)$lr['amount_applied'] : 0);
 				$loans_attention[] = array(
 					'id' => (int)$lr['id'],
 					'staff_name' => isset($lr['staff_name']) ? $lr['staff_name'] : '',
