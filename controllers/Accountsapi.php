@@ -622,6 +622,368 @@ class Accountsapi extends CI_Controller {
 		));
 	}
 
+	/**
+	 * SPA Accounts Board — aggregated KPIs / closings pipeline / attention queues.
+	 * GET dashboard?date=YYYY-MM-DD
+	 */
+	public function dashboard()
+	{
+		$date = $this->input->get('date');
+		if (!$date) $date = date('Y-m-d');
+		$limit = 12;
+
+		$flags = $this->_closing_flags();
+		$persons = $this->_closing_persons_rows(true);
+		$campus_last_closings = $this->_campus_last_closings();
+		$campus_last_verified = $this->_campus_last_verified();
+
+		$open_count = 0;
+		$partial_count = 0;
+		$closed_count = 0;
+		$verified_today = 0;
+		$unverified_today = 0;
+		$open_amount = 0.0;
+		$closed_amount = 0.0;
+		$can_close_count = 0;
+		$campus_closings = array();
+		$attention_open = array();
+		$attention_partial = array();
+
+		foreach ($persons as $row) {
+			$campus_id = (int)$row['campus_id'];
+			$campus_name = isset($row['campus_name']) ? $row['campus_name'] : '';
+			$closed = $this->_closing_for_date($campus_id, $date);
+			$next_close = $this->_next_close_date($campus_id, $campus_last_closings);
+			$sequential_close_ok = ($next_close === null || $date === $next_close);
+
+			if ($closed) {
+				$close_type = isset($closed['close_type']) ? (string)$closed['close_type'] : '0';
+				$txn = isset($closed['transaction_no']) ? $closed['transaction_no'] : null;
+				$checked = isset($closed['checked_by']) ? $closed['checked_by'] : null;
+				$status_label = $this->_closing_status_label(true, $close_type, $txn);
+				$accounts_status = $this->_accounts_status_label(true, $checked);
+				$amt = (float)$closed['closed_amount'];
+				$closed_amount += $amt;
+				if ($status_label === 'PARTIALLY_CLOSED') {
+					$partial_count++;
+					if (count($attention_partial) < $limit) {
+						$attention_partial[] = array(
+							'campus_id' => $campus_id,
+							'campus_name' => $campus_name,
+							'closing_id' => (int)$closed['id'],
+							'closing_amount' => $amt,
+							'status_label' => $status_label,
+							'accounts_status' => $accounts_status,
+							'detail' => 'Bank / PayPro details missing',
+						);
+					}
+				} else {
+					$closed_count++;
+				}
+				if ($accounts_status === 'Verified') {
+					$verified_today++;
+				} else {
+					$unverified_today++;
+				}
+				$campus_closings[] = array(
+					'campus_id' => $campus_id,
+					'campus_name' => $campus_name,
+					'closed' => true,
+					'closing_amount' => $amt,
+					'status_label' => $status_label,
+					'accounts_status' => $accounts_status,
+					'close_type' => $close_type,
+					'next_close_date' => $next_close,
+				);
+			} else {
+				$bundle = $this->_campus_closing_bundle($campus_id, $date);
+				$amt = (float)$bundle['total'];
+				$open_count++;
+				$open_amount += $amt;
+				$can_close = $sequential_close_ok && (
+					!empty($flags['can_dailyclosing']) || !empty($flags['can_dailybankclosing'])
+				);
+				if ($can_close) $can_close_count++;
+				if (count($attention_open) < $limit) {
+					$attention_open[] = array(
+						'campus_id' => $campus_id,
+						'campus_name' => $campus_name,
+						'closing_amount' => $amt,
+						'status_label' => 'OPEN',
+						'accounts_status' => null,
+						'can_close' => $can_close,
+						'next_close_date' => $next_close,
+						'detail' => $can_close
+							? ('Ready to close · ' . number_format($amt, 0))
+							: ('Waiting · next ' . ($next_close ? $next_close : '—')),
+					);
+				}
+				$campus_closings[] = array(
+					'campus_id' => $campus_id,
+					'campus_name' => $campus_name,
+					'closed' => false,
+					'closing_amount' => $amt,
+					'status_label' => 'OPEN',
+					'accounts_status' => null,
+					'close_type' => '0',
+					'next_close_date' => $next_close,
+					'breakdown' => array(
+						'fees' => $bundle['fee_amount'],
+						'sales' => $bundle['sale_amount'],
+						'asset_sales' => $bundle['asset_amount'],
+						'loans' => $bundle['loan_amount'],
+						'pos' => $bundle['pos_amount'],
+					),
+				);
+			}
+		}
+
+		usort($campus_closings, function ($a, $b) {
+			return strcmp(isset($a['campus_name']) ? $a['campus_name'] : '', isset($b['campus_name']) ? $b['campus_name'] : '');
+		});
+
+		/* Pending verify across unverified closings (not only today) */
+		$pending_verify = array();
+		$pending_verify_count = 0;
+		$pending_verify_amount = 0.0;
+		$can_verify_count = 0;
+		if ($this->_table_exists('closing_perday')) {
+			$unverifiedWhere = "(checked_by IS NULL OR checked_by = '' OR checked_by = '0' OR UPPER(checked_by) = 'NULL')";
+			$cntRow = $this->db->query(
+				"SELECT COUNT(*) AS cnt,
+					COALESCE(SUM(COALESCE(receivable_amount, closed_amount)), 0) AS amt
+				 FROM closing_perday WHERE $unverifiedWhere"
+			)->row_array();
+			$pending_verify_count = (int)(isset($cntRow['cnt']) ? $cntRow['cnt'] : 0);
+			$pending_verify_amount = (float)(isset($cntRow['amt']) ? $cntRow['amt'] : 0);
+
+			$pvRows = $this->db->query(
+				"SELECT closing_perday.*, campuses.campus_name
+				 FROM closing_perday
+				 LEFT JOIN campuses ON campuses.campus_id = closing_perday.campus_id
+				 WHERE (closing_perday.checked_by IS NULL
+				 	OR closing_perday.checked_by = ''
+				 	OR closing_perday.checked_by = '0'
+				 	OR UPPER(closing_perday.checked_by) = 'NULL')
+				 ORDER BY closing_perday.id DESC
+				 LIMIT 80"
+			)->result_array();
+			foreach ($pvRows as $r) {
+				$amt = isset($r['receivable_amount']) ? (float)$r['receivable_amount'] : (float)$r['closed_amount'];
+				$closing_date = sprintf(
+					'%04d-%02d-%02d',
+					(int)$r['for_year'],
+					(int)$r['for_month'],
+					(int)$r['for_day']
+				);
+				$close_type = isset($r['close_type']) ? (string)$r['close_type'] : '2';
+				$img = isset($r['partialy_closed_image']) ? $r['partialy_closed_image'] : '';
+				$next_verify = $this->_next_verify_date((int)$r['campus_id'], $campus_last_verified);
+				$sequential_ok = ($next_verify === null || $closing_date === $next_verify);
+				$can_verify_cash = $close_type === '2' && $sequential_ok;
+				$can_verify_bank = $close_type === '1' && $img !== '' && $sequential_ok;
+				if ($can_verify_cash || $can_verify_bank) $can_verify_count++;
+				if (count($pending_verify) < $limit) {
+					if ($close_type === '1') $typeLabel = 'Bank';
+					elseif ($close_type === '3') $typeLabel = 'PayPro';
+					else $typeLabel = 'Cash';
+					$pending_verify[] = array(
+						'id' => (int)$r['id'],
+						'campus_id' => (int)$r['campus_id'],
+						'campus_name' => isset($r['campus_name']) ? $r['campus_name'] : '',
+						'closing_date' => $closing_date,
+						'closed_amount' => $amt,
+						'close_type_label' => $typeLabel,
+						'can_verify' => ($can_verify_cash || $can_verify_bank),
+						'detail' => $typeLabel . ' · ' . $closing_date . ' · ' . number_format($amt, 0),
+					);
+				}
+			}
+		}
+
+		/* Cash / bank account balances */
+		$cash_accounts = array();
+		$cash_total = 0.0;
+		$bank_total = 0.0;
+		$cash_count = 0;
+		$bank_count = 0;
+		$accRows = $this->db->query('SELECT * FROM accounts ORDER BY type ASC, id ASC')->result_array();
+		$cashFiltered = $this->_filter_by_ids(
+			array_values(array_filter($accRows, function ($r) { return (int)$r['type'] === 0; })),
+			'id',
+			'allowed_cash_account_ids'
+		);
+		foreach ($cashFiltered as $row) {
+			$amt = (float)$row['amount'];
+			$cash_total += $amt;
+			$cash_count++;
+			$row = $this->_account_display_fields($row);
+			if (count($cash_accounts) < 8) {
+				$cash_accounts[] = array(
+					'id' => (int)$row['id'],
+					'label' => isset($row['label']) ? $row['label'] : $row['account_title'],
+					'amount' => $amt,
+					'account_limit' => (float)$row['account_limit'],
+				);
+			}
+		}
+		foreach ($accRows as $row) {
+			if ((int)$row['type'] === 0) continue;
+			$bank_total += (float)$row['amount'];
+			$bank_count++;
+		}
+
+		/* Petty floats */
+		$petty_total = 0.0;
+		$petty_active = 0;
+		$low_petty = array();
+		$pettyRows = $this->db->query(
+			"SELECT petty_cash_college_wise.*, campuses.campus_name,
+					CONCAT(COALESCE(users.first_name,''),' ',COALESCE(users.last_name,'')) AS assign_to_name
+			 FROM petty_cash_college_wise
+			 LEFT JOIN campuses ON campuses.campus_id = petty_cash_college_wise.campus_id
+			 LEFT JOIN users ON users.user_id = petty_cash_college_wise.assign_to
+			 WHERE petty_cash_college_wise.petty_status = 1
+			 ORDER BY campuses.campus_name ASC"
+		)->result_array();
+		$pettyRows = $this->_filter_by_ids($pettyRows, 'id', 'petty_cash_users');
+		foreach ($pettyRows as $p) {
+			$petty_active++;
+			$live = $this->_petty_live_balance($p['id']);
+			$petty_total += $live;
+			$rule = (float)$p['amount'];
+			$need = $rule - (float)$p['remaining_amount'];
+			if (($live < ($rule * 0.25) || $need > 0) && count($low_petty) < $limit) {
+				$low_petty[] = array(
+					'id' => (int)$p['id'],
+					'campus_name' => isset($p['campus_name']) ? $p['campus_name'] : '',
+					'assign_to_name' => trim(isset($p['assign_to_name']) ? $p['assign_to_name'] : ''),
+					'live_balance' => $live,
+					'rule_amount' => $rule,
+					'detail' => trim((isset($p['assign_to_name']) ? $p['assign_to_name'] : '') . ' · bal ' . number_format($live, 0)),
+				);
+			}
+		}
+
+		/* Loans queue */
+		$loans_pending = 0;
+		$loans_attention = array();
+		if ($this->_table_exists('loans')) {
+			$loanCnt = $this->db->query(
+				"SELECT COUNT(*) AS cnt FROM loans WHERE status = 1 AND cash_given IS NULL"
+			)->row_array();
+			$loans_pending = (int)(isset($loanCnt['cnt']) ? $loanCnt['cnt'] : 0);
+			$loanRows = $this->db->query(
+				"SELECT loans.id, loans.amount, loans.amount_applied, loans.amount_approved,
+						CONCAT(users.first_name,' ',users.last_name) AS staff_name,
+						campuses.campus_name
+				 FROM loans
+				 INNER JOIN users ON loans.user_id = users.user_id
+				 LEFT JOIN campuses ON campuses.campus_id = users.campus_id
+				 WHERE loans.status = 1 AND loans.cash_given IS NULL
+				 ORDER BY loans.id DESC
+				 LIMIT 12"
+			)->result_array();
+			foreach ($loanRows as $lr) {
+				if (count($loans_attention) >= 6) break;
+				$amt = isset($lr['amount_approved']) && $lr['amount_approved'] !== null && $lr['amount_approved'] !== ''
+					? (float)$lr['amount_approved']
+					: (isset($lr['amount_applied']) ? (float)$lr['amount_applied'] : (float)$lr['amount']);
+				$loans_attention[] = array(
+					'id' => (int)$lr['id'],
+					'staff_name' => isset($lr['staff_name']) ? $lr['staff_name'] : '',
+					'campus_name' => isset($lr['campus_name']) ? $lr['campus_name'] : '',
+					'amount' => $amt,
+					'detail' => trim((isset($lr['staff_name']) ? $lr['staff_name'] : '') . ' · ' . number_format($amt, 0)),
+				);
+			}
+		}
+
+		/* Untagged bank (month-to-date — column heuristics for dashboard speed) */
+		$untagged_bank = 0;
+		if ($this->_table_exists('bank_reconciliation_statement')) {
+			$fromMonth = date('Y-m-01', strtotime($date));
+			$cnt = $this->db->query(
+				"SELECT COUNT(*) AS cnt FROM bank_reconciliation_statement
+				 WHERE trans_date >= ? AND trans_date <= ?
+				   AND IFNULL(expense_id, 0) = 0
+				   AND (salary_expense_ids IS NULL OR salary_expense_ids = '' OR salary_expense_ids = '0')
+				   AND IFNULL(closing_id, 0) = 0
+				   AND IFNULL(bank_transfer_id, 0) = 0
+				   AND IFNULL(paypro_id, 0) = 0
+				   AND IFNULL(statement_id, 0) = 0
+				   AND IFNULL(is_council_fee, 0) = 0
+				   AND IFNULL(profit_distribution_id, 0) = 0
+				   AND IFNULL(loan_id, 0) = 0
+				   AND IFNULL(reversal_payroll_trans_id, 0) = 0
+				   AND IFNULL(related_to, 0) = 0",
+				array($fromMonth, $date)
+			)->row_array();
+			$untagged_bank = (int)(isset($cnt['cnt']) ? $cnt['cnt'] : 0);
+		}
+
+		$untagged_paypro = 0;
+		if ($this->_table_exists('students_payments')) {
+			$cnt = $this->db->query(
+				"SELECT COUNT(*) AS cnt FROM students_payments
+				 WHERE transaction_status = 'PAID' AND settlement_id IS NULL"
+			)->row_array();
+			$untagged_paypro = (int)(isset($cnt['cnt']) ? $cnt['cnt'] : 0);
+		}
+
+		$total_actions = $open_count + $partial_count + $pending_verify_count + $loans_pending
+			+ ($untagged_bank > 0 ? 1 : 0) + ($untagged_paypro > 0 ? 1 : 0);
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'date' => $date,
+				'total_actions' => $total_actions,
+				'stats' => array(
+					'cash_total' => $cash_total,
+					'cash_accounts_count' => $cash_count,
+					'bank_total' => $bank_total,
+					'bank_accounts_count' => $bank_count,
+					'petty_total' => $petty_total,
+					'petty_active_count' => $petty_active,
+					'open_closings_count' => $open_count,
+					'open_closings_amount' => $open_amount,
+					'closed_today_count' => $closed_count + $partial_count,
+					'closed_today_amount' => $closed_amount,
+					'pending_verify_count' => $pending_verify_count,
+					'pending_verify_amount' => $pending_verify_amount,
+					'loans_pending_count' => $loans_pending,
+					'untagged_bank_count' => $untagged_bank,
+					'untagged_paypro_count' => $untagged_paypro,
+				),
+				'counts' => array(
+					'open' => $open_count,
+					'partial' => $partial_count,
+					'closed' => $closed_count,
+					'unverified_today' => $unverified_today,
+					'verified_today' => $verified_today,
+					'can_close' => $can_close_count,
+					'can_verify' => $can_verify_count,
+					'pending_verify' => $pending_verify_count,
+					'loans' => $loans_pending,
+					'untagged_bank' => $untagged_bank,
+					'untagged_paypro' => $untagged_paypro,
+					'low_petty' => count($low_petty),
+				),
+				'campus_closings' => $campus_closings,
+				'cash_accounts' => $cash_accounts,
+				'attention' => array(
+					'open_closings' => $attention_open,
+					'partial_closings' => $attention_partial,
+					'pending_verify' => $pending_verify,
+					'low_petty' => $low_petty,
+					'loans' => $loans_attention,
+				),
+				'flags' => $flags,
+			),
+		));
+	}
+
 	public function cash_accounts()
 	{
 		$rows = $this->db->query(
