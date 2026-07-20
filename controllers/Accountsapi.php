@@ -471,6 +471,102 @@ class Accountsapi extends CI_Controller {
 		return isset($current['name']) ? $current['name'] : 'Expense';
 	}
 
+	/**
+	 * Build expense category tree with own + rolled-up totals for Chart of Accounts.
+	 * Returns array of root nodes; each node has children[], own_amount, total_amount.
+	 */
+	private function _expense_category_tree($from, $to)
+	{
+		if (!$this->_table_exists('expense_category') || !$this->_table_exists('expenses')) {
+			return array();
+		}
+
+		$categoryRows = $this->db->query(
+			'SELECT expense_category_id, name, sub_of FROM expense_category ORDER BY name ASC'
+		)->result_array();
+		if (!count($categoryRows)) return array();
+
+		$ownAmounts = array();
+		$expenseRows = $this->db->query(
+			"SELECT expense_category_id, SUM(amount) AS total_amount
+			 FROM expenses
+			 WHERE date >= ? AND date <= ? AND approved_status = 1
+			   AND expense_category_id IS NOT NULL
+			 GROUP BY expense_category_id",
+			array($from, $to)
+		)->result_array();
+		foreach ($expenseRows as $er) {
+			$cid = (int)$er['expense_category_id'];
+			if ($cid <= 0) continue;
+			$ownAmounts[$cid] = (float)$er['total_amount'];
+		}
+
+		$nodes = array();
+		$childrenMap = array();
+		foreach ($categoryRows as $cat) {
+			$id = (int)$cat['expense_category_id'];
+			$parent = isset($cat['sub_of']) && $cat['sub_of'] !== null && $cat['sub_of'] !== ''
+				? (int)$cat['sub_of']
+				: 0;
+			$nodes[$id] = array(
+				'expense_category_id' => $id,
+				'name' => isset($cat['name']) ? $cat['name'] : ('Category #' . $id),
+				'sub_of' => $parent > 0 ? $parent : null,
+				'own_amount' => isset($ownAmounts[$id]) ? $ownAmounts[$id] : 0.0,
+				'total_amount' => 0.0,
+				'children' => array(),
+			);
+			if (!isset($childrenMap[$parent])) $childrenMap[$parent] = array();
+			$childrenMap[$parent][] = $id;
+		}
+
+		$build = null;
+		$build = function ($id) use (&$build, &$nodes, $childrenMap) {
+			$node = $nodes[$id];
+			$total = (float)$node['own_amount'];
+			$kids = isset($childrenMap[$id]) ? $childrenMap[$id] : array();
+			$childNodes = array();
+			foreach ($kids as $kidId) {
+				if (!isset($nodes[$kidId])) continue;
+				$child = $build($kidId);
+				// Keep child if it (or any descendant) has activity
+				if ($child['total_amount'] > 0 || count($child['children']) > 0) {
+					$childNodes[] = $child;
+					$total += (float)$child['total_amount'];
+				}
+			}
+			// Sort children by name
+			usort($childNodes, function ($a, $b) {
+				return strcasecmp($a['name'], $b['name']);
+			});
+			$node['children'] = $childNodes;
+			$node['total_amount'] = $total;
+			$node['has_children'] = count($childNodes) > 0;
+			return $node;
+		};
+
+		$roots = isset($childrenMap[0]) ? $childrenMap[0] : array();
+		// Also treat orphan parents (sub_of pointing to missing id) as roots
+		foreach ($nodes as $id => $n) {
+			$parent = $n['sub_of'] ? (int)$n['sub_of'] : 0;
+			if ($parent > 0 && !isset($nodes[$parent]) && !in_array($id, $roots, true)) {
+				$roots[] = $id;
+			}
+		}
+
+		$tree = array();
+		foreach ($roots as $rid) {
+			if (!isset($nodes[$rid])) continue;
+			$node = $build($rid);
+			if ($node['total_amount'] <= 0 && !count($node['children'])) continue;
+			$tree[] = $node;
+		}
+		usort($tree, function ($a, $b) {
+			return strcasecmp($a['name'], $b['name']);
+		});
+		return $tree;
+	}
+
 	private function _section_defs()
 	{
 		return array(
@@ -796,6 +892,7 @@ class Accountsapi extends CI_Controller {
 	{
 		list($from, $to) = $this->_fy_range($this->input->get('from_date'), $this->input->get('to_date'));
 		$rows = array();
+		$expenseTree = array();
 		$totals = array('opening' => 0, 'credit' => 0, 'debit' => 0, 'balance' => 0);
 
 		$accounts = $this->db->query(
@@ -887,32 +984,14 @@ class Accountsapi extends CI_Controller {
 		}
 
 		if ($this->_table_exists('expense_category') && $this->_table_exists('expenses')) {
-			$categoryRows = $this->db->query('SELECT * FROM expense_category')->result_array();
-			$categories = array();
-			foreach ($categoryRows as $category) {
-				$categories[$category['expense_category_id']] = $category;
-			}
-
-			$expenseRows = $this->db->query(
-				"SELECT expense_category.expense_category_id, expense_category.name, expense_category.sub_of,
-						SUM(expenses.amount) as total_amount
-				 FROM expenses
-				 LEFT JOIN expense_category ON expense_category.expense_category_id = expenses.expense_category_id
-				 WHERE expenses.date >= ? AND expenses.date <= ? AND expenses.approved_status = 1
-				 GROUP BY expense_category.expense_category_id",
-				array($from, $to)
-			)->result_array();
-
-			$expenseHeads = array();
-			foreach ($expenseRows as $expense) {
-				if (!isset($categories[$expense['expense_category_id']])) continue;
-				$head = $this->_expense_head_name($categories[$expense['expense_category_id']], $categories);
-				if (!isset($expenseHeads[$head])) $expenseHeads[$head] = 0;
-				$expenseHeads[$head] += (float)$expense['total_amount'];
-			}
-			ksort($expenseHeads);
-			foreach ($expenseHeads as $head => $amount) {
-				$row = $this->_money_row($head, 0, $amount, $amount, 'Expense', 'Debit / Expense Heads');
+			$expenseTree = $this->_expense_category_tree($from, $to);
+			foreach ($expenseTree as $node) {
+				$amount = (float)$node['total_amount'];
+				$row = $this->_money_row($node['name'], 0, $amount, $amount, 'Expense', 'Debit / Expense Heads');
+				$row['expense_category_id'] = (int)$node['expense_category_id'];
+				$row['own_amount'] = (float)$node['own_amount'];
+				$row['has_children'] = !empty($node['has_children']);
+				$row['is_expense_tree'] = true;
 				$rows[] = $row;
 				$totals['debit'] += $row['debit'];
 				$totals['balance'] += $row['balance'];
@@ -930,6 +1009,8 @@ class Accountsapi extends CI_Controller {
 				$totals['opening'] += $row['opening'];
 				$totals['balance'] += $row['balance'];
 			}
+		} else {
+			$expenseTree = array();
 		}
 
 		if ($this->_table_exists('loans') && $this->_table_exists('loan_plan')) {
@@ -953,6 +1034,7 @@ class Accountsapi extends CI_Controller {
 			'from_date' => $from,
 			'to_date' => $to,
 			'rows' => $rows,
+			'expense_tree' => $expenseTree,
 			'totals' => $totals,
 		));
 	}
