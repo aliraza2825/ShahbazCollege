@@ -635,8 +635,7 @@ class Accountsapi extends CI_Controller {
 			$amount = (float)$row['amount'];
 			$limit = (float)$row['account_limit'];
 			$shiftable = $amount > $limit ? ($amount - $limit) : 0;
-			$row['bank'] = $bank;
-			$row['accountno'] = $accountno;
+			$row = $this->_account_display_fields($row);
 			$row['shiftable_amount'] = $shiftable;
 			$out[] = $row;
 		}
@@ -650,10 +649,13 @@ class Accountsapi extends CI_Controller {
 			'SELECT * FROM accounts ORDER BY account_title ASC, id ASC'
 		)->result_array();
 		$accounts = $this->_filter_by_ids($accounts, 'id', 'funds_transfer_account_ids');
+		$accountsOut = array();
+		foreach ($accounts as $row) $accountsOut[] = $this->_account_display_fields($row);
 
 		$petty = $this->db->query(
 			"SELECT petty_cash_college_wise.*, campuses.campus_name,
-					users.first_name, users.last_name, designations.designation_name
+					users.first_name, users.last_name, designations.designation_name,
+					CONCAT(COALESCE(users.first_name,''),' ',COALESCE(users.last_name,'')) AS assign_to_name
 			 FROM petty_cash_college_wise
 			 LEFT JOIN campuses ON campuses.campus_id = petty_cash_college_wise.campus_id
 			 LEFT JOIN users ON users.user_id = petty_cash_college_wise.assign_to
@@ -662,10 +664,19 @@ class Accountsapi extends CI_Controller {
 			 ORDER BY campuses.campus_name ASC"
 		)->result_array();
 		$petty = $this->_filter_by_ids($petty, 'id', 'account_details_pettycash_ids');
+		foreach ($petty as &$p) {
+			$user = trim(isset($p['assign_to_name']) ? $p['assign_to_name'] : (trim((isset($p['first_name']) ? $p['first_name'] : '') . ' ' . (isset($p['last_name']) ? $p['last_name'] : ''))));
+			$campus = isset($p['campus_name']) ? trim($p['campus_name']) : '';
+			$bits = array();
+			if ($user !== '') $bits[] = $user;
+			if ($campus !== '') $bits[] = $campus;
+			$p['label'] = count($bits) ? implode(' · ', $bits) : ('Petty #' . $p['id']);
+		}
+		unset($p);
 
 		$this->_json(array(
 			'success' => true,
-			'accounts' => $accounts,
+			'accounts' => $accountsOut,
 			'petty_cash' => $petty,
 		));
 	}
@@ -1070,6 +1081,11 @@ class Accountsapi extends CI_Controller {
 				(isset($row['first_name']) ? $row['first_name'] : '') . ' ' .
 				(isset($row['last_name']) ? $row['last_name'] : '')
 			);
+			$campus = isset($row['campus_name']) ? trim($row['campus_name']) : '';
+			$bits = array();
+			if ($row['assign_to_name'] !== '') $bits[] = $row['assign_to_name'];
+			if ($campus !== '') $bits[] = $campus;
+			$row['label'] = count($bits) ? implode(' · ', $bits) : ('Petty #' . $row['id']);
 			$row['recovery_from_label'] = ((string)$row['recovery_from'] === '1') ? 'Cash in Hand' : 'Campus Recovery';
 			$out[] = $row;
 		}
@@ -1660,14 +1676,47 @@ class Accountsapi extends CI_Controller {
 		);
 	}
 
+	private function _account_display_fields($row)
+	{
+		list($bank, $accountno) = $this->_parse_account_name(isset($row['account_name']) ? $row['account_name'] : '');
+		$title = isset($row['account_title']) ? trim($row['account_title']) : '';
+		$bank = trim($bank);
+		$accountno = trim($accountno);
+		$parts = array();
+		if ($title !== '') $parts[] = $title;
+		if ($bank !== '') $parts[] = $bank;
+		if ($accountno !== '') $parts[] = $accountno;
+		$label = count($parts) ? implode(' · ', $parts) : (isset($row['account_name']) ? $row['account_name'] : ('Account #' . (isset($row['id']) ? $row['id'] : '')));
+		$row['bank'] = $bank;
+		$row['accountno'] = $accountno;
+		$row['label'] = $label;
+		return $row;
+	}
+
 	private function _bank_accounts_rows()
 	{
 		if (!$this->_table_exists('accounts')) return array();
-		return $this->db->query(
+		$rows = $this->db->query(
 			"SELECT id, account_name, account_title, amount, type
 			 FROM accounts WHERE type = '1' OR type = 1
 			 ORDER BY account_title ASC, account_name ASC"
 		)->result_array();
+		$out = array();
+		foreach ($rows as $row) $out[] = $this->_account_display_fields($row);
+		return $out;
+	}
+
+	private function _brs_cash_accounts()
+	{
+		if (!$this->_table_exists('accounts')) return array();
+		$rows = $this->db->query(
+			"SELECT id, account_name, account_title, amount, type
+			 FROM accounts WHERE type = '0' OR type = 0
+			 ORDER BY account_title ASC, account_name ASC"
+		)->result_array();
+		$out = array();
+		foreach ($rows as $row) $out[] = $this->_account_display_fields($row);
+		return $out;
 	}
 
 	/** Same SQL as Closing::index / accountsclosing side panels */
@@ -2975,16 +3024,6 @@ class Accountsapi extends CI_Controller {
 	private function _brs_empty($v)
 	{
 		return $v === null || $v === '' || $v === '0' || $v === 0 || $v === 'NULL';
-	}
-
-	private function _brs_cash_accounts()
-	{
-		if (!$this->_table_exists('accounts')) return array();
-		return $this->db->query(
-			"SELECT id, account_name, account_title, amount, type
-			 FROM accounts WHERE type = '0' OR type = 0
-			 ORDER BY account_title ASC, account_name ASC"
-		)->result_array();
 	}
 
 	private function _brs_expense_categories()
