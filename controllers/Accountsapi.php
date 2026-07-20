@@ -760,6 +760,19 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'from_account and sentamount required'), 422);
 		}
 
+		$fromRow = $this->db->query('SELECT * FROM accounts WHERE id = ? LIMIT 1', array($from))->row_array();
+		if (!$fromRow) {
+			$this->_json(array('success' => false, 'message' => 'From account not found'), 404);
+		}
+		$available = (float)$fromRow['amount'];
+		if ($accountamount > $available + 0.00001) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Amount exceeds available balance (' . number_format($available, 2) . ')',
+				'available' => $available,
+			), 422);
+		}
+
 		if ($petty_account === '0') {
 			if ($to <= 0) {
 				$this->_json(array('success' => false, 'message' => 'to_account required'), 422);
@@ -1254,6 +1267,23 @@ class Accountsapi extends CI_Controller {
 		}
 		if ($to_account_id <= 0 && $to_petty_id <= 0) {
 			$this->_json(array('success' => false, 'message' => 'to_account_id or to_petty_id required'), 422);
+		}
+
+		$fromPetty = $this->db->query(
+			'SELECT * FROM petty_cash_college_wise WHERE id = ? LIMIT 1',
+			array($from_petty_id)
+		)->row_array();
+		if (!$fromPetty) {
+			$this->_json(array('success' => false, 'message' => 'From petty cash not found'), 404);
+		}
+		$available = $this->_petty_live_balance($from_petty_id);
+		if ($available < 0) $available = 0;
+		if ($amount > $available + 0.00001) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Amount exceeds available petty balance (' . number_format($available, 2) . ')',
+				'available' => $available,
+			), 422);
 		}
 
 		$image = '';
