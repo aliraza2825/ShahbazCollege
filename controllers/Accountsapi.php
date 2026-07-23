@@ -5050,44 +5050,28 @@ class Accountsapi extends CI_Controller {
 	/* ===================== Phase 4 — profit / misc / loans / bulk / howto ===================== */
 
 	/**
-	 * Legacy: Accounts::index + accounts/index view (simplified campus cards)
-	 * GET profit_campuses?from=&to=
+	 * Legacy from-date for profit: last profit_distribution_date + 1 day (or 2000-01-01).
 	 */
-	public function profit_campuses()
+	private function _profit_from_date($campus_id)
 	{
-		$from = $this->input->get('from');
-		if (!$from) $from = $this->input->get('from_date');
-		$to = $this->input->get('to');
-		if (!$to) $to = $this->input->get('to_date');
-		if (!$from) $from = date('Y-m-01');
-		if (!$to) $to = date('Y-m-d');
-
-		$sql = 'SELECT campus_id, campus_name, campus_code FROM campuses';
-		if ($this->_field_exists('campuses', 'status')) {
-			$sql .= ' WHERE status = 1';
+		$campus_id = (int)$campus_id;
+		if (function_exists('getFromDateProfitDistribution')) {
+			$from = getFromDateProfitDistribution($campus_id);
+			if ($from) return $from;
 		}
-		$sql .= ' ORDER BY campus_name ASC';
-		$campuses = $this->db->query($sql)->result_array();
-		$out = array();
-		foreach ($campuses as $c) {
-			$cid = (int)$c['campus_id'];
-			$expense = $this->_profit_total_expense($cid, $from, $to);
-			$recovery = $this->_profit_total_recovery($cid, $from, $to);
-			$out[] = array(
-				'campus_id' => $cid,
-				'campus_name' => $c['campus_name'],
-				'campus_code' => isset($c['campus_code']) ? $c['campus_code'] : '',
-				'total_expense' => $expense,
-				'total_recovery' => $recovery,
-				'net_profit' => $recovery - $expense,
-				'from' => $from,
-				'to' => $to,
-			);
+		if ($this->_table_exists('profit_distribution_date')) {
+			$row = $this->db->query(
+				'SELECT date FROM profit_distribution_date WHERE campus_id = ? ORDER BY date DESC LIMIT 1',
+				array($campus_id)
+			)->row_array();
+			if ($row && !empty($row['date'])) {
+				return date('Y-m-d', strtotime($row['date'] . ' +1 day'));
+			}
 		}
-		$this->_json(array('success' => true, 'from' => $from, 'to' => $to, 'campuses' => $out));
+		return '2000-01-01';
 	}
 
-	/** Safe expense total for profit screens (avoids legacy totalExpense notice on missing campus_partners). */
+	/** Safe wrapper matching legacy totalExpense (approved − special categories). */
 	private function _profit_total_expense($campus_id, $from, $to)
 	{
 		$campus_id = (int)$campus_id;
@@ -5101,7 +5085,6 @@ class Accountsapi extends CI_Controller {
 		)->row_array();
 		$total = (float)(isset($row['amount']) ? $row['amount'] : 0);
 
-		// Subtract special partner expenses when campus_partners row exists (legacy totalExpense)
 		if ($this->_table_exists('campus_partners')) {
 			$cp = $this->db->query(
 				'SELECT special_expense_ids FROM campus_partners WHERE campus_id = ? LIMIT 1',
@@ -5110,8 +5093,7 @@ class Accountsapi extends CI_Controller {
 			if ($cp && !empty($cp['special_expense_ids'])) {
 				$ids = json_decode($cp['special_expense_ids'], true);
 				if (is_array($ids) && count($ids)) {
-					$ids = array_map('intval', $ids);
-					$ids = array_filter($ids);
+					$ids = array_values(array_filter(array_map('intval', $ids)));
 					if (count($ids)) {
 						$in = implode(',', $ids);
 						$spec = $this->db->query(
@@ -5129,131 +5111,747 @@ class Accountsapi extends CI_Controller {
 		return $total;
 	}
 
+	private function _profit_special_expense($campus_id, $from, $to)
+	{
+		if (function_exists('specialExpense')) {
+			try {
+				return (float)specialExpense($campus_id, $from, $to);
+			} catch (Exception $e) { /* fall through */ }
+		}
+		$campus_id = (int)$campus_id;
+		if (!$this->_table_exists('expenses') || !$this->_table_exists('campus_partners')) return 0.0;
+		$cp = $this->db->query(
+			'SELECT special_expense_ids FROM campus_partners WHERE campus_id = ? LIMIT 1',
+			array($campus_id)
+		)->row_array();
+		if (!$cp || empty($cp['special_expense_ids'])) return 0.0;
+		$ids = json_decode($cp['special_expense_ids'], true);
+		if (!is_array($ids) || !count($ids)) return 0.0;
+		$ids = array_values(array_filter(array_map('intval', $ids)));
+		if (!count($ids)) return 0.0;
+		$dateCol = $this->_field_exists('expenses', 'actual_date') ? 'actual_date' : 'date';
+		$in = implode(',', $ids);
+		$row = $this->db->query(
+			"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
+			 WHERE campus_id = ? AND {$dateCol} >= ? AND {$dateCol} <= ?
+			   AND (approved_status = '1' OR approved_status = 1)
+			   AND expense_category_id IN ({$in})",
+			array($campus_id, $from, $to)
+		)->row_array();
+		return (float)(isset($row['amount']) ? $row['amount'] : 0);
+	}
+
+	/** Prefer legacy totalRecovery + contractors (merged challan rules). */
 	private function _profit_total_recovery($campus_id, $from, $to)
 	{
-		$campus_id = (int)$campus_id;
 		$recovery = 0.0;
-		if ($this->_table_exists('payments') && $this->_table_exists('students') && $this->_table_exists('classes')) {
-			$row = $this->db->query(
-				"SELECT COALESCE(SUM(CASE WHEN payments.actual_amount > 0 THEN payments.actual_amount ELSE payments.amount END),0) AS amount
-				 FROM payments
-				 INNER JOIN students ON students.student_id = payments.student_id
-				 INNER JOIN classes ON classes.class_id = students.class_id
-				 WHERE classes.campus_id = ?
-				   AND payments.actual_paid_date >= ? AND payments.actual_paid_date <= ?
-				   AND payments.paid = 1",
-				array($campus_id, $from, $to)
-			)->row_array();
-			$recovery = (float)(isset($row['amount']) ? $row['amount'] : 0);
+		if (function_exists('totalRecovery')) {
+			try {
+				$recovery += (float)totalRecovery($campus_id, $from, $to);
+			} catch (Exception $e) {
+				$recovery = 0.0;
+			}
+		} else {
+			$campus_id = (int)$campus_id;
+			if ($this->_table_exists('payments') && $this->_table_exists('students') && $this->_table_exists('classes')) {
+				$row = $this->db->query(
+					"SELECT COALESCE(SUM(CASE WHEN payments.actual_amount > 0 THEN payments.actual_amount ELSE payments.amount END),0) AS amount
+					 FROM payments
+					 INNER JOIN students ON students.student_id = payments.student_id
+					 INNER JOIN classes ON classes.class_id = students.class_id
+					 WHERE classes.campus_id = ?
+					   AND payments.actual_paid_date >= ? AND payments.actual_paid_date <= ?
+					   AND payments.paid = 1 AND payments.contract_id = 0",
+					array($campus_id, $from, $to)
+				)->row_array();
+				$recovery = (float)(isset($row['amount']) ? $row['amount'] : 0);
+			}
 		}
 		if (function_exists('totalRecoveryContractors')) {
 			try {
 				$recovery += (float)totalRecoveryContractors($campus_id, $from, $to);
-			} catch (Exception $e) {
-				// ignore contractor helper failures
-			}
+			} catch (Exception $e) { /* ignore */ }
 		}
 		return $recovery;
 	}
 
+	private function _profit_not_approved($campus_id, $from, $to)
+	{
+		if (function_exists('getNotApprovedExpenses')) {
+			try {
+				return (float)getNotApprovedExpenses($campus_id, $from, $to);
+			} catch (Exception $e) { /* fall through */ }
+		}
+		if (!$this->_table_exists('expenses')) return 0.0;
+		$dateCol = $this->_field_exists('expenses', 'actual_date') ? 'actual_date' : 'date';
+		$row = $this->db->query(
+			"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
+			 WHERE campus_id = ? AND {$dateCol} >= ? AND {$dateCol} <= ?
+			   AND (approved_status = '0' OR approved_status = 0)",
+			array((int)$campus_id, $from, $to)
+		)->row_array();
+		return (float)(isset($row['amount']) ? $row['amount'] : 0);
+	}
+
+	private function _profit_shift_deduction($campus_id)
+	{
+		if (!$this->_table_exists('student_shift_details')) return 0.0;
+		$row = $this->db->query(
+			"SELECT COALESCE(SUM(expense_amount),0) AS amount
+			 FROM student_shift_details WHERE from_class = ? AND status = '0'",
+			array((int)$campus_id)
+		)->row_array();
+		return (float)(isset($row['amount']) ? $row['amount'] : 0);
+	}
+
+	private function _profit_shift_earning($campus_id)
+	{
+		if (!$this->_table_exists('student_shift_details')) return 0.0;
+		$row = $this->db->query(
+			"SELECT COALESCE(SUM(earned_amount),0) AS amount
+			 FROM student_shift_details WHERE to_class = ? AND received_status = '0'",
+			array((int)$campus_id)
+		)->row_array();
+		return (float)(isset($row['amount']) ? $row['amount'] : 0);
+	}
+
 	/**
-	 * Legacy: Accounts::campus_profit
-	 * GET campus_profit?campus_id&from&to
+	 * Seat-shared expense pool (legacy index / campus_profit loop).
+	 * Returns expense_lines, pool_expense, divided_expense, seats, my_seats, share_campus_ids.
+	 */
+	private function _profit_seat_expense($campus_id, $from, $to)
+	{
+		$campus_id = (int)$campus_id;
+		$lines = array();
+		$pool = 0.0;
+		$seats = 0.0;
+		$my_seats = 0.0;
+		$share_ids = array();
+
+		$partner = null;
+		if ($this->_table_exists('campus_partners')) {
+			$partner = $this->db->query(
+				'SELECT * FROM campus_partners WHERE campus_id = ? LIMIT 1',
+				array($campus_id)
+			)->row_array();
+		}
+		$port_campuses = ($partner && !empty($partner['campus_share_ids']))
+			? json_decode($partner['campus_share_ids'], true) : null;
+		$port_seats = ($partner && !empty($partner['no_of_seats']))
+			? json_decode($partner['no_of_seats'], true) : null;
+
+		if (is_array($port_campuses) && count($port_campuses)) {
+			foreach ($port_campuses as $i => $port_campus) {
+				$port_campus = (int)$port_campus;
+				$seat = is_array($port_seats) && isset($port_seats[$i]) ? (float)$port_seats[$i] : 0;
+				if ($port_campus === $campus_id) $my_seats = $seat;
+				$seats += $seat;
+				$share_ids[] = $port_campus;
+				$exp = $this->_profit_total_expense($port_campus, $from, $to);
+				$pool += $exp;
+				$c = $this->db->query(
+					'SELECT campus_name, campus_code FROM campuses WHERE campus_id = ? LIMIT 1',
+					array($port_campus)
+				)->row_array();
+				$lines[] = array(
+					'campus_id' => $port_campus,
+					'campus_name' => $c ? $c['campus_name'] : ('Campus #' . $port_campus),
+					'campus_code' => $c && isset($c['campus_code']) ? $c['campus_code'] : '',
+					'roll_no_code' => $c && isset($c['campus_code']) ? $c['campus_code'] : '',
+					'seats' => $seat,
+					'expense' => $exp,
+				);
+			}
+		} else {
+			// No partners row — treat this campus alone
+			$exp = $this->_profit_total_expense($campus_id, $from, $to);
+			$pool = $exp;
+			$my_seats = 1;
+			$seats = 1;
+			$share_ids[] = $campus_id;
+			$c = $this->db->query(
+				'SELECT campus_name, campus_code FROM campuses WHERE campus_id = ? LIMIT 1',
+				array($campus_id)
+			)->row_array();
+			$lines[] = array(
+				'campus_id' => $campus_id,
+				'campus_name' => $c ? $c['campus_name'] : ('Campus #' . $campus_id),
+				'campus_code' => $c && isset($c['campus_code']) ? $c['campus_code'] : '',
+				'roll_no_code' => $c && isset($c['campus_code']) ? $c['campus_code'] : '',
+				'seats' => 1,
+				'expense' => $exp,
+			);
+		}
+
+		$divided = 0.0;
+		if ($my_seats > 0 && $seats > 0) {
+			$divided = ($pool / $seats) * $my_seats;
+		}
+		$divided = round($divided, 2);
+
+		return array(
+			'expense_lines' => $lines,
+			'pool_expense' => round($pool, 2),
+			'divided_expense' => $divided,
+			'seats' => $seats,
+			'my_seats' => $my_seats,
+			'share_campus_ids' => $share_ids,
+		);
+	}
+
+	private function _profit_partners_list($campus_id, $net_profit)
+	{
+		$partners = array();
+		if (!$this->_table_exists('campus_partners')) return $partners;
+		$cp = $this->db->query(
+			'SELECT partners FROM campus_partners WHERE campus_id = ? LIMIT 1',
+			array((int)$campus_id)
+		)->row_array();
+		$raw = ($cp && !empty($cp['partners'])) ? json_decode($cp['partners'], true) : null;
+		if (!is_array($raw)) return $partners;
+		for ($i = 0; $i + 1 < count($raw); $i += 2) {
+			$user_id = (int)$raw[$i];
+			$pct = (float)$raw[$i + 1];
+			if ($user_id <= 0) continue;
+			$u = $this->db->query(
+				'SELECT first_name, last_name FROM users WHERE user_id = ? LIMIT 1',
+				array($user_id)
+			)->row_array();
+			$partners[] = array(
+				'user_id' => $user_id,
+				'name' => $u ? trim($u['first_name'] . ' ' . $u['last_name']) : ('User #' . $user_id),
+				'percentage' => $pct,
+				'amount' => round(($pct / 100.0) * $net_profit, 2),
+			);
+		}
+		return $partners;
+	}
+
+	private function _profit_partners_labels($campus_id)
+	{
+		$list = $this->_profit_partners_list($campus_id, 0);
+		if (!count($list)) return 'N/A';
+		$bits = array();
+		foreach ($list as $p) {
+			$bits[] = $p['name'] . ' = ' . $p['percentage'] . ' %';
+		}
+		return implode("\n", $bits);
+	}
+
+	/**
+	 * Legacy Accounts::index — per campus last-closed+1 → today, seat-divided expense.
+	 * GET profit_campuses
+	 */
+	public function profit_campuses()
+	{
+		$to = date('Y-m-d');
+		$sql = 'SELECT campus_id, campus_name, campus_code FROM campuses';
+		if ($this->_field_exists('campuses', 'status')) {
+			$sql .= ' WHERE status = 1';
+		}
+		$sql .= ' ORDER BY campus_name ASC';
+		$campuses = $this->db->query($sql)->result_array();
+		$out = array();
+		foreach ($campuses as $c) {
+			$cid = (int)$c['campus_id'];
+			$from = $this->_profit_from_date($cid);
+			$seat = $this->_profit_seat_expense($cid, $from, $to);
+			$recovery = $this->_profit_total_recovery($cid, $from, $to);
+			$expense = (float)$seat['divided_expense'];
+			$net = $recovery - $expense;
+			$out[] = array(
+				'campus_id' => $cid,
+				'campus_name' => $c['campus_name'],
+				'campus_code' => isset($c['campus_code']) ? $c['campus_code'] : '',
+				'from' => $from,
+				'from_label' => ($from === '2000-01-01') ? 'Start' : $from,
+				'to' => $to,
+				'expense_lines' => $seat['expense_lines'],
+				'pool_expense' => $seat['pool_expense'],
+				'divided_expense' => $seat['divided_expense'],
+				'total_expense' => $expense,
+				'total_recovery' => $recovery,
+				'net_profit' => $net,
+				'partners_label' => $this->_profit_partners_labels($cid),
+				'partners' => $this->_profit_partners_list($cid, $net),
+			);
+		}
+		$this->_json(array('success' => true, 'to' => $to, 'campuses' => $out));
+	}
+
+	/**
+	 * Legacy Accounts::campus_profit — full breakdown tiles + history + distribute meta.
+	 * GET campus_profit?campus_id&till_date=&search_from=&search_to=
 	 */
 	public function campus_profit()
 	{
 		$campus_id = (int)$this->input->get('campus_id');
-		$from = $this->input->get('from');
-		if (!$from) $from = $this->input->get('from_date');
-		$to = $this->input->get('to');
-		if (!$to) $to = $this->input->get('to_date');
 		if ($campus_id <= 0) $this->_json(array('success' => false, 'message' => 'campus_id required'), 400);
-		if (!$from && function_exists('getFromDateProfitDistribution')) {
-			$from = getFromDateProfitDistribution($campus_id);
-		}
-		if (!$from) $from = date('Y-m-01');
-		if (!$to) $to = date('Y-m-d');
 
+		$yesterday = date('Y-m-d', strtotime('-1 day'));
+		$till = $this->input->get('till_date');
+		if (!$till) $till = $this->input->get('to');
+		if (!$till) $till = $this->input->get('to_date');
+		if (!$till) $till = $yesterday;
+		// Legacy datepicker end = -1d
+		if ($till > $yesterday) $till = $yesterday;
+
+		$from = $this->_profit_from_date($campus_id);
 		$campus = $this->db->query(
 			'SELECT campus_id, campus_name, campus_code FROM campuses WHERE campus_id = ? LIMIT 1',
 			array($campus_id)
 		)->row_array();
 
-		$expense = $this->_profit_total_expense($campus_id, $from, $to);
-		$recovery = $this->_profit_total_recovery($campus_id, $from, $to);
-		$net = $recovery - $expense;
+		$seat = $this->_profit_seat_expense($campus_id, $from, $till);
+		$expense_share = (float)$seat['divided_expense'];
+		$special = $this->_profit_special_expense($campus_id, $from, $till);
+		$shift_deduct = $this->_profit_shift_deduction($campus_id);
+		$total_expense = $shift_deduct + $expense_share + $special;
+
+		$regular_recovery = $this->_profit_total_recovery($campus_id, $from, $till);
+		$shift_earn = $this->_profit_shift_earning($campus_id);
+		$total_recovery = $regular_recovery + $shift_earn;
+		$net = $total_recovery - $total_expense;
+
 		$not_approved = 0.0;
-		if ($this->_table_exists('expenses')) {
-			$dateCol = $this->_field_exists('expenses', 'actual_date') ? 'actual_date' : 'date';
-			$na = $this->db->query(
-				"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
-				 WHERE campus_id = ? AND {$dateCol} >= ? AND {$dateCol} <= ?
-				   AND (approved_status = '0' OR approved_status = 0 OR approved_status IS NULL)",
-				array($campus_id, $from, $to)
+		foreach ($seat['share_campus_ids'] as $sid) {
+			$not_approved += $this->_profit_not_approved((int)$sid, $from, $till);
+		}
+		$not_approved_self = $this->_profit_not_approved($campus_id, $from, $till);
+
+		$partners = $this->_profit_partners_list($campus_id, $net);
+
+		// Islamabad special badges (campus_id == 7) — structured for SPA
+		$islamabad = null;
+		if ($campus_id === 7) {
+			$first = $this->db->query(
+				"SELECT COALESCE(SUM(payments.actual_amount),0) AS amount
+				 FROM payments
+				 INNER JOIN students ON students.student_id = payments.student_id
+				 INNER JOIN classes ON classes.class_id = students.class_id
+				 WHERE classes.campus_id = ? AND classes.class_id = 11
+				   AND payments.actual_paid_date >= ? AND payments.actual_paid_date <= ?
+				   AND payments.paid = 1",
+				array($campus_id, $from, $till)
 			)->row_array();
-			$not_approved = (float)(isset($na['amount']) ? $na['amount'] : 0);
+			$first_amt = (float)(isset($first['amount']) ? $first['amount'] : 0);
+			$rest = $this->db->query(
+				"SELECT COALESCE(SUM(payments.actual_amount),0) AS amount
+				 FROM payments
+				 INNER JOIN students ON students.student_id = payments.student_id
+				 INNER JOIN classes ON classes.class_id = students.class_id
+				 WHERE classes.campus_id = ? AND classes.class_id != 11
+				   AND payments.actual_paid_date >= ? AND payments.actual_paid_date <= ?
+				   AND payments.paid = 1",
+				array($campus_id, $from, $till)
+			)->row_array();
+			$rest_amt = (float)(isset($rest['amount']) ? $rest['amount'] : 0);
+			$expAll = $this->db->query(
+				"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
+				 WHERE campus_id = ? AND date >= ? AND date <= ?",
+				array($campus_id, $from, $till)
+			)->row_array();
+			$expAmt = (float)(isset($expAll['amount']) ? $expAll['amount'] : 0);
+			$second_net = $rest_amt - $expAmt;
+			$u1 = $this->db->query("SELECT first_name, last_name FROM users WHERE user_id = 1 LIMIT 1")->row_array();
+			$u29 = $this->db->query("SELECT first_name, last_name FROM users WHERE user_id = 29 LIMIT 1")->row_array();
+			$islamabad = array(
+				'first_badge_amount' => $first_amt,
+				'first_badge_partners' => array(
+					array(
+						'user_id' => 1,
+						'name' => $u1 ? trim($u1['first_name'] . ' ' . $u1['last_name']) : 'User #1',
+						'percentage' => 50,
+						'amount' => round(0.5 * $first_amt, 2),
+					),
+					array(
+						'user_id' => 29,
+						'name' => $u29 ? trim($u29['first_name'] . ' ' . $u29['last_name']) : 'User #29',
+						'percentage' => 50,
+						'amount' => round(0.5 * $first_amt, 2),
+					),
+				),
+				'second_badge_net' => $second_net,
+				'second_badge_partners' => $this->_profit_partners_list($campus_id, $second_net),
+			);
 		}
 
-		$partners = array();
-		if ($this->_table_exists('campus_partners')) {
-			$cp = $this->db->query(
-				'SELECT partners FROM campus_partners WHERE campus_id = ? LIMIT 1',
-				array($campus_id)
-			)->row_array();
-			$raw = ($cp && !empty($cp['partners'])) ? json_decode($cp['partners'], true) : null;
-			if (is_array($raw)) {
-				for ($i = 0; $i + 1 < count($raw); $i += 2) {
-					$user_id = (int)$raw[$i];
-					$pct = (float)$raw[$i + 1];
-					if ($user_id <= 0) continue;
-					$u = $this->db->query(
-						'SELECT first_name, last_name FROM users WHERE user_id = ? LIMIT 1',
-						array($user_id)
-					)->row_array();
-					$partners[] = array(
-						'user_id' => $user_id,
-						'name' => $u ? trim($u['first_name'] . ' ' . $u['last_name']) : ('User #' . $user_id),
-						'percentage' => $pct,
-						'amount' => round(($pct / 100.0) * $net, 2),
-					);
+		// History — default last 3 closes; optional search_from / search_to
+		$search_from = $this->input->get('search_from');
+		if (!$search_from) $search_from = $this->input->get('search_from_date');
+		$search_to = $this->input->get('search_to');
+		if (!$search_to) $search_to = $this->input->get('search_to_date');
+		$distributions = array();
+		$history_mode = 'recent';
+		if ($this->_table_exists('profit_distribution')) {
+			$dates = array();
+			if ($search_from && $search_to && $this->_table_exists('profit_distribution_date')) {
+				$history_mode = 'search';
+				$dateRows = $this->db->query(
+					"SELECT date FROM profit_distribution_date
+					 WHERE campus_id = ? AND date >= ? AND date <= ?
+					 ORDER BY date DESC",
+					array($campus_id, $search_from, $search_to)
+				)->result_array();
+				foreach ($dateRows as $dr) $dates[] = $dr['date'];
+			} elseif ($this->_table_exists('profit_distribution_date')) {
+				$dateRows = $this->db->query(
+					"SELECT date FROM profit_distribution_date
+					 WHERE campus_id = ? ORDER BY date DESC LIMIT 3",
+					array($campus_id)
+				)->result_array();
+				foreach ($dateRows as $dr) $dates[] = $dr['date'];
+			}
+			if (count($dates)) {
+				$placeholders = implode(',', array_fill(0, count($dates), '?'));
+				$params = array_merge(array($campus_id), $dates);
+				$distributions = $this->db->query(
+					"SELECT profit_distribution.*,
+							users.first_name, users.last_name,
+							CONCAT(COALESCE(users.first_name,''),' ',COALESCE(users.last_name,'')) AS partner_name
+					 FROM profit_distribution
+					 INNER JOIN users ON users.user_id = profit_distribution.user_id
+					 WHERE profit_distribution.campus_id = ?
+					   AND profit_distribution.to_date IN ($placeholders)
+					 ORDER BY profit_distribution.to_date DESC",
+					$params
+				)->result_array();
+				foreach ($distributions as &$d) {
+					$img = isset($d['record']) ? $d['record'] : '';
+					$d['image_url'] = $img ? $this->_upload_url($img) : null;
+					if (!isset($d['id']) && isset($d['profit_distribution_id'])) {
+						$d['id'] = (int)$d['profit_distribution_id'];
+					}
 				}
+				unset($d);
 			}
 		}
 
-		$distributions = array();
-		if ($this->_table_exists('profit_distribution')) {
-			$distributions = $this->db->query(
-				"SELECT profit_distribution.*, users.first_name, users.last_name,
-						CONCAT(COALESCE(users.first_name,''),' ',COALESCE(users.last_name,'')) AS partner_name
-				 FROM profit_distribution
-				 LEFT JOIN users ON users.user_id = profit_distribution.user_id
-				 WHERE profit_distribution.campus_id = ?
-				   AND profit_distribution.to_date >= ? AND profit_distribution.to_date <= ?
-				 ORDER BY profit_distribution.to_date DESC",
-				array($campus_id, $from, $to)
-			)->result_array();
-		}
+		$can_distribute = ($net > 0) && ($not_approved_self <= 0) && count($partners) > 0;
+
 		$this->_json(array(
 			'success' => true,
 			'campus_id' => $campus_id,
 			'campus_name' => $campus ? $campus['campus_name'] : '',
 			'campus_code' => $campus && isset($campus['campus_code']) ? $campus['campus_code'] : '',
 			'from' => $from,
-			'to' => $to,
-			'total_expense' => $expense,
-			'total_recovery' => $recovery,
-			'net_profit' => $net,
-			'not_approved_expenses' => $not_approved,
-			'can_distribute' => $net > 0 && $not_approved <= 0 && count($partners) > 0,
+			'from_label' => ($from === '2000-01-01') ? 'Start' : $from,
+			'to' => $till,
+			'till_date' => $till,
+			'till_max' => $yesterday,
+			'expense_lines' => $seat['expense_lines'],
+			'pool_expense' => $seat['pool_expense'],
+			'expense_share' => $expense_share,
+			'special_expense' => $special,
+			'shift_deduction' => $shift_deduct,
+			'total_expense' => round($total_expense, 2),
+			'regular_recovery' => round($regular_recovery, 2),
+			'shift_earning' => $shift_earn,
+			'total_recovery' => round($total_recovery, 2),
+			'net_profit' => round($net, 2),
+			'not_approved_expenses' => round($not_approved, 2),
+			'not_approved_self' => round($not_approved_self, 2),
+			'partners_label' => $this->_profit_partners_labels($campus_id),
 			'partners' => $partners,
+			'islamabad' => $islamabad,
+			'can_distribute' => $can_distribute,
+			'block_reason' => $net <= 0
+				? "Can't close due to Remaining Balance"
+				: ($not_approved_self > 0
+					? 'Kindly approve pending expenses to proceed Campus Profit Distribution'
+					: (count($partners) ? null : 'No campus partners configured')),
+			'history_mode' => $history_mode,
+			'search_from' => $search_from ?: date('Y-m-d'),
+			'search_to' => $search_to ?: date('Y-m-d'),
 			'distributions' => is_array($distributions) ? $distributions : array(),
 		));
 	}
 
+	/** Campus IDs in seat-share pool for this campus (legacy campus_share_ids). */
+	private function _profit_share_campus_ids($campus_id)
+	{
+		$campus_id = (int)$campus_id;
+		$ids = array($campus_id);
+		if (!$this->_table_exists('campus_partners')) return $ids;
+		$partner = $this->db->query(
+			'SELECT campus_share_ids FROM campus_partners WHERE campus_id = ? LIMIT 1',
+			array($campus_id)
+		)->row_array();
+		if ($partner && !empty($partner['campus_share_ids'])) {
+			$decoded = json_decode($partner['campus_share_ids'], true);
+			if (is_array($decoded) && count($decoded)) {
+				$ids = array_values(array_unique(array_map('intval', $decoded)));
+			}
+		}
+		return $ids;
+	}
+
 	/**
-	 * Legacy: Accounts::insert_campus_profit (simplified payload)
-	 * POST insert_campus_profit — {campus_id, from_date, to_date, total_expense, total_recovery, net_profit, shares:[{user_id,amount,percentage}]}
-	 * Also accepts multipart FormData (optional record/image/proof file; shares as JSON string).
+	 * Legacy Accounts::total_expenses — approved expenses excluding special cats across share campuses.
+	 * GET profit_total_expenses?campus_id&from&to
+	 */
+	public function profit_total_expenses()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		$from = $this->input->get('from');
+		if (!$from) $from = $this->input->get('from_date');
+		$to = $this->input->get('to');
+		if (!$to) $to = $this->input->get('to_date');
+		if ($campus_id <= 0 || !$from || !$to) {
+			$this->_json(array('success' => false, 'message' => 'campus_id, from, to required'), 400);
+		}
+		$rows = array();
+		foreach ($this->_profit_share_campus_ids($campus_id) as $cid) {
+			if (function_exists('gettotalExpense')) {
+				try {
+					$part = gettotalExpense($cid, $from, $to);
+					if (is_array($part)) $rows = array_merge($rows, $part);
+				} catch (Exception $e) { /* skip */ }
+			}
+		}
+		$this->_json(array('success' => true, 'rows' => $rows, 'from' => $from, 'to' => $to));
+	}
+
+	/**
+	 * Legacy Accounts::expenses — special category expenses (approved).
+	 * GET profit_special_expenses?campus_id&from&to
+	 */
+	public function profit_special_expenses()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		$from = $this->input->get('from');
+		if (!$from) $from = $this->input->get('from_date');
+		$to = $this->input->get('to');
+		if (!$to) $to = $this->input->get('to_date');
+		if ($campus_id <= 0 || !$from || !$to) {
+			$this->_json(array('success' => false, 'message' => 'campus_id, from, to required'), 400);
+		}
+		$this->load->model('account');
+		$rows = array();
+		if (isset($this->account) && method_exists($this->account, 'getExpenses')) {
+			$rows = $this->account->getExpenses($from, $to, $campus_id);
+			if (!is_array($rows)) $rows = array();
+		}
+		$this->_json(array('success' => true, 'rows' => $rows, 'from' => $from, 'to' => $to));
+	}
+
+	/**
+	 * Legacy Accounts::shift_fee_recovery
+	 * GET profit_shift_fees?campus_id&type=deduction|earning
+	 */
+	public function profit_shift_fees()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		$type = $this->input->get('type');
+		if ($type !== 'earning') $type = 'deduction';
+		if ($campus_id <= 0) $this->_json(array('success' => false, 'message' => 'campus_id required'), 400);
+
+		$details = array();
+		$fees = array();
+		if ($this->_table_exists('student_shift_details')) {
+			if ($type === 'deduction') {
+				$details = $this->db->query(
+					"SELECT * FROM student_shift_details WHERE from_class = ? AND status = '0'",
+					array($campus_id)
+				)->result_array();
+			} else {
+				$details = $this->db->query(
+					"SELECT * FROM student_shift_details
+					 WHERE to_class = ? AND status = '0' AND (received_status = '0' OR received_status = 0)",
+					array($campus_id)
+				)->result_array();
+			}
+			$arr = array();
+			foreach ($details as $entry) {
+				$key = ($type === 'deduction') ? 'from_fee_ids' : 'to_fee_ids';
+				$decoded = !empty($entry[$key]) ? json_decode($entry[$key], true) : null;
+				if (is_array($decoded)) $arr = array_merge($arr, $decoded);
+			}
+			$arr = array_values(array_filter($arr));
+			if (count($arr) && $this->_table_exists('payments')) {
+				$placeholders = implode(',', array_fill(0, count($arr), '?'));
+				$fees = $this->db->query(
+					"SELECT payments.*, classes.name AS class_name, campuses.campus_name,
+							students.first_name, students.last_name, students.roll_no
+					 FROM payments
+					 INNER JOIN students ON students.student_id = payments.student_id
+					 INNER JOIN classes ON classes.class_id = students.class_id
+					 INNER JOIN campuses ON classes.campus_id = campuses.campus_id
+					 WHERE payments.challan_no IN ($placeholders)",
+					$arr
+				)->result_array();
+			}
+		}
+		$this->_json(array(
+			'success' => true,
+			'type' => $type,
+			'details' => $details,
+			'fees' => is_array($fees) ? $fees : array(),
+		));
+	}
+
+	/**
+	 * Legacy Accounts::fee_recovery
+	 * GET profit_fee_recovery?campus_id&from&to
+	 */
+	public function profit_fee_recovery()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		$from = $this->input->get('from');
+		if (!$from) $from = $this->input->get('from_date');
+		$to = $this->input->get('to');
+		if (!$to) $to = $this->input->get('to_date');
+		if ($campus_id <= 0 || !$from || !$to) {
+			$this->_json(array('success' => false, 'message' => 'campus_id, from, to required'), 400);
+		}
+		$this->load->model('account');
+		$fees = array();
+		$contractors = array();
+		if (isset($this->account) && method_exists($this->account, 'getPayments')) {
+			$fees = $this->account->getPayments($from, $to, $campus_id);
+			if (!is_array($fees)) $fees = array();
+		}
+		if (isset($this->account) && method_exists($this->account, 'getPaymentsContractors')) {
+			$contractors = $this->account->getPaymentsContractors($from, $to, $campus_id);
+			if (!is_array($contractors)) $contractors = array();
+		}
+		$this->_json(array(
+			'success' => true,
+			'fees' => $fees,
+			'contractors' => $contractors,
+			'from' => $from,
+			'to' => $to,
+		));
+	}
+
+	/**
+	 * Pending expenses for profit period (share campuses) — for Approve All UI.
+	 * GET profit_pending_expenses?campus_id&from&to
+	 */
+	public function profit_pending_expenses()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		$from = $this->input->get('from');
+		if (!$from) $from = $this->input->get('from_date');
+		$to = $this->input->get('to');
+		if (!$to) $to = $this->input->get('to_date');
+		if ($campus_id <= 0 || !$from || !$to) {
+			$this->_json(array('success' => false, 'message' => 'campus_id, from, to required'), 400);
+		}
+		if (!$this->_table_exists('expenses')) {
+			$this->_json(array('success' => true, 'rows' => array(), 'total' => 0));
+		}
+		$ids = $this->_profit_share_campus_ids($campus_id);
+		$in = implode(',', array_map('intval', $ids));
+		$dateCol = $this->_field_exists('expenses', 'actual_date') ? 'actual_date' : 'date';
+		$sql = "SELECT expenses.*, campuses.campus_name, expense_category.name AS category_name
+				FROM expenses
+				LEFT JOIN campuses ON campuses.campus_id = expenses.campus_id
+				LEFT JOIN expense_category ON expense_category.expense_category_id = expenses.expense_category_id
+				WHERE expenses.campus_id IN ($in)
+				  AND expenses.{$dateCol} >= ? AND expenses.{$dateCol} <= ?
+				  AND (expenses.approved_status = '0' OR expenses.approved_status = 0)
+				ORDER BY expenses.{$dateCol} DESC, expenses.expense_id DESC";
+		$rows = $this->db->query($sql, array($from, $to))->result_array();
+		$total = 0.0;
+		foreach ($rows as &$r) {
+			$total += (float)$r['amount'];
+			$img = isset($r['image']) ? $r['image'] : '';
+			$r['image_url'] = $img ? $this->_upload_url($img) : null;
+		}
+		unset($r);
+		$this->_json(array(
+			'success' => true,
+			'rows' => $rows,
+			'total' => round($total, 2),
+			'from' => $from,
+			'to' => $to,
+			'campus_ids' => $ids,
+		));
+	}
+
+	/**
+	 * Legacy Expenses::change_approve_status (single).
+	 * POST profit_approve_expense — {expense_id, status: 1|2}
+	 */
+	public function profit_approve_expense()
+	{
+		$body = $this->_body();
+		$expense_id = (int)(isset($body['expense_id']) ? $body['expense_id'] : 0);
+		$status = isset($body['status']) ? (string)$body['status'] : '1';
+		if ($expense_id <= 0) $this->_json(array('success' => false, 'message' => 'expense_id required'), 400);
+		if ($status !== '1' && $status !== '2') {
+			$this->_json(array('success' => false, 'message' => 'status must be 1 (approve) or 2 (reject)'), 422);
+		}
+		$exp = $this->db->query('SELECT * FROM expenses WHERE expense_id = ? LIMIT 1', array($expense_id))->row_array();
+		if (!$exp) $this->_json(array('success' => false, 'message' => 'Expense not found'), 404);
+
+		$last_edit = isset($body['last_edit']) ? $body['last_edit'] : $this->_actor_name();
+		$this->db->where('expense_id', $expense_id)->update('expenses', array(
+			'approved_status' => $status,
+			'last_edit' => $last_edit,
+		));
+
+		if ($status === '2') {
+			if ($this->_table_exists('cash_reversal')) {
+				$this->db->insert('cash_reversal', array(
+					'expense_id' => $expense_id,
+					'amount' => (float)$exp['amount'],
+					'reverse_by' => isset($this->current_user['user_id']) ? $this->current_user['user_id'] : 0,
+					'created_at' => date('Y-m-d H:i:s'),
+				));
+			}
+			if ($this->_table_exists('bank_reconciliation_statement')) {
+				$this->db->where('expense_id', $expense_id)->update('bank_reconciliation_statement', array(
+					'expense_id' => null,
+				));
+			}
+		}
+		$this->_json(array('success' => true, 'message' => 'Success', 'expense_id' => $expense_id, 'status' => $status));
+	}
+
+	/**
+	 * Approve all pending expenses in profit window (share campuses).
+	 * POST profit_approve_all_pending — {campus_id, from, to}
+	 */
+	public function profit_approve_all_pending()
+	{
+		$body = $this->_body();
+		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
+		$from = isset($body['from']) ? $body['from'] : (isset($body['from_date']) ? $body['from_date'] : '');
+		$to = isset($body['to']) ? $body['to'] : (isset($body['to_date']) ? $body['to_date'] : '');
+		if ($campus_id <= 0 || !$from || !$to) {
+			$this->_json(array('success' => false, 'message' => 'campus_id, from, to required'), 400);
+		}
+		$ids = $this->_profit_share_campus_ids($campus_id);
+		$in = implode(',', array_map('intval', $ids));
+		$dateCol = $this->_field_exists('expenses', 'actual_date') ? 'actual_date' : 'date';
+		$pending = $this->db->query(
+			"SELECT expense_id FROM expenses
+			 WHERE campus_id IN ($in)
+			   AND {$dateCol} >= ? AND {$dateCol} <= ?
+			   AND (approved_status = '0' OR approved_status = 0)",
+			array($from, $to)
+		)->result_array();
+		$last_edit = $this->_actor_name();
+		$n = 0;
+		foreach ($pending as $row) {
+			$this->db->where('expense_id', (int)$row['expense_id'])->update('expenses', array(
+				'approved_status' => '1',
+				'last_edit' => $last_edit,
+			));
+			$n++;
+		}
+		$this->_json(array(
+			'success' => true,
+			'message' => $n ? ("Approved {$n} expense(s)") : 'No pending expenses',
+			'approved_count' => $n,
+		));
+	}
+
+	/**
+	 * Legacy Accounts::insert_campus_profit
+	 * POST insert_campus_profit — FormData or JSON with shares; settles payments + shifts.
 	 */
 	public function insert_campus_profit()
 	{
@@ -5264,23 +5862,57 @@ class Accountsapi extends CI_Controller {
 		if ($campus_id <= 0 || !$from_date || !$to_date) {
 			$this->_json(array('success' => false, 'message' => 'campus_id, from_date, to_date required'), 400);
 		}
-		$total_expense = (float)(isset($body['total_expense']) ? $body['total_expense'] : 0);
-		$total_recovery = (float)(isset($body['total_recovery']) ? $body['total_recovery'] : 0);
-		$net_profit = (float)(isset($body['net_profit']) ? $body['net_profit'] : ($total_recovery - $total_expense));
+
+		// Recompute server-side (do not trust client totals)
+		$seat = $this->_profit_seat_expense($campus_id, $from_date, $to_date);
+		$expense_share = (float)$seat['divided_expense'];
+		$special = $this->_profit_special_expense($campus_id, $from_date, $to_date);
+		$shift_deduct = $this->_profit_shift_deduction($campus_id);
+		$total_expense = $shift_deduct + $expense_share + $special;
+		$regular_recovery = $this->_profit_total_recovery($campus_id, $from_date, $to_date);
+		$shift_earn = $this->_profit_shift_earning($campus_id);
+		$total_recovery = $regular_recovery + $shift_earn;
+		$net_profit = $total_recovery - $total_expense;
+
+		if ($net_profit <= 0) {
+			$this->_json(array('success' => false, 'message' => "Can't close due to Remaining Balance"), 422);
+		}
+		if ($this->_profit_not_approved($campus_id, $from_date, $to_date) > 0) {
+			$this->_json(array('success' => false, 'message' => 'Kindly approve pending expenses to proceed Campus Profit Distribution'), 422);
+		}
+
 		$shares = isset($body['shares']) ? $body['shares'] : array();
 		if (is_string($shares)) {
 			$decoded = json_decode($shares, true);
 			$shares = is_array($decoded) ? $decoded : array();
 		}
-		if (!is_array($shares)) $shares = array();
+		if (!is_array($shares) || !count($shares)) {
+			// Build from campus_partners
+			$shares = $this->_profit_partners_list($campus_id, $net_profit);
+		}
+		if (!count($shares)) {
+			$this->_json(array('success' => false, 'message' => 'No partner shares to save'), 400);
+		}
+
 		$type = isset($body['close_type']) ? $body['close_type'] : (isset($body['section']) ? $body['section'] : 'bank');
 		$tagged = ($type === 'cash') ? 'yes' : 'no';
 		$record = $this->_upload_proof();
+		if ($record === '' && !empty($body['proof_image'])) {
+			$record = basename((string)$body['proof_image']);
+		}
+		if ($record === '' && !empty($body['record']) && is_string($body['record'])) {
+			$record = basename($body['record']);
+		}
+		if ($record === '') {
+			$this->_json(array('success' => false, 'message' => 'Upload document is required'), 422);
+		}
 
 		$ids = array();
 		foreach ($shares as $share) {
 			$user_id = (int)(isset($share['user_id']) ? $share['user_id'] : 0);
 			if ($user_id <= 0) continue;
+			$pct = (float)(isset($share['percentage']) ? $share['percentage'] : 0);
+			$amt = isset($share['amount']) ? (float)$share['amount'] : round(($pct / 100.0) * $net_profit, 2);
 			$row = array(
 				'campus_id' => $campus_id,
 				'from_date' => $from_date,
@@ -5289,8 +5921,8 @@ class Accountsapi extends CI_Controller {
 				'total_recovery' => $total_recovery,
 				'net_profit' => $net_profit,
 				'user_id' => $user_id,
-				'amount' => (float)(isset($share['amount']) ? $share['amount'] : 0),
-				'percentage' => (float)(isset($share['percentage']) ? $share['percentage'] : 0),
+				'amount' => $amt,
+				'percentage' => $pct,
 				'close_type' => $type,
 				'tagged' => $tagged,
 			);
@@ -5301,13 +5933,57 @@ class Accountsapi extends CI_Controller {
 		if (!count($ids)) {
 			$this->_json(array('success' => false, 'message' => 'No partner shares to save'), 400);
 		}
+
+		$settlement_id = 0;
 		if ($this->_table_exists('profit_distribution_date')) {
 			$this->db->insert('profit_distribution_date', array(
 				'campus_id' => $campus_id,
 				'date' => $to_date,
 			));
+			$settlement_id = (int)$this->db->insert_id();
 		}
-		$this->_json(array('success' => true, 'message' => 'Profit distribution saved', 'ids' => $ids));
+
+		// Settle student shifts (legacy)
+		if ($this->_table_exists('student_shift_details')) {
+			$this->db->where(array('from_class' => $campus_id, 'status' => '0'))
+				->update('student_shift_details', array('status' => '1'));
+			$this->db->where(array('to_class' => $campus_id, 'received_status' => '0'))
+				->update('student_shift_details', array('received_status' => '1'));
+		}
+
+		// Tag payments with settlement_id (legacy Account::getPayments*)
+		if ($settlement_id > 0 && $this->_field_exists('payments', 'settlement_id')) {
+			$this->load->model('account');
+			if (isset($this->account) && method_exists($this->account, 'getPayments')) {
+				$fees = $this->account->getPayments($from_date, $to_date, $campus_id);
+				if (is_array($fees)) {
+					foreach ($fees as $fee) {
+						if (empty($fee['challan_no'])) continue;
+						$this->db->where('challan_no', $fee['challan_no'])
+							->update('payments', array('settlement_id' => $settlement_id));
+					}
+				}
+			}
+			if (isset($this->account) && method_exists($this->account, 'getPaymentsContractors')) {
+				$cfees = $this->account->getPaymentsContractors($from_date, $to_date, $campus_id);
+				if (is_array($cfees)) {
+					foreach ($cfees as $fee) {
+						if (empty($fee['challan_no'])) continue;
+						$this->db->where('challan_no', $fee['challan_no'])
+							->update('payments', array('settlement_id' => $settlement_id));
+					}
+				}
+			}
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Profit distribution saved',
+			'ids' => $ids,
+			'total_expense' => $total_expense,
+			'total_recovery' => $total_recovery,
+			'net_profit' => $net_profit,
+		));
 	}
 
 	/**
