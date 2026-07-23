@@ -431,24 +431,20 @@ class Studentsapi extends CI_Controller {
 	{
 		$b = $this->_legacy_base();
 		return array(
-			'attendance' => $b . '/attendence_data/student/{id}',
-			'sms' => $b . '/students/sms/{id}',
+			'attendance' => '/students/attendance/student/{id}',
+			'sms' => '/students/sms/{id}',
 			'edit' => '/students/edit/{id}',
-			'edit_legacy' => $b . '/students/edit_student/{id}',
 			'documents' => '/students/documents/{id}',
-			'documents_legacy' => $b . '/students/upload_documents/{id}',
 			'payments' => '/students/payments/{id}',
-			'payments_legacy' => $b . '/students/payments/{id}',
-			'reset_plan' => $b . '/students/reset_plan/{id}',
-			'struckof' => $b . '/students/struckofstudentview/{id}',
-			'freeze' => $b . '/students/freezestudentview/{id}',
-			'all_document' => $b . '/documents/student_all_document/{id}',
+			'reset_plan' => 'api:reset_plan',
+			'struckof' => '/students/struckof/{id}',
+			'freeze' => '/students/freeze/{id}',
+			'all_document' => '/students/all-docs/{id}',
 			'purchased' => '/students/purchased/{id}',
-			'purchased_legacy' => $b . '/students/purchased_products/{id}',
-			'struck_letters' => $b . '/documents/print_struck_off_letters',
-			'restore' => $b . '/archive/restore_student/{id}',
-			'revive' => $b . '/students/addrevivedetails',
-			'revive_new' => $b . '/students/addrevivedetails_new',
+			'struck_letters' => 'api:struck_letters',
+			'restore' => 'api:restore',
+			'revive' => '/students/revive/{id}',
+			// File/print helpers still served by CI document controllers
 			'council_print' => $b . '/council_list/get_print_of_concel_list',
 			'council_print_new' => $b . '/council_list/get_print_of_new_concel_list',
 			'delete_roll_no' => $b . '/punjab_council_roll_number/delete_roll_no',
@@ -1819,5 +1815,546 @@ class Studentsapi extends CI_Controller {
 			'data' => $rows,
 			'legacy_base' => $this->_legacy_base(),
 		));
+	}
+
+	// ─── Action screens (SPA — no legacy redirect) ───────────
+
+	private function _student_profile($student_id)
+	{
+		$this->db->select('students.*, classes.name as class_name, classes.session, classes.freeze_fee, campuses.campus_id, campuses.campus_name, campuses.address as campus_address, campuses.phone, campuses.phone1, campuses.phone2, campuses.logo, campuses.stamp, campuses.website, courses.course_name, machine_data.machine_id', false);
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
+		$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
+		$this->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id AND machine_data.type="student"', 'left');
+		$this->db->where('students.student_id', (int)$student_id);
+		return $this->db->get()->row_array();
+	}
+
+	private function _fee_summary($student_id)
+	{
+		$paid = $this->db->order_by('paid_date', 'ASC')->get_where('payments', array('student_id' => (int)$student_id, 'paid' => 1))->result_array();
+		$unpaid = $this->db->order_by('dead_line', 'ASC')->get_where('payments', array('student_id' => (int)$student_id, 'paid' => 0))->result_array();
+		$paid_total = 0;
+		$unpaid_total = 0;
+		foreach ($paid as $p) $paid_total += (float)$p['actual_amount'];
+		foreach ($unpaid as $p) $unpaid_total += (float)$p['amount'];
+		return array(
+			'paid' => $paid,
+			'unpaid' => $unpaid,
+			'paid_total' => $paid_total,
+			'unpaid_total' => $unpaid_total,
+		);
+	}
+
+	private function _new_challan_no()
+	{
+		for ($i = 0; $i < 20; $i++) {
+			$n = (string)mt_rand(1000, 999999999);
+			$exists = $this->db->get_where('payments', array('challan_no' => $n))->row_array();
+			if (!$exists) return $n;
+		}
+		return (string)time() . mt_rand(10, 99);
+	}
+
+	public function attendance($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		$student = $this->_student_profile($student_id);
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Student not found'), 404);
+
+		$start = $this->input->get('start_date');
+		$end = $this->input->get('end_date');
+		if (!$start) $start = date('Y-m-d', strtotime('-7 days'));
+		if (!$end) $end = date('Y-m-d');
+
+		$days = array();
+		$machine_id = isset($student['machine_id']) ? $student['machine_id'] : null;
+		try {
+			$period = new DatePeriod(
+				new DateTime($start),
+				new DateInterval('P1D'),
+				(new DateTime($end))->modify('+1 day')
+			);
+			foreach ($period as $dt) {
+				$d = $dt->format('Y-m-d');
+				$times = array();
+				$status = 'Absent';
+				$first_time = null;
+				if ($machine_id !== null && $machine_id !== '' && $this->db->table_exists('attendence')) {
+					$rows = $this->db
+						->where('machine_user_id', $machine_id)
+						->where('time >=', $d . ' 00:00:00')
+						->where('time <=', $d . ' 23:59:59')
+						->order_by('time', 'ASC')
+						->get('attendence')
+						->result_array();
+					if (count($rows)) {
+						$status = 'Present';
+						$first_time = $rows[0]['time'];
+						foreach ($rows as $r) $times[] = $r['time'];
+					}
+				}
+				$days[] = array(
+					'date' => $d,
+					'status' => $status,
+					'time' => $first_time,
+					'times' => $times,
+				);
+			}
+		} catch (Exception $e) {
+			$days = array();
+		}
+
+		$photo = $this->db->get_where('student_documents', array('student_id' => $student_id, 'type' => 'Photo'))->row_array();
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => $student,
+				'image_url' => $this->_doc_url($photo),
+				'start_date' => $start,
+				'end_date' => $end,
+				'days' => $days,
+			),
+		));
+	}
+
+	public function sms($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+			$body = $this->_body();
+			$message = isset($body['message']) ? trim($body['message']) : '';
+			if ($message === '') $this->_json(array('success' => false, 'message' => 'Message required'), 422);
+			$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+			if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+			$numbers = array();
+			if (!empty($student['mobile'])) $numbers[] = $student['mobile'];
+			if (!empty($student['emergency_no'])) $numbers[] = $student['emergency_no'];
+			foreach ($numbers as $num) {
+				$this->db->insert('sms', array(
+					'number' => $num,
+					'message' => $message,
+					'status' => '',
+					'date' => date('Y-m-d H:i:s'),
+					'chk' => '0',
+				));
+			}
+			$this->_json(array('success' => true, 'message' => 'SMS queued to student + emergency'));
+		}
+
+		$student = $this->_student_profile($student_id);
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$msgs = array();
+		if ($this->db->table_exists('sms')) {
+			$this->db->from('sms');
+			$this->db->group_start();
+			if (!empty($student['mobile'])) $this->db->or_where('number', $student['mobile']);
+			if (!empty($student['emergency_no'])) $this->db->or_where('number', $student['emergency_no']);
+			$this->db->group_end();
+			$this->db->order_by('date', 'DESC');
+			$this->db->limit(200);
+			$msgs = $this->db->get()->result_array();
+		}
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => $student,
+				'messages' => $msgs,
+			),
+		));
+	}
+
+	public function freeze($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		if (!$this->_perm('can_student_struckof') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
+		}
+
+		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+			$body = $this->_body();
+			$reason = isset($body['reason']) ? trim($body['reason']) : '';
+			$fee = isset($body['fee']) ? (float)$body['fee'] : 0;
+			$from_date = isset($body['from_date']) ? trim($body['from_date']) : date('Y-m-d');
+			$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+			if ($reason === '') $this->_json(array('success' => false, 'message' => 'Reason required'), 422);
+
+			$pending = $this->db->get_where('update_student_requests', array('student_id' => $student_id, 'ok_by_admin' => 0))->row_array();
+			if ($pending) {
+				$this->_json(array('success' => false, 'message' => 'Pending update request already exists for this student'), 422);
+			}
+
+			$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+			if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+
+			$challan = $this->_new_challan_no();
+			$this->db->insert('payments', array(
+				'amount' => $fee,
+				'actual_amount' => $fee,
+				'dead_line' => date('Y-m-d'),
+				'student_id' => $student_id,
+				'payment_plan' => 'Custom Plan',
+				'payment_comment' => 'Freeze Payment Fee',
+				'challan_no' => $challan,
+				'paid' => '1',
+				'paid_date' => date('Y-m-d'),
+				'actual_paid_date' => date('Y-m-d'),
+				'fee_pay_through' => 'college',
+				'fee_submit_type' => 'computer_challan',
+				'submitted_fee_campus_id' => $campus_id,
+				'add_by' => $this->_actor_name(),
+				'last_edit' => $this->_actor_name(),
+			));
+			$payment_id = (int)$this->db->insert_id();
+
+			if ($this->db->table_exists('freeze_student')) {
+				$this->db->insert('freeze_student', array(
+					'student_id' => $student_id,
+					'reason' => $reason,
+					'fee_amount' => $fee,
+					'rejoin_date' => $from_date,
+					'image_proof' => '',
+					'challan_id' => $payment_id,
+					'created_by' => $this->_actor_name(),
+				));
+			}
+
+			$this->db->insert('deleted_students', array(
+				'delete_type' => 'Freeze',
+				'student_id' => $student_id,
+				'date' => date('Y-m-d H:i:s'),
+				'deleted_by' => $this->_actor_name(),
+				'reason' => $reason,
+				'reason_detail' => 'Freeze Paid Amount : ' . $fee,
+				'image' => '',
+				'status' => 1,
+			));
+			$this->db->where('student_id', $student_id)->update('students', array('status' => 0));
+
+			$this->_json(array('success' => true, 'message' => 'Student frozen'));
+		}
+
+		$student = $this->_student_profile($student_id);
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$fee = $this->_fee_summary($student_id);
+		$history = array();
+		if ($this->db->table_exists('freeze_student')) {
+			$history = $this->db->order_by('id', 'DESC')->get_where('freeze_student', array('student_id' => $student_id))->result_array();
+		}
+		$campuses = array();
+		if ($this->db->table_exists('campus_rules')) {
+			$this->db->select('campuses.*');
+			$this->db->from('campus_rules');
+			$this->db->join('campuses', 'campuses.campus_id=campus_rules.campus_id', 'inner');
+			$this->db->where('campus_rules.college_fee', 1);
+			$campuses = $this->db->get()->result_array();
+		}
+		if (!count($campuses)) {
+			$campuses = $this->db->where('status', 1)->get('campuses')->result_array();
+		}
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => $student,
+				'fee' => $fee,
+				'history' => $history,
+				'campuses' => $campuses,
+				'default_fee' => isset($student['freeze_fee']) ? (float)$student['freeze_fee'] : 0,
+			),
+		));
+	}
+
+	public function struckof($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		if (!$this->_perm('can_student_struckof') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
+		}
+
+		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+			$body = $this->_body();
+			$reason = isset($body['reason']) ? trim($body['reason']) : '';
+			$from_no = isset($body['from_no']) ? trim($body['from_no']) : '';
+			$to_no = isset($body['to_no']) ? trim($body['to_no']) : '';
+			$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
+			$immediate = !empty($body['immediate']);
+			if ($reason === '') $this->_json(array('success' => false, 'message' => 'Reason required'), 422);
+
+			$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+			if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+
+			$process_count = 0;
+			if ($this->db->table_exists('struckof_procedures')) {
+				$existing = $this->db->get_where('struckof_procedures', array('student_id' => $student_id))->result_array();
+				$process_count = count($existing);
+				$this->db->insert('struckof_procedures', array(
+					'student_id' => $student_id,
+					'process_count' => $process_count,
+					'reason' => $reason,
+					'action_type' => $immediate ? 'immediate' : 'process',
+					'status' => $immediate ? 'complete' : 'pending',
+					'created_by' => $this->_actor_name(),
+					'created_at' => date('Y-m-d H:i:s'),
+					'approval_by' => $immediate ? $this->_actor_name() : '',
+				));
+			}
+
+			if ($this->db->table_exists('struckofdetails_students')) {
+				$this->db->insert('struckofdetails_students', array(
+					'student_id' => $student_id,
+					'process_count' => $process_count,
+					'from_no' => $from_no,
+					'to_no' => $to_no,
+					'amount' => $amount,
+					'proof_image' => '',
+					'status' => $immediate ? '1' : '0',
+					'updated_by' => $immediate ? $this->_actor_name() : '',
+				));
+			}
+
+			if ($immediate) {
+				$this->db->insert('deleted_students', array(
+					'delete_type' => 'Struck Of',
+					'student_id' => $student_id,
+					'date' => date('Y-m-d H:i:s'),
+					'deleted_by' => $this->_actor_name(),
+					'reason' => $reason,
+					'reason_detail' => $reason,
+					'refund_amount' => $amount,
+					'image' => '',
+					'status' => '1',
+					'approve_by' => $this->_actor_name(),
+				));
+				$this->db->where('student_id', $student_id)->update('students', array('status' => 0));
+			}
+
+			$this->_json(array(
+				'success' => true,
+				'message' => $immediate ? 'Student struck off immediately' : 'Struck-off process started',
+			));
+		}
+
+		$student = $this->_student_profile($student_id);
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$fee = $this->_fee_summary($student_id);
+		$history = array();
+		if ($this->db->table_exists('struckof_procedures')) {
+			$history = $this->db->order_by('process_count', 'DESC')
+				->get_where('struckof_procedures', array('student_id' => $student_id))
+				->result_array();
+		}
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => $student,
+				'fee' => $fee,
+				'history' => $history,
+			),
+		));
+	}
+
+	public function restore($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		if (!$this->_is_admin() && !$this->_perm('can_student_struckof')) {
+			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
+		}
+		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+
+		$pending = $this->db->get_where('update_student_requests', array('student_id' => $student_id, 'ok_by_admin' => 0))->row_array();
+		if ($pending) {
+			$this->_json(array('success' => false, 'message' => 'Restore request already pending'), 422);
+		}
+
+		$data = $student;
+		$data['status'] = 1;
+		unset($data['student_id']);
+		$data['student_id'] = $student_id;
+		$this->db->insert('update_student_requests', $data);
+		$this->_json(array('success' => true, 'message' => 'Restore request submitted'));
+	}
+
+	public function revive($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		if (!$this->_perm('can_student_struckof') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
+		}
+
+		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+			$body = $this->_body();
+			$fee = isset($body['fee']) ? (float)$body['fee'] : 0;
+			$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+			$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+			if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+
+			$paid_count = $this->db->where(array('student_id' => $student_id, 'paid' => 1))->count_all_results('payments');
+			if ($paid_count > 0 && $fee > 0) {
+				$this->db->insert('payments', array(
+					'amount' => $fee,
+					'actual_amount' => $fee,
+					'dead_line' => date('Y-m-d'),
+					'student_id' => $student_id,
+					'payment_plan' => 'Custom Plan',
+					'payment_comment' => 'Re-Admission Fee',
+					'challan_no' => $this->_new_challan_no(),
+					'paid' => '1',
+					'paid_date' => date('Y-m-d'),
+					'actual_paid_date' => date('Y-m-d'),
+					'fee_pay_through' => 'college',
+					'fee_submit_type' => 'computer_challan',
+					'submitted_fee_campus_id' => $campus_id,
+					'add_by' => $this->_actor_name(),
+					'last_edit' => $this->_actor_name(),
+				));
+			} elseif ($paid_count < 1) {
+				$this->db->where('student_id', $student_id)->delete('payments');
+			}
+
+			$this->db->where('student_id', $student_id)->update('students', array('status' => 1));
+			if ($this->db->table_exists('deleted_students')) {
+				$this->db->where(array('student_id' => $student_id, 'status' => 1))->update('deleted_students', array('status' => 0));
+			}
+			if ($this->db->table_exists('freeze_student')) {
+				$this->db->where('student_id', $student_id)->delete('freeze_student');
+			}
+			$this->_json(array('success' => true, 'message' => 'Student re-admitted'));
+		}
+
+		$student = $this->_student_profile($student_id);
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$campuses = $this->db->where('status', 1)->get('campuses')->result_array();
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => $student,
+				'campuses' => $campuses,
+				'default_fee' => isset($student['freeze_fee']) ? (float)$student['freeze_fee'] : 0,
+			),
+		));
+	}
+
+	public function all_docs($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		$student = $this->_student_profile($student_id);
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$types = array('Photo', 'ID Card', 'B - FORM', 'Result Card', 'Signature', 'Thumb');
+		$docs = array();
+		foreach ($types as $t) {
+			$rows = $this->db->get_where('student_documents', array('student_id' => $student_id, 'type' => $t))->result_array();
+			foreach ($rows as &$r) $r['url'] = $this->_doc_url($r);
+			$docs[$t] = $rows;
+		}
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => $student,
+				'documents' => $docs,
+				'asset_base' => $this->_asset_base(),
+			),
+		));
+	}
+
+	public function generate_docs_list()
+	{
+		$body = $this->_body();
+		$class_id = isset($body['class_id']) ? (int)$body['class_id'] : 0;
+		if (!$class_id) $this->_json(array('success' => false, 'message' => 'class_id required'), 422);
+
+		$sql = 'SELECT student_id, roll_no, cnic, gender, first_name, last_name, father_name, address, mobile, emergency_no, board
+			FROM students WHERE class_id=? AND status=1 ORDER BY CAST(roll_no as SIGNED INTEGER) ASC';
+		$students = $this->db->query($sql, array($class_id))->result_array();
+		$ids = array_map(function ($s) { return (int)$s['student_id']; }, $students);
+		$docs_by = $this->_docs_by_student($ids);
+
+		$out = array();
+		foreach ($students as $s) {
+			$sid = (int)$s['student_id'];
+			$docs = isset($docs_by[$sid]) ? $docs_by[$sid] : array();
+			$has_id = !empty($docs['ID Card']) || !empty($docs['B - FORM']);
+			$out[] = array(
+				'student_id' => $sid,
+				'roll_no' => $s['roll_no'],
+				'name' => trim($s['first_name'] . ' ' . $s['last_name']),
+				'father_name' => $s['father_name'],
+				'gender' => $s['gender'],
+				'cnic' => $s['cnic'],
+				'address' => $s['address'],
+				'mobile' => $s['mobile'],
+				'documents' => array(
+					'photo' => !empty($docs['Photo']),
+					'id_card' => $has_id,
+					'result_card' => !empty($docs['Result Card']),
+				),
+				'print_url' => '/students/all-docs/' . $sid,
+			);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => $out,
+			'count' => count($out),
+			'class_id' => $class_id,
+			'downloads' => array(
+				'csv' => true,
+			),
+		));
+	}
+
+	public function generate_docs_csv()
+	{
+		$body = $this->_body();
+		$class_id = isset($body['class_id']) ? (int)$body['class_id'] : 0;
+		if (!$class_id) $this->_json(array('success' => false, 'message' => 'class_id required'), 422);
+		$sql = 'SELECT student_id, roll_no, cnic, gender, first_name, last_name, father_name, address
+			FROM students WHERE class_id=? AND status=1 ORDER BY CAST(roll_no as SIGNED INTEGER) ASC';
+		$students = $this->db->query($sql, array($class_id))->result_array();
+		$rows = array();
+		$i = 1;
+		foreach ($students as $s) {
+			$rel = ($s['gender'] === 'Female') ? 'D/O' : 'S/O';
+			$name = ucwords(strtolower(trim($s['first_name'] . ' ' . $s['last_name']))) . ' ' . $rel . ' ' . ucwords(strtolower($s['father_name']));
+			$rows[] = array(
+				'sr' => $i++,
+				'name' => $name,
+				'cnic' => $s['cnic'],
+				'address' => $s['address'],
+				'roll_no' => $s['roll_no'],
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	public function campuses_for_course()
+	{
+		$course_id = (int)$this->input->get('course_id');
+		if (!$course_id) $this->_json(array('success' => true, 'data' => array()));
+		$course = $this->db->get_where('courses', array('course_id' => $course_id))->row_array();
+		if (!$course || empty($course['campus_ids'])) $this->_json(array('success' => true, 'data' => array()));
+		$ids = array_filter(array_map('intval', explode(',', $course['campus_ids'])));
+		if (!count($ids)) $this->_json(array('success' => true, 'data' => array()));
+		$rows = $this->db->where_in('campus_id', $ids)->order_by('campus_name', 'ASC')->get('campuses')->result_array();
+		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	public function struck_letters()
+	{
+		$body = $this->_body();
+		$ids = isset($body['student_ids']) ? $body['student_ids'] : array();
+		if (is_string($ids)) $ids = array_filter(array_map('intval', explode(',', $ids)));
+		if (!is_array($ids) || !count($ids)) {
+			$this->_json(array('success' => false, 'message' => 'student_ids required'), 422);
+		}
+		$ids = array_map('intval', $ids);
+		$this->db->select('students.*, classes.name as class_name, campuses.campus_name, campuses.address as campus_address, campuses.phone, campuses.stamp');
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
+		$this->db->where_in('students.student_id', $ids);
+		$rows = $this->db->get()->result_array();
+		$this->_json(array('success' => true, 'data' => $rows));
 	}
 }
