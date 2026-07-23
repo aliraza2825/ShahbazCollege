@@ -310,19 +310,14 @@ class Constructionapi extends CI_Controller {
 
 		$contractors = $this->db->get_where('construction_contractors', array('project_id' => $id))->result_array();
 		foreach ($contractors as &$c) {
-			$final = (float)$c['final_bill'];
-			$contract = (float)$c['contract_amount'];
-			$c['done_amount'] = $final > 0 ? $final : $contract;
-			$paid = $this->db->query(
-				'SELECT COALESCE(SUM(amount),0) AS t FROM construction_contractor_payments WHERE contractor_id = ?',
-				array((int)$c['id'])
-			)->row_array();
-			$c['paid_amount'] = (float)$paid['t'];
-			$c['remaining'] = max(0, $c['done_amount'] - $c['paid_amount']);
+			$c = $this->_enrich_contractor($c);
 		}
 		$labours = $this->db->get_where('construction_labours', array('project_id' => $id, 'status' => 1))->result_array();
 		if (!count($labours)) {
 			$labours = $this->db->get_where('construction_labours', array('project_id' => $id))->result_array();
+		}
+		foreach ($labours as &$l) {
+			$l = $this->_enrich_labour($l);
 		}
 
 		$this->_json(array(
@@ -336,14 +331,60 @@ class Constructionapi extends CI_Controller {
 		));
 	}
 
+	private function _enrich_contractor($c)
+	{
+		$final = (float)$c['final_bill'];
+		$contract = (float)$c['contract_amount'];
+		$c['done_amount'] = $final > 0 ? $final : $contract;
+		$paid = $this->db->query(
+			'SELECT COALESCE(SUM(amount),0) AS t FROM construction_contractor_payments WHERE contractor_id = ?',
+			array((int)$c['id'])
+		)->row_array();
+		$c['paid_amount'] = (float)$paid['t'];
+		$c['remaining'] = max(0, $c['done_amount'] - $c['paid_amount']);
+		return $c;
+	}
+
+	private function _enrich_labour($l)
+	{
+		$paid = $this->db->query(
+			'SELECT COALESCE(SUM(amount),0) AS t FROM construction_labour_advances WHERE labour_id = ?',
+			array((int)$l['id'])
+		)->row_array();
+		$l['paid_amount'] = (float)$paid['t'];
+		$l['payment_count'] = (int)$this->db->where('labour_id', (int)$l['id'])->count_all_results('construction_labour_advances');
+		return $l;
+	}
+
+	private function _decorate_expense_row(&$r)
+	{
+		$src = isset($r['construction_source']) ? $r['construction_source'] : 'misc';
+		if ($src === 'contractor') {
+			$r['party_name'] = !empty($r['contractor_name']) ? $r['contractor_name'] : 'Contractor';
+		} elseif ($src === 'labour') {
+			$r['party_name'] = !empty($r['labour_name']) ? $r['labour_name'] : 'Labour';
+		} else {
+			$r['party_name'] = 'Misc';
+		}
+	}
+
 	// ─── Contractors / Labours ──────────────────────────────
 
 	public function contractors()
 	{
 		if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 			$project_id = (int)$this->input->get('project_id');
-			if (!$project_id) $this->_json(array('success' => false, 'message' => 'project_id required'), 422);
-			$rows = $this->db->get_where('construction_contractors', array('project_id' => $project_id))->result_array();
+			$this->db->select('construction_contractors.*, construction_projects.project_name', false);
+			$this->db->from('construction_contractors');
+			$this->db->join('construction_projects', 'construction_projects.id = construction_contractors.project_id', 'left');
+			if ($project_id > 0) {
+				$this->db->where('construction_contractors.project_id', $project_id);
+			}
+			$this->db->order_by('construction_contractors.id', 'DESC');
+			$rows = $this->db->get()->result_array();
+			foreach ($rows as &$c) {
+				$c = $this->_enrich_contractor($c);
+			}
 			$this->_json(array('success' => true, 'data' => $rows));
 		}
 
@@ -368,12 +409,76 @@ class Constructionapi extends CI_Controller {
 		$this->_json(array('success' => true, 'id' => (int)$this->db->insert_id()));
 	}
 
+	public function contractor($id = 0)
+	{
+		$id = (int)$id;
+		$row = $this->db->get_where('construction_contractors', array('id' => $id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Contractor not found'), 404);
+
+		$method = $_SERVER['REQUEST_METHOD'];
+		if ($method === 'PUT' || $method === 'POST') {
+			$body = $this->_body();
+			$update = array();
+			if (isset($body['contractor_name'])) {
+				$name = trim($body['contractor_name']);
+				if ($name === '') $this->_json(array('success' => false, 'message' => 'contractor_name required'), 422);
+				$update['contractor_name'] = $name;
+			}
+			if (array_key_exists('contact_details', $body)) $update['contact_details'] = $body['contact_details'];
+			if (isset($body['contract_amount'])) $update['contract_amount'] = (float)$body['contract_amount'];
+			if (isset($body['final_bill'])) $update['final_bill'] = (float)$body['final_bill'];
+			if (isset($body['project_id'])) {
+				$pid = (int)$body['project_id'];
+				if (!$this->_project($pid)) $this->_json(array('success' => false, 'message' => 'Project not found'), 404);
+				$update['project_id'] = $pid;
+			}
+			if (!count($update)) $this->_json(array('success' => false, 'message' => 'Nothing to update'), 422);
+			$this->db->where('id', $id)->update('construction_contractors', $update);
+			$this->_json(array('success' => true, 'message' => 'Updated'));
+		}
+
+		if ($method === 'DELETE') {
+			$pay_count = (int)$this->db->where('contractor_id', $id)->count_all_results('construction_contractor_payments');
+			if ($pay_count > 0) {
+				$this->_json(array('success' => false, 'message' => 'Cannot delete: contractor has payments. Remove payments first.'), 422);
+			}
+			$this->db->where('id', $id)->delete('construction_contractors');
+			$this->_json(array('success' => true, 'message' => 'Deleted'));
+		}
+
+		$project = $this->_project((int)$row['project_id']);
+		$row = $this->_enrich_contractor($row);
+		$row['project_name'] = $project ? $project['project_name'] : '';
+
+		$payments = $this->db->order_by('payment_date', 'DESC')
+			->order_by('id', 'DESC')
+			->get_where('construction_contractor_payments', array('contractor_id' => $id))
+			->result_array();
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'contractor' => $row,
+				'payments' => $payments,
+			),
+		));
+	}
+
 	public function labours()
 	{
 		if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 			$project_id = (int)$this->input->get('project_id');
-			if (!$project_id) $this->_json(array('success' => false, 'message' => 'project_id required'), 422);
-			$rows = $this->db->get_where('construction_labours', array('project_id' => $project_id))->result_array();
+			$this->db->select('construction_labours.*, construction_projects.project_name', false);
+			$this->db->from('construction_labours');
+			$this->db->join('construction_projects', 'construction_projects.id = construction_labours.project_id', 'left');
+			if ($project_id > 0) {
+				$this->db->where('construction_labours.project_id', $project_id);
+			}
+			$this->db->order_by('construction_labours.id', 'DESC');
+			$rows = $this->db->get()->result_array();
+			foreach ($rows as &$l) {
+				$l = $this->_enrich_labour($l);
+			}
 			$this->_json(array('success' => true, 'data' => $rows));
 		}
 
@@ -398,6 +503,63 @@ class Constructionapi extends CI_Controller {
 		$this->_json(array('success' => true, 'id' => (int)$this->db->insert_id()));
 	}
 
+	public function labour($id = 0)
+	{
+		$id = (int)$id;
+		$row = $this->db->get_where('construction_labours', array('id' => $id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Labour not found'), 404);
+
+		$method = $_SERVER['REQUEST_METHOD'];
+		if ($method === 'PUT' || $method === 'POST') {
+			$body = $this->_body();
+			$update = array();
+			if (isset($body['labour_name'])) {
+				$name = trim($body['labour_name']);
+				if ($name === '') $this->_json(array('success' => false, 'message' => 'labour_name required'), 422);
+				$update['labour_name'] = $name;
+			}
+			if (array_key_exists('cnic', $body)) $update['cnic'] = $body['cnic'];
+			if (array_key_exists('mobile', $body)) $update['mobile'] = $body['mobile'];
+			if (array_key_exists('designation', $body)) $update['designation'] = $body['designation'];
+			if (isset($body['daily_wage'])) $update['daily_wage'] = (float)$body['daily_wage'];
+			if (isset($body['status'])) $update['status'] = (int)$body['status'] ? 1 : 0;
+			if (isset($body['project_id'])) {
+				$pid = (int)$body['project_id'];
+				if (!$this->_project($pid)) $this->_json(array('success' => false, 'message' => 'Project not found'), 404);
+				$update['project_id'] = $pid;
+			}
+			if (!count($update)) $this->_json(array('success' => false, 'message' => 'Nothing to update'), 422);
+			$this->db->where('id', $id)->update('construction_labours', $update);
+			$this->_json(array('success' => true, 'message' => 'Updated'));
+		}
+
+		if ($method === 'DELETE') {
+			$pay_count = (int)$this->db->where('labour_id', $id)->count_all_results('construction_labour_advances');
+			if ($pay_count > 0) {
+				$this->_json(array('success' => false, 'message' => 'Cannot delete: labour has payments. Remove payments first.'), 422);
+			}
+			$this->db->where('id', $id)->delete('construction_labours');
+			$this->_json(array('success' => true, 'message' => 'Deleted'));
+		}
+
+		$project = $this->_project((int)$row['project_id']);
+		$row = $this->_enrich_labour($row);
+		$row['project_name'] = $project ? $project['project_name'] : '';
+
+		$payments = $this->db->order_by('advance_date', 'DESC')
+			->order_by('id', 'DESC')
+			->get_where('construction_labour_advances', array('labour_id' => $id))
+			->result_array();
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'labour' => $row,
+				'payments' => $payments,
+			),
+		));
+	}
+
 	// ─── Daily expenses ─────────────────────────────────────
 
 	public function daily_expenses()
@@ -411,10 +573,11 @@ class Constructionapi extends CI_Controller {
 			$this->_json(array('success' => true, 'data' => array(), 'day_total' => 0));
 		}
 
-		$this->db->select('expenses.*, construction_contractors.contractor_name, construction_labours.labour_name', false);
+		$this->db->select('expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name', false);
 		$this->db->from('expenses');
 		$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
 		$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
+		$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
 		$this->db->where('expenses.construction_project_id', $project_id);
 		$this->db->where('expenses.date', $date);
 		$this->db->order_by('expenses.expense_id', 'DESC');
@@ -423,17 +586,147 @@ class Constructionapi extends CI_Controller {
 		$total = 0;
 		foreach ($rows as &$r) {
 			$total += (float)$r['amount'];
-			$src = isset($r['construction_source']) ? $r['construction_source'] : 'misc';
-			if ($src === 'contractor') {
-				$r['party_name'] = isset($r['contractor_name']) ? $r['contractor_name'] : 'Contractor';
-			} elseif ($src === 'labour') {
-				$r['party_name'] = isset($r['labour_name']) ? $r['labour_name'] : 'Labour';
-			} else {
-				$r['party_name'] = 'Misc';
-			}
+			$this->_decorate_expense_row($r);
 		}
 
 		$this->_json(array('success' => true, 'data' => $rows, 'day_total' => $total, 'date' => $date));
+	}
+
+	/** Global construction expenses list (all projects or filtered). */
+	public function expenses()
+	{
+		if (!$this->db->table_exists('expenses') || !$this->db->field_exists('construction_project_id', 'expenses')) {
+			$this->_json(array('success' => true, 'data' => array(), 'total' => 0));
+		}
+
+		$project_id = (int)$this->input->get('project_id');
+		$source = trim((string)$this->input->get('source'));
+		$date_from = trim((string)$this->input->get('date_from'));
+		$date_to = trim((string)$this->input->get('date_to'));
+		$date = trim((string)$this->input->get('date'));
+
+		$this->db->select('expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name', false);
+		$this->db->from('expenses');
+		$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
+		$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
+		$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
+		$this->db->where('expenses.construction_project_id IS NOT NULL', null, false);
+		$this->db->where('expenses.construction_project_id >', 0);
+		if ($project_id > 0) $this->db->where('expenses.construction_project_id', $project_id);
+		if ($source !== '' && in_array($source, array('labour', 'contractor', 'misc'), true)) {
+			$this->db->where('expenses.construction_source', $source);
+		}
+		if ($date !== '') {
+			$this->db->where('expenses.date', $date);
+		} else {
+			if ($date_from !== '') $this->db->where('expenses.date >=', $date_from);
+			if ($date_to !== '') $this->db->where('expenses.date <=', $date_to);
+		}
+		$this->db->order_by('expenses.date', 'DESC');
+		$this->db->order_by('expenses.expense_id', 'DESC');
+		$rows = $this->db->get()->result_array();
+
+		$total = 0;
+		foreach ($rows as &$r) {
+			$total += (float)$r['amount'];
+			$this->_decorate_expense_row($r);
+		}
+
+		$this->_json(array('success' => true, 'data' => $rows, 'total' => $total));
+	}
+
+	public function expense($id = 0)
+	{
+		$id = (int)$id;
+		if (!$this->db->table_exists('expenses')) {
+			$this->_json(array('success' => false, 'message' => 'expenses table missing'), 500);
+		}
+		$row = $this->db->get_where('expenses', array('expense_id' => $id))->row_array();
+		if (!$row || empty($row['construction_project_id'])) {
+			$this->_json(array('success' => false, 'message' => 'Expense not found'), 404);
+		}
+
+		$method = $_SERVER['REQUEST_METHOD'];
+		if ($method === 'PUT' || $method === 'POST') {
+			$body = $this->_body();
+			$amount = isset($body['amount']) ? (float)$body['amount'] : (float)$row['amount'];
+			$date = !empty($body['date']) ? $body['date'] : $row['date'];
+			$description = array_key_exists('description', $body) ? trim($body['description']) : null;
+			if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
+
+			$project = $this->_project((int)$row['construction_project_id']);
+			$src = isset($row['construction_source']) ? $row['construction_source'] : 'misc';
+			$ref_id = (int)(isset($row['construction_ref_id']) ? $row['construction_ref_id'] : 0);
+			$name = $this->_user_name();
+
+			$purpose = isset($row['purpose']) ? $row['purpose'] : '';
+			if ($description !== null) {
+				$party = '';
+				if ($src === 'contractor') {
+					$c = $this->db->get_where('construction_contractors', array('id' => (int)$row['construction_contractor_id']))->row_array();
+					$party = $c ? $c['contractor_name'] : 'Contractor';
+					$purpose = 'Construction ' . ($project ? $project['project_name'] : '') . ' · Contractor · ' . $party
+						. ($description !== '' ? ' · ' . $description : '');
+				} elseif ($src === 'labour') {
+					$l = $this->db->get_where('construction_labours', array('id' => (int)$row['construction_labour_id']))->row_array();
+					$party = $l ? $l['labour_name'] : 'Labour';
+					$purpose = 'Construction ' . ($project ? $project['project_name'] : '') . ' · Labour · ' . $party
+						. ($description !== '' ? ' · ' . $description : '');
+				} else {
+					$purpose = 'Construction ' . ($project ? $project['project_name'] : '') . ' · Misc'
+						. ($description !== '' ? ' · ' . $description : '');
+				}
+			}
+
+			$exp_update = array(
+				'amount' => $amount,
+				'date' => $date,
+				'purpose' => $purpose,
+				'last_edit' => $name,
+			);
+			$this->db->where('expense_id', $id)->update('expenses', $exp_update);
+
+			if ($src === 'contractor' && $ref_id > 0) {
+				$pay_upd = array('amount' => $amount, 'payment_date' => $date);
+				if ($description !== null) $pay_upd['remarks'] = $description;
+				if (!empty($body['payment_type'])) $pay_upd['payment_type'] = trim($body['payment_type']);
+				$this->db->where('id', $ref_id)->update('construction_contractor_payments', $pay_upd);
+			} elseif ($src === 'labour' && $ref_id > 0) {
+				$pay_upd = array('amount' => $amount, 'advance_date' => $date);
+				if ($description !== null) $pay_upd['remarks'] = $description !== '' ? $description : 'Labour payment';
+				$this->db->where('id', $ref_id)->update('construction_labour_advances', $pay_upd);
+			} elseif ($src === 'misc' && $ref_id > 0 && $this->db->table_exists('construction_site_expenses')) {
+				$site_upd = array('amount' => $amount, 'expense_date' => $date);
+				if ($description !== null) $site_upd['description'] = $description;
+				$this->db->where('id', $ref_id)->update('construction_site_expenses', $site_upd);
+			}
+
+			$this->_json(array('success' => true, 'message' => 'Updated'));
+		}
+
+		if ($method === 'DELETE') {
+			$src = isset($row['construction_source']) ? $row['construction_source'] : 'misc';
+			$ref_id = (int)(isset($row['construction_ref_id']) ? $row['construction_ref_id'] : 0);
+			if ($src === 'contractor' && $ref_id > 0) {
+				$this->db->where('id', $ref_id)->delete('construction_contractor_payments');
+			} elseif ($src === 'labour' && $ref_id > 0) {
+				$this->db->where('id', $ref_id)->delete('construction_labour_advances');
+			} elseif ($src === 'misc' && $ref_id > 0 && $this->db->table_exists('construction_site_expenses')) {
+				$this->db->where('id', $ref_id)->delete('construction_site_expenses');
+			}
+			$this->db->where('expense_id', $id)->delete('expenses');
+			$this->_json(array('success' => true, 'message' => 'Deleted'));
+		}
+
+		$this->db->select('expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name', false);
+		$this->db->from('expenses');
+		$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
+		$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
+		$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
+		$this->db->where('expenses.expense_id', $id);
+		$full = $this->db->get()->row_array();
+		$this->_decorate_expense_row($full);
+		$this->_json(array('success' => true, 'data' => $full));
 	}
 
 	public function add_daily_expense()
