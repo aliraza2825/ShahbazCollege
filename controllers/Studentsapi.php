@@ -42,6 +42,7 @@ class Studentsapi extends CI_Controller {
 			'father_occupation_id' => 'INT NULL DEFAULT NULL',
 			'mother_occupation_id' => 'INT NULL DEFAULT NULL',
 			'mother_name' => 'VARCHAR(255) NULL DEFAULT NULL',
+			'extra_added_fee' => 'DECIMAL(12,2) NOT NULL DEFAULT 0',
 		);
 		foreach ($cols as $col => $ddl) {
 			if (!$this->db->field_exists($col, 'students')) {
@@ -104,6 +105,11 @@ class Studentsapi extends CI_Controller {
 			$token = $m[1];
 		}
 		if ($token === '') $token = $this->input->get_request_header('X-Pos-Token', TRUE);
+		// Printable HTML opens in a new tab — allow query token for GET print endpoints only
+		if ($token === '' || $token === null) {
+			$qt = $this->input->get('pos_token');
+			if ($qt) $token = $qt;
+		}
 		if (!$token) return null;
 		$row = $this->db->get_where('pos_api_tokens', array('token' => $token))->row_array();
 		if (!$row || strtotime($row['expires_at']) < time()) return null;
@@ -182,10 +188,38 @@ class Studentsapi extends CI_Controller {
 			'student_upload_documents' => $this->_perm('student_upload_documents'),
 			'student_payments' => $this->_perm('student_payments'),
 			'student_payment_reset' => $this->_perm('student_payment_reset'),
+			'student_payment_edit' => $this->_perm('student_payment_edit'),
 			'can_student_struckof' => $this->_perm('can_student_struckof'),
 			'student_issue_refund' => $this->_perm('student_issue_refund'),
 			'council_list_report' => $this->_perm('council_list_report'),
+			'extra_fee_access' => $this->_perm('extra_fee_access'),
+			'fee_by_bank' => $this->_perm('fee_by_bank'),
+			'fee_by_cash' => $this->_perm('fee_by_cash'),
+			'fee_by_paypro' => $this->_perm('fee_by_paypro'),
+			'fine_remove' => $this->_perm('fine_remove') || $this->_perm('remove_fine'),
+			'remove_fine' => $this->_perm('remove_fine') || $this->_perm('fine_remove'),
+			'change_exam_no_in_payments' => $this->_perm('change_exam_no_in_payments'),
 		);
+	}
+
+	private function _require_student_payments()
+	{
+		if (!$this->_perm('student_payments') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No payments permission'), 403);
+		}
+	}
+
+	private function _assert_pay_through($pay_through)
+	{
+		$map = array(
+			'bank' => 'fee_by_bank',
+			'college' => 'fee_by_cash',
+			'pay_pro' => 'fee_by_paypro',
+		);
+		$key = isset($map[$pay_through]) ? $map[$pay_through] : null;
+		if (!$key || !$this->_perm($key)) {
+			$this->_json(array('success' => false, 'message' => 'No permission for pay-through: ' . $pay_through), 403);
+		}
 	}
 
 	public function meta()
@@ -1760,21 +1794,266 @@ class Studentsapi extends CI_Controller {
 		$student_id = (int)$student_id;
 		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
 		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
-		$payments = $this->db->order_by('dead_line', 'ASC')->get_where('payments', array('student_id' => $student_id))->result_array();
+		$plan_rows = $this->student->payment_paid($student_id);
+		$paid_rows = $this->db->get_where('payments', array('student_id' => $student_id, 'paid' => 1))->result_array();
+		$reg_form = $this->db->get_where('student_documents', array('student_id' => $student_id, 'type' => 'Rules and Regulation Form'))->result_array();
+		$has_plan = count($plan_rows) > 0;
+		$needs_plan = !$has_plan;
 		$plans = array();
 		if (!empty($student['course_id'])) {
-			$plans = $this->db->get_where('fee_rules', array('course_id' => $student['course_id']))->result_array();
+			$this->db->from('fee_rules');
+			$this->db->where('course_id', $student['course_id']);
+			if (!empty($student['session'])) $this->db->where('session', $student['session']);
+			$this->db->where('status', 'active');
+			$this->db->where('last_date >=', date('Y-m-d'));
+			$plans = $this->db->get()->result_array();
+			if (!count($plans)) {
+				$plans = $this->db->get_where('fee_rules', array('course_id' => $student['course_id']))->result_array();
+			}
 		}
 		$this->_json(array(
 			'success' => true,
 			'data' => array(
 				'student' => $student,
-				'payments' => $payments,
+				'payments' => $plan_rows,
 				'plans' => $plans,
-				'has_plan' => !empty($student['plan_id']) || count($payments) > 0,
+				'has_plan' => $has_plan,
+				'needs_plan' => $needs_plan,
+				'has_paid' => count($paid_rows) > 0,
+				'has_rules_form' => count($reg_form) > 0,
 			),
 			'legacy_base' => $this->_legacy_base(),
 		));
+	}
+
+	/** Full fee console payload — mirrors Students::payments_paid */
+	public function payments_paid($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		if (!$this->_perm('student_payments') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No payments permission'), 403);
+		}
+		$students = $this->student->getSingleStudent($student_id);
+		if (!count($students)) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$student = $students[0];
+
+		$qry = "SELECT DISTINCT `merged_challan`, discount as discount FROM `payments` WHERE student_id=$student_id and merged_challan is not null GROUP by merged_challan UNION ALL SELECT DISTINCT `merged_challan`, sum(discount) as discount FROM `payments` WHERE student_id=$student_id and merged_challan is null and paid=1";
+		$query = $this->db->query($qry)->result_array();
+		$discountfee = 0;
+		foreach ($query as $discs) $discountfee += (float)$discs['discount'];
+
+		$specialdisc = 0;
+		$sd = $this->db->select('sum(discount) as special_disc', false)
+			->where('status', '1')
+			->where('student_id', $student_id)
+			->get('discounts_approval')
+			->row_array();
+		if ($sd && $sd['special_disc'] !== null) $specialdisc = (float)$sd['special_disc'];
+
+		$total_fee = (float)(isset($student['current_session_fee']) ? $student['current_session_fee'] : 0)
+			+ (float)(isset($student['extra_added_fee']) ? $student['extra_added_fee'] : 0);
+		$student_fee = (float)(isset($student['total_fee']) ? $student['total_fee'] : 0)
+			+ (float)(isset($student['extra_added_fee']) ? $student['extra_added_fee'] : 0);
+		$fee_created = $this->student->getStudentDiscount($student_id);
+		$paid_fee = $this->student->getStudentPaidFee($student_id);
+		$remaining_fee = $this->student->getStudentRemainingFee($student_id);
+		$fee_should_pay = $this->student->getStudentFeeShouldPay($student_id);
+		$paid_val = isset($paid_fee[0]['paid_fee']) ? (float)$paid_fee[0]['paid_fee'] : $this->_scalar_fee($paid_fee);
+		$should_val = isset($fee_should_pay[0]['fee_should_pay']) ? (float)$fee_should_pay[0]['fee_should_pay'] : $this->_scalar_fee($fee_should_pay);
+		$created_val = is_numeric($fee_created) ? (float)$fee_created : $this->_scalar_fee($fee_created);
+
+		$cf = $this->student->getStudentConsulationFee($student_id);
+		$cf_should = $this->student->getStudentConsulationFeeShouldPay($student_id);
+		$cf_paid = $this->student->getStudentConsulationFeePaid($student_id);
+		$cf_unpaid = $this->student->getStudentConsulationFeeUnPaid($student_id);
+
+		$plan = null;
+		if (!empty($student['plan_id'])) {
+			$plan = $this->db->get_where('fee_rules', array('fee_rule_id' => $student['plan_id']))->row_array();
+		}
+		$course = $this->db->get_where('courses', array('course_id' => $student['course_id']))->row_array();
+		$class = $this->db->get_where('classes', array('class_id' => $student['class_id']))->row_array();
+
+		$payments = $this->student->payment_paid($student_id);
+		$deleted = $this->student->deleted_payment_paid($student_id);
+		$enriched = array();
+		$fine_per_day = ($plan && isset($plan['payment_plan']) && $plan['payment_plan'] === '24 Installments') ? 10 : 50;
+		foreach ($payments as $idx => $p) {
+			$enriched[] = $this->_enrich_payment_row($p, $idx, $student_id, $fine_per_day);
+		}
+
+		$freeze = $this->db->get_where('freeze_student', array('student_id' => $student_id))->result_array();
+		$archive_type = null;
+		if ((int)$student['status'] === 0) {
+			$archive_type = count($freeze) > 0 ? 'FREEZED' : 'DELETED';
+		}
+
+		$this->db->select('campuses.*');
+		$this->db->from('campus_rules');
+		$this->db->join('campuses', 'campuses.campus_id=campus_rules.campus_id', 'inner');
+		$this->db->join('closing_persons', 'campuses.campus_id=closing_persons.campus_id', 'inner');
+		$this->db->where('campus_rules.college_fee', 1);
+		$this->db->where('closing_persons.active_status', 1);
+		$campuses = $this->db->get()->result_array();
+		if (!count($campuses)) {
+			$campuses = $this->db->where('status', 1)->get('campuses')->result_array();
+		}
+
+		$reversed = $this->db->select_sum('reversal_amount')->from('payments_reversal_requests')
+			->where(array('student_id' => $student_id, 'done' => 1))->get()->row_array();
+
+		$exam_sequences = array();
+		if ($class && isset($class['exam_no'])) {
+			$exam_sequences = $this->db->get_where('exam_sequence', array(
+				'course_id' => $student['course_id'],
+				'status' => 'Active',
+				'first_year >=' => $class['exam_no'],
+			))->result_array();
+		}
+
+		$payment_rules = $this->db->get_where('payment_rules', array(
+			'status' => 1,
+			'course_id' => $student['course_id'],
+		))->result_array();
+
+		$fee_percent = $student_fee > 0 ? round((($paid_val - $discountfee) / $student_fee) * 100, 1) : null;
+		$remain_till = max(0, $should_val - $paid_val);
+
+		$total_fine = $this->_scalar_fee($this->student->getStudentTotalFine($student_id));
+		$removed_fine = $this->_scalar_fee($this->student->getStudentRemovedFine($student_id));
+		$fine_should = $this->_scalar_fee($this->student->getStudentFineShouldPay($student_id));
+		$fine_paid = $this->_scalar_fee($this->student->getStudentFinePaid($student_id));
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => array_merge($student, array(
+					'class_name' => $class ? $class['name'] : '',
+					'session' => $class ? $class['session'] : (isset($student['session']) ? $student['session'] : ''),
+					'course_name' => $course ? $course['course_name'] : '',
+					'course_type' => $course ? $course['course_type'] : '',
+					'campus_name' => isset($student['campus_name']) ? $student['campus_name'] : '',
+				)),
+				'plan' => $plan,
+				'archive_type' => $archive_type,
+				'is_active' => (int)$student['status'] === 1,
+				'kpis' => array(
+					'total_fees' => $total_fee,
+					'admission_discount' => ($total_fee - $student_fee) - $specialdisc,
+					'special_discount' => $specialdisc,
+					'merged_discount' => $discountfee,
+					'total_discount' => $total_fee - $student_fee + $discountfee,
+					'student_fees' => $student_fee,
+					'fee_created' => $created_val,
+					'fee_not_created' => $student_fee - $created_val,
+					'fee_should_pay' => $should_val,
+					'fee_paid' => $paid_val - $discountfee,
+					'remaining_fee_till_date' => $remain_till,
+					'total_remaining_fee' => $this->_scalar_fee($remaining_fee),
+					'fee_paid_percent' => $fee_percent,
+					'total_fine' => $total_fine + $removed_fine,
+					'removed_fine' => $removed_fine,
+					'fine_paid' => $fine_paid,
+					'remaining_fine_till_date' => max(0, $fine_should - $fine_paid),
+					'total_remaining_fine' => max(0, $total_fine - $fine_paid),
+					'council_fee_total' => $this->_scalar_fee($cf),
+					'council_fee_should_pay' => $this->_scalar_fee($cf_should),
+					'council_fee_paid' => $this->_scalar_fee($cf_paid),
+					'council_fee_unpaid' => $this->_scalar_fee($cf_unpaid),
+					'total_extra_fee' => $this->_scalar_fee($this->student->getStudentTotalExtraFee($student_id)),
+					'extra_fee_paid_till_date' => $this->_scalar_fee($this->student->getStudentExtraFeePaidTillDate($student_id)),
+					'extra_fee_remaining_till_date' => $this->_scalar_fee($this->student->getStudentExtraFeeRemainingTillDate($student_id)),
+					'reversed_amount' => isset($reversed['reversal_amount']) ? (float)$reversed['reversal_amount'] : 0,
+					'total_calls' => (int)$this->student->getStudentTotalCalls($student_id),
+					'deleted_fees_count' => (int)$this->student->getCountDeletedFess($student_id),
+					'shifted_fees_count' => (int)$this->student->getCountShiftedFess($student_id),
+				),
+				'payments' => $enriched,
+				'deleted_payments' => $deleted,
+				'old_plans' => $this->db->group_by('payment_id')->get_where('archive_payments', array('student_id' => $student_id))->result_array(),
+				'account_numbers' => $this->db->get_where('accounts', array('type' => '1'))->result_array(),
+				'campuses' => $campuses,
+				'council_fees' => $this->db->get_where('council_sequence', array('course_id' => $student['course_id']))->result_array(),
+				'council_sequences' => $this->db->get_where('council_sequence', array('course_id' => $student['course_id'], 'action_type' => 'fee'))->result_array(),
+				'exam_sequences' => $exam_sequences,
+				'payment_rules' => $payment_rules,
+				'fee_rules_meta' => array(
+					'disc_per_inst' => $plan && isset($plan['disc_per_inst']) ? (float)$plan['disc_per_inst'] : 0,
+					'max_discount_merge' => $plan && isset($plan['max_discount_merge']) ? (float)$plan['max_discount_merge'] : 0,
+					'plan_name' => $plan && isset($plan['payment_plan']) ? $plan['payment_plan'] : (isset($student['payment_plan']) ? $student['payment_plan'] : ''),
+					'fine_per_day' => ($plan && isset($plan['payment_plan']) && $plan['payment_plan'] === '24 Installments') ? 10 : 50,
+				),
+				'permissions' => $this->_permissions(),
+				'asset_base' => $this->_asset_base(),
+			),
+		));
+	}
+
+	private function _scalar_fee($v)
+	{
+		if ($v === null || $v === '') return 0;
+		if (is_numeric($v)) return (float)$v;
+		if (is_array($v)) {
+			if (!count($v)) return 0;
+			if (isset($v[0]) && is_array($v[0])) {
+				$row = $v[0];
+				foreach ($row as $x) {
+					if (is_numeric($x)) return (float)$x;
+				}
+				return 0;
+			}
+			foreach ($v as $x) {
+				if (is_numeric($x)) return (float)$x;
+			}
+		}
+		return 0;
+	}
+
+	private function _enrich_payment_row($payment, $index, $student_id, $fine_per_day = 50)
+	{
+		$payment['_index'] = $index;
+		$payment['is_special'] = in_array($payment['payment_comment'], array(
+			'consulation fee', 'Extra Fee For Notes', 'Extra Fee For Books',
+		), true);
+		$payment['merged_children'] = array();
+		if (!empty($payment['merged_challan']) && (float)$payment['actual_amount'] > 0 && !empty($payment['paid_challans'])) {
+			$ids = array_filter(array_map('trim', explode(',', rtrim($payment['paid_challans'], ', '))));
+			if (count($ids)) {
+				$this->db->where_in('challan_no', $ids);
+				$this->db->where('student_id', $student_id);
+				$payment['merged_children'] = $this->db->order_by('payment_comment', 'DESC')->get('payments')->result_array();
+			}
+		}
+		$payment['fees_remarks'] = array();
+		if ($this->db->table_exists('fees_remarks')) {
+			if ($this->db->field_exists('fee_remarks_id', 'fees_remarks')) {
+				$this->db->order_by('fee_remarks_id', 'DESC');
+			}
+			$payment['fees_remarks'] = $this->db
+				->get_where('fees_remarks', array('fee_id' => $payment['id']))
+				->result_array();
+		}
+		$payment['update_requests'] = array();
+		if ($this->db->table_exists('update_payment_requests')) {
+			$payment['update_requests'] = $this->db
+				->get_where('update_payment_requests', array('id' => $payment['id']))
+				->result_array();
+		}
+		$today = new DateTime(date('Y-m-d'));
+		$deadline = DateTime::createFromFormat('Y-m-d', $payment['dead_line']);
+		$late_days = 0;
+		if ($deadline && (int)$payment['paid'] === 0) {
+			$diff = (int)$deadline->diff($today)->format('%r%a');
+			if ($diff > 0) $late_days = $diff;
+		}
+		$payment['late_days'] = $late_days;
+		$payment['computed_fine'] = $late_days > 0 ? $late_days * (int)$fine_per_day : 0;
+		$campus = null;
+		if (!empty($payment['submitted_fee_campus_id'])) {
+			$campus = $this->db->get_where('campuses', array('campus_id' => $payment['submitted_fee_campus_id']))->row_array();
+		}
+		$payment['submitted_campus_name'] = $campus ? $campus['campus_name'] : '';
+		return $payment;
 	}
 
 	public function documents($student_id = 0)
@@ -2356,5 +2635,664 @@ class Studentsapi extends CI_Controller {
 		$this->db->where_in('students.student_id', $ids);
 		$rows = $this->db->get()->result_array();
 		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	// ─── Payments console actions (SPA — no legacy UI) ───────
+
+	public function payments_verify_fee()
+	{
+		$body = $this->_body();
+		$tid = isset($body['tid']) ? preg_replace('/\s+/', '', trim($body['tid'])) : '';
+		$bank = isset($body['bank']) ? $body['bank'] : '';
+		$date = isset($body['paid_date']) ? $body['paid_date'] : '';
+		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
+		if ($tid === '' || $bank === '' || $date === '') {
+			$this->_json(array('success' => false, 'message' => 'tid, bank, paid_date required'), 422);
+		}
+		$account = $this->db->get_where('accounts', array('account_name' => $bank))->row_array();
+		if (!$account) $this->_json(array('success' => false, 'message' => 'Bank account not found'), 404);
+		$acountid = $account['id'];
+		$qry = "SELECT * FROM bank_reconciliation_statement WHERE account_id= ".$this->db->escape($acountid)." AND trans_date= ".$this->db->escape($date)." AND description LIKE '%".$this->db->escape_like_str($tid)."%' LIMIT 1";
+		$transaction = $this->db->query($qry)->result_array();
+		if (!count($transaction)) {
+			$this->_json(array('success' => false, 'message' => 'Not Found in Statement', 'code' => 'not_found'));
+		}
+		$amount_tagged = (float)$transaction[0]['tagged_amount'];
+		$credit_amount = (float)str_replace(array(',', '.00'), '', $transaction[0]['credit']);
+		if (($credit_amount - $amount_tagged) >= $amount) {
+			$this->_json(array('success' => true, 'message' => 'success', 'statement_id' => (int)$transaction[0]['id']));
+		}
+		$device = $this->db->get_where('payments', array('statement_id' => $transaction[0]['id']))->row_array();
+		$this->_json(array(
+			'success' => false,
+			'message' => 'Already tagged',
+			'code' => 'already_found',
+			'challan_no' => $device ? $device['challan_no'] : null,
+			'student_id' => $device ? (int)$device['student_id'] : null,
+		));
+	}
+
+	public function payments_pay($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		$this->_require_student_payments();
+		$body = $this->_body();
+		// Also accept multipart form fields
+		if (!count($body)) $body = $this->input->post() ? $this->input->post() : array();
+
+		$fee_ids_raw = isset($body['fee_ids']) ? $body['fee_ids'] : '';
+		if (is_array($fee_ids_raw)) {
+			$payment_ids = array_map('intval', $fee_ids_raw);
+		} else {
+			$fee_ids_raw = ltrim((string)$fee_ids_raw, ',');
+			$payment_ids = array_filter(array_map('intval', explode(',', $fee_ids_raw)));
+		}
+		if (!count($payment_ids)) $this->_json(array('success' => false, 'message' => 'fee_ids required'), 422);
+
+		$pay_through = isset($body['fee_pay_through']) ? $body['fee_pay_through'] : 'college';
+		$this->_assert_pay_through($pay_through);
+
+		if (
+			(!empty($body['prev_fine_status']) && $body['prev_fine_status'] === 'remove')
+			|| (!empty($body['late_fee_fine_status']) && $body['late_fee_fine_status'] === 'remove')
+		) {
+			if (!$this->_perm('fine_remove') && !$this->_perm('remove_fine')) {
+				$this->_json(array('success' => false, 'message' => 'No permission to remove fine'), 403);
+			}
+		}
+
+		$scan_challan = $this->_upload_field('scan_challan');
+		$fine_application = $this->_upload_field('fine_application');
+
+		$merged_challan = count($payment_ids) > 1 ? $this->_new_challan_no() : null;
+		$newfeegenerated = 0;
+		$newfeeshifted = 0;
+		$actor = $this->_actor_name();
+		$i = 0;
+
+		foreach ($payment_ids as $payment_id) {
+			$next_payment_id = $this->student->getNextPaymentId($payment_id, $student_id);
+			if (
+				(isset($body['prev_installment_status']) && $body['prev_installment_status'] === 'shift')
+				|| (isset($body['prev_fine_status']) && $body['prev_fine_status'] === 'shift')
+				|| (isset($body['late_fee_fine_status']) && $body['late_fee_fine_status'] === 'shift')
+			) {
+				if (!is_array($next_payment_id) || !count($next_payment_id)) {
+					$this->_json(array('success' => false, 'message' => 'No remaining installment to shift dues'), 422);
+				}
+			}
+
+			$shifted_installment = 0;
+			$new_installment = 0;
+			$removed_previous_fine = 0;
+			$shifted_previous_fine = 0;
+			$new_previous_fine = 0;
+			$removed_fine = 0;
+			$shifted_fine = 0;
+			$new_fine = 0;
+
+			if (!empty($body['split_remaining_installment_amount'])) {
+				if (@$body['prev_installment_status'] === 'shift') $shifted_installment = (float)@$body['remove_remaining_installment_amount'];
+				if (@$body['prev_installment_status'] === 'new') $new_installment = (float)@$body['remove_remaining_installment_amount'];
+			}
+			if (!empty($body['split_remaining_fine_amount'])) {
+				if (@$body['prev_fine_status'] === 'remove') $removed_previous_fine = (float)@$body['remove_previous_fine_amount'];
+				if (@$body['prev_fine_status'] === 'shift') $shifted_previous_fine = (float)@$body['remove_previous_fine_amount'];
+				if (@$body['prev_fine_status'] === 'new') $new_previous_fine = (float)@$body['remove_previous_fine_amount'];
+			}
+			if (!empty($body['split_fine_amount'])) {
+				if (@$body['late_fee_fine_status'] === 'remove') $removed_fine = (float)@$body['remove_fine_amount'];
+				if (@$body['late_fee_fine_status'] === 'shift') $shifted_fine = (float)@$body['remove_fine_amount'];
+				if (@$body['late_fee_fine_status'] === 'new') $new_fine = (float)@$body['remove_fine_amount'];
+			}
+
+			$data = array(
+				'scan_challan' => $scan_challan,
+				'merged_challan' => $merged_challan,
+				'paid_challans' => isset($body['challans']) ? $body['challans'] : '',
+				'fine_application' => $fine_application,
+				'actual_amount' => isset($body['actual_amount']) ? $body['actual_amount'] : 0,
+				'discount' => isset($body['discount']) ? $body['discount'] : 0,
+				'id' => $payment_id,
+				'paid_date' => isset($body['paid_date']) ? $body['paid_date'] : date('Y-m-d'),
+				'paid' => 1,
+				'actual_paid_date' => date('Y-m-d'),
+				'college_fee' => 0,
+				'last_edit' => $actor,
+				'paid_by' => $actor,
+				'fee_pay_through' => $pay_through,
+				'fine_amount' => isset($body['fine_amount']) ? $body['fine_amount'] : 0,
+				'shifted_installment' => $shifted_installment + $new_installment,
+				'removed_previous_fine' => $removed_previous_fine,
+				'shifted_previous_fine' => $shifted_previous_fine + $new_previous_fine,
+				'removed_fine' => $removed_fine,
+				'submitted_fee_campus_id' => isset($body['submitted_fee_campus_id']) ? $body['submitted_fee_campus_id'] : 0,
+				'shifted_fine' => $shifted_fine + $new_fine,
+				'closing_id' => NULL,
+			);
+
+			if ($pay_through === 'bank') {
+				$account = $this->db->get_where('accounts', array('account_name' => @$body['bank_details']))->row_array();
+				$statement_id = null;
+				if ($account && $i === 0) {
+					$acountid = $account['id'];
+					$this->db->select('*');
+					$this->db->from('bank_reconciliation_statement');
+					$this->db->where('account_id', $acountid);
+					$this->db->where('trans_date', $body['paid_date']);
+					$this->db->group_start();
+					$this->db->like('description', @$body['tid_no']);
+					$this->db->or_like('reference_no', @$body['tid_no']);
+					$this->db->group_end();
+					$this->db->group_by('description');
+					$concile = $this->db->get()->result_array();
+					if (count($concile)) {
+						$statement_id = $concile[0]['id'];
+						$this->db->set('tagged_amount', 'tagged_amount +' . (float)$body['actual_amount'], false);
+						$this->db->where('id', $statement_id);
+						$this->db->update('bank_reconciliation_statement');
+					}
+				}
+				$data['bank_details'] = @$body['bank_details'];
+				$data['tid_no'] = @$body['tid_no'];
+				$data['statement_id'] = $statement_id;
+			} elseif ($pay_through === 'college') {
+				$data['fee_submit_type'] = isset($body['fee_submit_type']) ? $body['fee_submit_type'] : 'computer_challan';
+				if ($data['fee_submit_type'] === 'receipt_book') {
+					$data['book_no'] = @$body['book_no'];
+					$data['receipt_no'] = @$body['receipt_no'];
+				}
+			}
+
+			$this->student->saveInstallment($data);
+
+			if (($shifted_installment > 0 || $shifted_previous_fine > 0 || $shifted_fine > 0) && $newfeeshifted == 0 && is_array($next_payment_id) && count($next_payment_id)) {
+				$npid = $next_payment_id[0]['id'];
+				$current_challan = $this->db->get_where('payments', array('id' => $payment_id))->row()->challan_no;
+				$this->student->addExtraChargesToNextInstallment(
+					$npid,
+					$shifted_previous_fine + $shifted_fine,
+					$shifted_installment,
+					$current_challan
+				);
+				$newfeeshifted = 1;
+			}
+			if (($new_installment > 0 || $new_previous_fine > 0 || $new_fine > 0) && $newfeegenerated == 0) {
+				$current_challan = $this->db->get_where('payments', array('id' => $payment_id))->row()->challan_no;
+				$this->student->addExtraChargesToNewInstallment(
+					$student_id,
+					isset($body['new_dead_line']) ? $body['new_dead_line'] : date('Y-m-d'),
+					$new_installment,
+					$new_previous_fine,
+					$new_fine,
+					$current_challan
+				);
+				$newfeegenerated = 1;
+			}
+			$i++;
+		}
+
+		$this->_json(array('success' => true, 'message' => 'Fee submitted successfully'));
+	}
+
+	private function _upload_field($field)
+	{
+		if (empty($_FILES[$field]['name'])) return '';
+		$this->load->library('upload');
+		$config = array(
+			'upload_path' => 'uploads/',
+			'allowed_types' => '*',
+			'encrypt_name' => true,
+		);
+		$this->upload->initialize($config);
+		if (!$this->upload->do_upload($field)) return '';
+		$d = $this->upload->data();
+		return $d['file_name'];
+	}
+
+	public function payments_split($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$student_id = (int)$student_id;
+		$body = $this->_body();
+		$current_id = isset($body['current_id']) ? (int)$body['current_id'] : 0;
+		$is_council = !empty($body['consultation']);
+		if (!$current_id) $this->_json(array('success' => false, 'message' => 'current_id required'), 422);
+
+		$current = $this->db->get_where('payments', array('id' => $current_id, 'student_id' => $student_id))->row_array();
+		if (!$current || (int)$current['paid'] === 1) {
+			$this->_json(array('success' => false, 'message' => 'Invalid installment'), 422);
+		}
+
+		$new_amount = (float)@$body['new_amount'];
+		$current_amount = (float)@$body['current_amount'];
+		if ($current_amount < ((float)$current['amount'] * 0.2)) {
+			$this->_json(array('success' => false, 'message' => 'Current amount must keep at least 20%'), 422);
+		}
+
+		$this->db->where('id', $current_id)->update('payments', array(
+			'amount' => $current_amount,
+			'remaining_installment_amount' => (float)@$body['current_remaining_installment_amount'],
+			'extra_amount' => (float)@$body['current_extra_amount'],
+			'split' => 1,
+		));
+
+		$challan = $this->_new_challan_no();
+		$this->db->insert('payments', array(
+			'student_id' => $student_id,
+			'challan_no' => $challan,
+			'amount' => $new_amount,
+			'remaining_installment_amount' => (float)@$body['new_remaining_installment_amount'],
+			'extra_amount' => (float)@$body['new_extra_amount'],
+			'dead_line' => isset($body['new_dead_line']) ? $body['new_dead_line'] : $current['dead_line'],
+			'payment_plan' => $current['payment_plan'],
+			'payment_comment' => $current['payment_comment'],
+			'paid' => 0,
+			'contract_id' => $current['contract_id'],
+			'council_sequence_id' => $current['council_sequence_id'],
+			'exam_sequence_id' => $current['exam_sequence_id'],
+			'split' => 1,
+			'add_by' => $this->_actor_name(),
+			'last_edit' => $this->_actor_name(),
+		));
+
+		$this->_json(array('success' => true, 'message' => $is_council ? 'Council fee split' : 'Installment split'));
+	}
+
+	public function payments_delete($student_id = 0, $payment_id = 0)
+	{
+		if (!$this->_is_admin()) $this->_json(array('success' => false, 'message' => 'Admin only'), 403);
+		$student_id = (int)$student_id;
+		$payment_id = (int)$payment_id;
+		$row = $this->db->get_where('payments', array('id' => $payment_id, 'student_id' => $student_id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		if ((int)$row['paid'] === 1) $this->_json(array('success' => false, 'message' => 'Cannot delete paid installment'), 422);
+		$this->db->where('id', $payment_id)->delete('payments');
+		$this->db->where('id', $payment_id)->delete('update_payment_requests');
+		$this->_json(array('success' => true, 'message' => 'Fee deleted'));
+	}
+
+	public function payments_comment($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$body = $this->_body();
+		$payment_id = isset($body['payment_id']) ? (int)$body['payment_id'] : 0;
+		$row = $this->db->get_where('payments', array('id' => $payment_id, 'student_id' => (int)$student_id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$changing_exam = isset($body['exam_sequence_id']) || isset($body['council_sequence_id']) || isset($body['payment_comment']);
+		if ($changing_exam && !$this->_perm('change_exam_no_in_payments')) {
+			$this->_json(array('success' => false, 'message' => 'No permission to change exam/council comment'), 403);
+		}
+		if ($changing_exam && isset($row['payment_comment']) && $row['payment_comment'] === 'College Fee') {
+			$this->_json(array('success' => false, 'message' => 'Cannot change College Fee exam comment'), 422);
+		}
+		$upd = array();
+		if (isset($body['exam_sequence_id'])) $upd['exam_sequence_id'] = $body['exam_sequence_id'];
+		if (isset($body['council_sequence_id'])) $upd['council_sequence_id'] = $body['council_sequence_id'];
+		if (isset($body['payment_comment'])) $upd['payment_comment'] = $body['payment_comment'];
+		if (count($upd)) $this->db->where('id', $payment_id)->update('payments', $upd);
+		if (!empty($body['reason']) && $this->db->table_exists('fees_remarks')) {
+			$this->db->insert('fees_remarks', array(
+				'fee_id' => $payment_id,
+				'comment' => $body['reason'],
+				'paid_on_date' => date('Y-m-d'),
+				'clear_status' => 0,
+				'add_by' => $this->_actor_name(),
+			));
+		}
+		$this->_json(array('success' => true, 'message' => 'Updated'));
+	}
+
+	public function payments_session_fee($student_id = 0)
+	{
+		if (!$this->_is_admin()) $this->_json(array('success' => false, 'message' => 'Admin only'), 403);
+		$body = $this->_body();
+		$fee = isset($body['current_session_fee']) ? (float)$body['current_session_fee'] : -1;
+		if ($fee < 0) $this->_json(array('success' => false, 'message' => 'current_session_fee required'), 422);
+		$this->db->where('student_id', (int)$student_id)->update('students', array('current_session_fee' => $fee));
+		$this->_json(array('success' => true, 'message' => 'Session fee updated'));
+	}
+
+	public function payments_discount($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$body = $this->_body();
+		$amount = isset($body['discount']) ? (float)$body['discount'] : 0;
+		$reason = isset($body['reason']) ? trim($body['reason']) : '';
+		$remaining = isset($body['remaining_fee']) ? (float)$body['remaining_fee'] : 0;
+		if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'discount required'), 422);
+
+		$pending = $this->db->get_where('discounts_approval', array(
+			'student_id' => (int)$student_id,
+			'status' => '0',
+		))->result_array();
+		if (count($pending)) {
+			$this->_json(array('success' => false, 'message' => 'Fee discount request already pending'), 422);
+		}
+
+		$application = $this->_upload_field('image');
+		if (!$application) $application = $this->_upload_field('application');
+
+		$this->db->insert('discounts_approval', array(
+			'student_id' => (int)$student_id,
+			'remaining_fee' => $remaining,
+			'discount' => $amount,
+			'reason' => $reason,
+			'application' => $application,
+			'status' => 0,
+			'created_by' => $this->_actor_name(),
+			'created_at' => date('Y-m-d H:i:s'),
+		));
+		$this->_json(array('success' => true, 'message' => 'Discount request submitted'));
+	}
+
+	public function payments_extra_fee($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$body = $this->_body();
+		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
+		$comment = isset($body['payment_comment']) ? $body['payment_comment'] : 'Extra Fee';
+		$deadline = isset($body['dead_line']) ? $body['dead_line'] : date('Y-m-d');
+		if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
+		if ($comment === 'College Fee' && !$this->_perm('extra_fee_access')) {
+			$this->_json(array('success' => false, 'message' => 'No permission to add College Fee as extra'), 403);
+		}
+		$challan = $this->_new_challan_no();
+		$this->db->insert('payments', array(
+			'student_id' => (int)$student_id,
+			'challan_no' => $challan,
+			'amount' => $amount,
+			'dead_line' => $deadline,
+			'payment_plan' => 'Custom Plan',
+			'payment_comment' => $comment,
+			'paid' => 0,
+			'contract_id' => 0,
+			'add_by' => $this->_actor_name(),
+			'last_edit' => $this->_actor_name(),
+		));
+		$this->db->set('extra_added_fee', 'extra_added_fee + ' . $amount, false);
+		$this->db->where('student_id', (int)$student_id);
+		$this->db->update('students');
+		$this->_json(array('success' => true, 'message' => 'Extra fee added', 'challan_no' => $challan));
+	}
+
+	public function payments_council_fee($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$body = $this->_body();
+		$exam_sequence_id = isset($body['exam_sequence_id']) ? (int)$body['exam_sequence_id'] : 0;
+		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
+		$deadline = isset($body['dead_line']) ? $body['dead_line'] : date('Y-m-d');
+		$council_sequence_id = isset($body['council_sequence_id']) ? (int)$body['council_sequence_id'] : 0;
+		if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
+		$challan = $this->_new_challan_no();
+		$this->db->insert('payments', array(
+			'student_id' => (int)$student_id,
+			'challan_no' => $challan,
+			'amount' => $amount,
+			'dead_line' => $deadline,
+			'payment_plan' => 'consulation fee',
+			'payment_comment' => 'consulation fee',
+			'paid' => 0,
+			'contract_id' => 0,
+			'exam_sequence_id' => $exam_sequence_id,
+			'council_sequence_id' => $council_sequence_id,
+			'add_by' => $this->_actor_name(),
+			'last_edit' => $this->_actor_name(),
+		));
+		$this->_json(array('success' => true, 'message' => 'Council fee added', 'challan_no' => $challan));
+	}
+
+	public function payments_auto_fees($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$student_id = (int)$student_id;
+		// Delegate to existing Students controller logic via shared student helpers if available
+		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$created = (float)$this->student->getStudentDiscount($student_id);
+		$student_fee = (float)(isset($student['total_fee']) ? $student['total_fee'] : 0)
+			+ (float)(isset($student['extra_added_fee']) ? $student['extra_added_fee'] : 0);
+		$remaining = $student_fee - $created;
+		if ($remaining <= 0) $this->_json(array('success' => false, 'message' => 'No remaining fee to generate'), 422);
+		$challan = $this->_new_challan_no();
+		$this->db->insert('payments', array(
+			'student_id' => $student_id,
+			'challan_no' => $challan,
+			'amount' => $remaining,
+			'dead_line' => date('Y-m-d'),
+			'payment_plan' => 'Custom Plan',
+			'payment_comment' => 'College Fee',
+			'paid' => 0,
+			'contract_id' => 0,
+			'add_by' => $this->_actor_name(),
+			'last_edit' => $this->_actor_name(),
+		));
+		$this->_json(array('success' => true, 'message' => 'Remaining fee installment created', 'amount' => $remaining));
+	}
+
+	public function payments_installments_preview($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$body = $this->_body();
+		$day = isset($body['installment_day']) ? (int)$body['installment_day'] : 1;
+		$start = isset($body['start_month']) ? $body['start_month'] : date('Y-m');
+		$end = isset($body['end_month']) ? $body['end_month'] : date('Y-m');
+		$student = $this->db->get_where('students', array('student_id' => (int)$student_id))->row_array();
+		$created = (float)$this->student->getStudentDiscount($student_id);
+		$student_fee = (float)(isset($student['total_fee']) ? $student['total_fee'] : 0)
+			+ (float)(isset($student['extra_added_fee']) ? $student['extra_added_fee'] : 0);
+		$remaining = max(0, $student_fee - $created);
+		$months = array();
+		try {
+			$cur = new DateTime($start . '-01');
+			$last = new DateTime($end . '-01');
+			while ($cur <= $last) {
+				$months[] = $cur->format('Y-m');
+				$cur->modify('+1 month');
+			}
+		} catch (Exception $e) {
+			$months = array(date('Y-m'));
+		}
+		$count = max(1, count($months));
+		$each = round($remaining / $count, 2);
+		$rows = array();
+		foreach ($months as $i => $ym) {
+			$amt = ($i === $count - 1) ? ($remaining - $each * ($count - 1)) : $each;
+			$d = min($day, 28);
+			$rows[] = array(
+				'dead_line' => $ym . '-' . str_pad((string)$d, 2, '0', STR_PAD_LEFT),
+				'amount' => $amt,
+				'payment_comment' => 'College Fee',
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $rows, 'remaining' => $remaining));
+	}
+
+	public function payments_installments($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$body = $this->_body();
+		$preview = isset($body['rows']) && is_array($body['rows']) ? $body['rows'] : array();
+		if (!count($preview)) {
+			$day = isset($body['installment_day']) ? (int)$body['installment_day'] : 1;
+			$start = isset($body['start_month']) ? $body['start_month'] : date('Y-m');
+			$end = isset($body['end_month']) ? $body['end_month'] : date('Y-m');
+			$student = $this->db->get_where('students', array('student_id' => (int)$student_id))->row_array();
+			$created = (float)$this->student->getStudentDiscount($student_id);
+			$student_fee = (float)(isset($student['total_fee']) ? $student['total_fee'] : 0)
+				+ (float)(isset($student['extra_added_fee']) ? $student['extra_added_fee'] : 0);
+			$remaining = max(0, $student_fee - $created);
+			$months = array();
+			try {
+				$cur = new DateTime($start . '-01');
+				$last = new DateTime($end . '-01');
+				while ($cur <= $last) {
+					$months[] = $cur->format('Y-m');
+					$cur->modify('+1 month');
+				}
+			} catch (Exception $e) {
+				$months = array(date('Y-m'));
+			}
+			$count = max(1, count($months));
+			$each = round($remaining / $count, 2);
+			foreach ($months as $i => $ym) {
+				$amt = ($i === $count - 1) ? ($remaining - $each * ($count - 1)) : $each;
+				$d = min($day, 28);
+				$preview[] = array(
+					'dead_line' => $ym . '-' . str_pad((string)$d, 2, '0', STR_PAD_LEFT),
+					'amount' => $amt,
+				);
+			}
+		}
+		foreach ($preview as $r) {
+			$this->db->insert('payments', array(
+				'student_id' => (int)$student_id,
+				'challan_no' => $this->_new_challan_no(),
+				'amount' => (float)$r['amount'],
+				'dead_line' => $r['dead_line'],
+				'payment_plan' => 'Custom Plan',
+				'payment_comment' => 'College Fee',
+				'paid' => 0,
+				'contract_id' => 0,
+				'add_by' => $this->_actor_name(),
+				'last_edit' => $this->_actor_name(),
+			));
+		}
+		$this->_json(array('success' => true, 'message' => count($preview) . ' installment(s) added'));
+	}
+
+	public function payments_reversal($student_id = 0)
+	{
+		if (!$this->_is_admin() && !$this->_perm('student_issue_refund')) {
+			$this->_json(array('success' => false, 'message' => 'No refund permission'), 403);
+		}
+		$body = $this->_body();
+		$payment_id = isset($body['payment_id']) ? (int)$body['payment_id'] : 0;
+		$amount = isset($body['reversal_amount']) ? (float)$body['reversal_amount'] : 0;
+		$reason = isset($body['reason']) ? $body['reason'] : '';
+		$row = $this->db->get_where('payments', array('id' => $payment_id, 'student_id' => (int)$student_id, 'paid' => 1))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Paid installment required'), 422);
+		if ($amount <= 0 || $amount > (float)$row['actual_amount']) {
+			$this->_json(array('success' => false, 'message' => 'Invalid reversal amount'), 422);
+		}
+		$this->db->insert('payments_reversal_requests', array(
+			'student_id' => (int)$student_id,
+			'payment_id' => $payment_id,
+			'reversal_amount' => $amount,
+			'reason' => $reason,
+			'done' => 0,
+			'add_by' => $this->_actor_name(),
+			'created_at' => date('Y-m-d H:i:s'),
+		));
+		$this->_json(array('success' => true, 'message' => 'Reversal request submitted'));
+	}
+
+	public function payments_reversal_complete($student_id = 0)
+	{
+		if (!$this->_is_admin() && !$this->_perm('student_issue_refund')) {
+			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
+		}
+		$body = $this->_body();
+		$req_id = isset($body['request_id']) ? (int)$body['request_id'] : 0;
+		$req = $this->db->get_where('payments_reversal_requests', array(
+			'id' => $req_id,
+			'student_id' => (int)$student_id,
+			'done' => 0,
+		))->row_array();
+		if (!$req) $this->_json(array('success' => false, 'message' => 'Request not found'), 404);
+		$this->db->where('id', $req_id)->update('payments_reversal_requests', array(
+			'done' => 1,
+			'approved_by' => $this->_actor_name(),
+			'approved_at' => date('Y-m-d H:i:s'),
+		));
+		$this->_json(array('success' => true, 'message' => 'Reversal completed'));
+	}
+
+	public function payments_print_challan($student_id = 0)
+	{
+		$ids = $this->input->get('ids');
+		if (!$ids) $this->_json(array('success' => false, 'message' => 'ids required'), 422);
+		$id_list = array_filter(array_map('intval', explode(',', $ids)));
+		if (!count($id_list)) $this->_json(array('success' => false, 'message' => 'ids required'), 422);
+		$rows = $this->db->where_in('id', $id_list)->where('student_id', (int)$student_id)->get('payments')->result_array();
+		$student = $this->_student_profile($student_id);
+		$total = 0;
+		foreach ($rows as $r) $total += (float)$r['amount'];
+		$html = '<!doctype html><html><head><title>Bank Challan</title>
+			<style>body{font-family:sans-serif;padding:24px}table{width:100%;border-collapse:collapse}
+			th,td{border:1px solid #333;padding:8px;text-align:left}h1{margin:0 0 8px}</style></head><body>';
+		$html .= '<h1>Fee Challan</h1>';
+		$html .= '<p><strong>' . htmlspecialchars(trim($student['first_name'] . ' ' . $student['last_name'])) . '</strong> · Roll '
+			. htmlspecialchars((string)$student['roll_no']) . ' · ' . htmlspecialchars((string)$student['class_name']) . '</p>';
+		$html .= '<table><thead><tr><th>Challan</th><th>Comment</th><th>Deadline</th><th>Amount</th></tr></thead><tbody>';
+		foreach ($rows as $r) {
+			$html .= '<tr><td>' . htmlspecialchars($r['challan_no']) . '</td><td>' . htmlspecialchars($r['payment_comment'])
+				. '</td><td>' . htmlspecialchars($r['dead_line']) . '</td><td>' . number_format((float)$r['amount']) . '</td></tr>';
+		}
+		$html .= '</tbody></table><p><strong>Total: ' . number_format($total) . '</strong></p>';
+		$html .= '<script>window.onload=function(){window.print()}<\/script></body></html>';
+		header('Content-Type: text/html; charset=utf-8');
+		echo $html;
+		exit;
+	}
+
+	public function payments_add_plan($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$student_id = (int)$student_id;
+		$body = $this->_body();
+		$plan_id = isset($body['plan_id']) ? (int)$body['plan_id'] : 0;
+		$discount = isset($body['discount']) ? (float)$body['discount'] : 0;
+		$instdate = isset($body['instdate']) ? (int)$body['instdate'] : 1;
+		if (!$plan_id) $this->_json(array('success' => false, 'message' => 'plan_id required'), 422);
+		$plan = $this->db->get_where('fee_rules', array('fee_rule_id' => $plan_id))->row_array();
+		if (!$plan) $this->_json(array('success' => false, 'message' => 'Plan not found'), 404);
+
+		$total = (float)$plan['total_fee'] - $discount;
+		$this->db->where('student_id', $student_id)->update('students', array(
+			'total_fee' => $total,
+			'plan_id' => $plan_id,
+			'current_session_fee' => (float)$plan['total_fee'],
+		));
+
+		// Create installments from fee_rules schedule fields if present
+		$installments = isset($body['installments']) ? (int)$body['installments'] : (isset($plan['no_of_installments']) ? (int)$plan['no_of_installments'] : 0);
+		if ($installments < 1) $installments = 1;
+		$each = round($total / $installments, 2);
+		$start = isset($body['start_date']) ? $body['start_date'] : date('Y-m-d');
+		for ($i = 0; $i < $installments; $i++) {
+			$amt = ($i === $installments - 1) ? ($total - $each * ($installments - 1)) : $each;
+			$dl = date('Y-m-d', strtotime($start . ' +' . $i . ' month'));
+			if ($instdate >= 1 && $instdate <= 28) {
+				$dl = date('Y-m-', strtotime($dl)) . str_pad((string)$instdate, 2, '0', STR_PAD_LEFT);
+			}
+			$this->db->insert('payments', array(
+				'student_id' => $student_id,
+				'challan_no' => $this->_new_challan_no(),
+				'amount' => $amt,
+				'dead_line' => $dl,
+				'payment_plan' => isset($plan['payment_plan']) ? $plan['payment_plan'] : 'Custom Plan',
+				'payment_comment' => 'College Fee',
+				'paid' => 0,
+				'contract_id' => 0,
+				'add_by' => $this->_actor_name(),
+				'last_edit' => $this->_actor_name(),
+			));
+		}
+		$this->_json(array('success' => true, 'message' => 'Payment plan created'));
+	}
+
+	public function payments_council_date($student_id = 0, $fee_id = 0)
+	{
+		$fee_id = (int)$fee_id;
+		$row = $this->db->get_where('payments', array('id' => $fee_id, 'student_id' => (int)$student_id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$date = $row['dead_line'];
+		if (!empty($row['exam_sequence_id'])) {
+			$ex = $this->db->get_where('exam_sequence', array('id' => $row['exam_sequence_id']))->row_array();
+			if ($ex && !empty($ex['council_fee_last_date'])) $date = $ex['council_fee_last_date'];
+		}
+		$this->_json(array('success' => true, 'date' => $date));
 	}
 }

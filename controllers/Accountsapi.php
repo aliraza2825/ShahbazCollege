@@ -103,9 +103,42 @@ class Accountsapi extends CI_Controller {
 		if ($this->_is_admin()) return true;
 		$row = $this->_access();
 		if (!$row) return false;
-		return !empty($row['accounts_sidebar'])
-			|| !empty($row['account_details'])
-			|| !empty($row['campus_petty_cash']);
+		$keys = array(
+			'accounts_sidebar', 'account_details', 'campus_petty_cash',
+			'chart_of_accounts', 'profit_distribution', 'advance_system',
+			'loan_approval_accounts', 'dailyclosing', 'dailybankclosing',
+			'closing_reconcile', 'misc_income', 'bank_reconciliation',
+			'how_to_use', 'view_campus_closings',
+		);
+		foreach ($keys as $k) {
+			if (!empty($row[$k])) return true;
+		}
+		return false;
+	}
+
+	/** True if user may open a section (Admin always). Pass access column or array of OR columns. */
+	private function _section_allowed($access)
+	{
+		if ($this->_is_admin()) return true;
+		if ($access === null || $access === '') return false;
+		if ($access === '__admin__') return false;
+		$row = $this->_access();
+		if (!$row) return false;
+		if (is_array($access)) {
+			foreach ($access as $k) {
+				if ($k === '__admin__') continue;
+				if (!empty($row[$k])) return true;
+			}
+			return false;
+		}
+		return !empty($row[$access]);
+	}
+
+	private function _assert_section($access)
+	{
+		if (!$this->_section_allowed($access)) {
+			$this->_json(array('success' => false, 'message' => 'No permission for this accounts section'), 403);
+		}
 	}
 
 	/** null = admin (all); array of string ids for non-admin */
@@ -570,14 +603,18 @@ class Accountsapi extends CI_Controller {
 	private function _section_defs()
 	{
 		return array(
-			array('key' => 'how_to_use', 'label' => 'How To Use', 'access' => null),
+			array('key' => 'how_to_use', 'label' => 'How To Use', 'access' => 'how_to_use'),
 			array('key' => 'account_details', 'label' => 'Accounts', 'access' => 'account_details'),
 			array('key' => 'chart_of_accounts', 'label' => 'Chart of Accounts', 'access' => 'chart_of_accounts'),
 			array('key' => 'profit_distribution', 'label' => 'Profit Distribution Campus Wise', 'access' => 'profit_distribution'),
 			array('key' => 'campus_petty_cash', 'label' => 'Campus PettyCash', 'access' => 'campus_petty_cash'),
 			array('key' => 'advance_system', 'label' => 'Advance System', 'access' => 'advance_system'),
 			array('key' => 'loan_approval_accounts', 'label' => 'Loans Approval Accounts', 'access' => 'loan_approval_accounts'),
-			array('key' => 'dailyclosing', 'label' => 'Daily Closings', 'access' => 'dailyclosing'),
+			array(
+				'key' => 'dailyclosing',
+				'label' => 'Daily Closings',
+				'access' => array('dailyclosing', 'dailybankclosing', 'view_campus_closings'),
+			),
 			array('key' => 'closing_reconcile', 'label' => 'Closings conciliation', 'access' => 'closing_reconcile'),
 			array('key' => 'misc_income', 'label' => 'Miscellaneous Income', 'access' => 'misc_income'),
 			array('key' => 'bank_reconciliation', 'label' => 'Statement Reconciliation', 'access' => 'bank_reconciliation'),
@@ -585,7 +622,7 @@ class Accountsapi extends CI_Controller {
 			array('key' => 'paypro_untagged', 'label' => 'Untagged Paypro Entries', 'access' => 'bank_reconciliation'),
 			array('key' => 'paypro_transactions', 'label' => 'PayPro Transactions', 'access' => 'bank_reconciliation'),
 			array('key' => 'day_closing_report', 'label' => 'Day Closing', 'access' => 'bank_reconciliation'),
-			array('key' => 'bulk_fee_meta', 'label' => 'Add Bulk Student Payments', 'access' => null),
+			array('key' => 'bulk_fee_meta', 'label' => 'Add Bulk Student Payments', 'access' => '__admin__'),
 		);
 	}
 
@@ -596,14 +633,7 @@ class Accountsapi extends CI_Controller {
 		$access = $this->_access();
 		$sections = array();
 		foreach ($this->_section_defs() as $def) {
-			$enabled = $this->_is_admin();
-			if (!$enabled) {
-				if ($def['access'] === null) {
-					$enabled = !empty($access['accounts_sidebar']) || !empty($access['account_details']);
-				} else {
-					$enabled = !empty($access[$def['access']]);
-				}
-			}
+			$enabled = $this->_section_allowed($def['access']);
 			$sections[] = array(
 				'key' => $def['key'],
 				'label' => $def['label'],
@@ -986,6 +1016,7 @@ class Accountsapi extends CI_Controller {
 
 	public function cash_accounts()
 	{
+		$this->_assert_section('account_details');
 		$rows = $this->db->query(
 			'SELECT * FROM accounts WHERE type = 0 ORDER BY id ASC'
 		)->result_array();
@@ -1007,6 +1038,7 @@ class Accountsapi extends CI_Controller {
 
 	public function transfer_targets()
 	{
+		$this->_assert_section('account_details');
 		$accounts = $this->db->query(
 			'SELECT * FROM accounts ORDER BY account_title ASC, id ASC'
 		)->result_array();
@@ -1045,6 +1077,7 @@ class Accountsapi extends CI_Controller {
 
 	public function add_account()
 	{
+		$this->_assert_section('account_details');
 		if (!$this->_feature('account_add_account')) {
 			$this->_json(array('success' => false, 'message' => 'No permission to add accounts'), 403);
 		}
@@ -1076,6 +1109,7 @@ class Accountsapi extends CI_Controller {
 
 	public function edit_account()
 	{
+		$this->_assert_section('account_details');
 		$b = $this->_body();
 		$id = isset($b['daccount_id']) ? (int)$b['daccount_id'] : (isset($b['id']) ? (int)$b['id'] : 0);
 		if ($id <= 0) {
@@ -1107,6 +1141,7 @@ class Accountsapi extends CI_Controller {
 
 	public function transfer_funds()
 	{
+		$this->_assert_section('account_details');
 		if (!$this->_feature('account_funds_transfer')) {
 			$this->_json(array('success' => false, 'message' => 'No permission to transfer funds'), 403);
 		}
@@ -1205,6 +1240,7 @@ class Accountsapi extends CI_Controller {
 
 	public function cash_statement()
 	{
+		$this->_assert_section('account_details');
 		$account_id = (int)$this->input->get('account_id');
 		$from_date = $this->input->get('from_date');
 		$to_date = $this->input->get('to_date');
@@ -1276,6 +1312,7 @@ class Accountsapi extends CI_Controller {
 
 	public function chart_of_accounts()
 	{
+		$this->_assert_section('chart_of_accounts');
 		list($from, $to) = $this->_fy_range($this->input->get('from_date'), $this->input->get('to_date'));
 		$rows = array();
 		$expenseTree = array();
@@ -1427,6 +1464,7 @@ class Accountsapi extends CI_Controller {
 
 	public function petty_cash()
 	{
+		$this->_assert_section('campus_petty_cash');
 		$status = $this->input->get('status');
 		if ($status === null || $status === '') $status = '1';
 		$status = (int)$status;
@@ -1504,6 +1542,7 @@ class Accountsapi extends CI_Controller {
 
 	public function petty_cash_add()
 	{
+		$this->_assert_section('campus_petty_cash');
 		if (!$this->_feature('add_pettycash') && !$this->_is_admin()) {
 			$this->_json(array('success' => false, 'message' => 'No permission to add petty cash'), 403);
 		}
@@ -1546,6 +1585,7 @@ class Accountsapi extends CI_Controller {
 
 	public function petty_cash_update_rule()
 	{
+		$this->_assert_section('campus_petty_cash');
 		if (!$this->_feature('change_pettycash') && !$this->_is_admin()) {
 			$this->_json(array('success' => false, 'message' => 'No permission to change petty cash rule'), 403);
 		}
@@ -1575,6 +1615,7 @@ class Accountsapi extends CI_Controller {
 
 	public function petty_cash_set_status()
 	{
+		$this->_assert_section('campus_petty_cash');
 		if (!$this->_feature('change_pettycash') && !$this->_is_admin()) {
 			$this->_json(array('success' => false, 'message' => 'No permission to change petty status'), 403);
 		}
@@ -1614,6 +1655,7 @@ class Accountsapi extends CI_Controller {
 
 	public function petty_cash_transfer()
 	{
+		$this->_assert_section('campus_petty_cash');
 		if (!$this->_feature('pettycash_funds_trasfer') && !$this->_is_admin()) {
 			$this->_json(array('success' => false, 'message' => 'No permission to transfer petty cash'), 403);
 		}
@@ -1710,6 +1752,7 @@ class Accountsapi extends CI_Controller {
 
 	public function petty_cash_statement()
 	{
+		$this->_assert_section('campus_petty_cash');
 		$id = (int)$this->input->get('id');
 		$from_date = $this->input->get('from_date');
 		$to_date = $this->input->get('to_date');
@@ -2439,6 +2482,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function closings()
 	{
+		$this->_assert_section(array('dailyclosing','dailybankclosing','view_campus_closings'));
 		$date = $this->input->get('date');
 		if (!$date) $date = date('Y-m-d');
 		$flags = $this->_closing_flags();
@@ -2554,6 +2598,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function close_day()
 	{
+		$this->_assert_section(array('dailyclosing','dailybankclosing'));
 		$body = $this->_body();
 		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
 		$date = isset($body['date']) ? $body['date'] : date('Y-m-d');
@@ -2678,6 +2723,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function add_closing_details()
 	{
+		$this->_assert_section(array('dailyclosing','dailybankclosing'));
 		$body = $this->_body();
 		$closing_id = (int)(isset($body['closing_id']) ? $body['closing_id'] : (isset($body['closingid']) ? $body['closingid'] : 0));
 		$account_id = (int)(isset($body['account_id']) ? $body['account_id'] : 0);
@@ -2722,6 +2768,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function update_closing_type()
 	{
+		$this->_assert_section(array('dailyclosing','dailybankclosing'));
 		$body = $this->_body();
 		$closing_id = (int)(isset($body['closing_id']) ? $body['closing_id'] : 0);
 		$close_type = isset($body['close_type']) ? (string)$body['close_type'] : '';
@@ -2770,6 +2817,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function closing_detail()
 	{
+		$this->_assert_section(array('dailyclosing','dailybankclosing','view_campus_closings'));
 		$campus_id = (int)$this->input->get('campus_id');
 		$date = $this->input->get('date');
 		if (!$date) $date = date('Y-m-d');
@@ -2965,6 +3013,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function closings_conciliation()
 	{
+		$this->_assert_section('closing_reconcile');
 		$date = $this->input->get('date');
 		if (!$date) $date = date('Y-m-d');
 		$from = $this->input->get('from_date');
@@ -3089,6 +3138,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function verify_closing()
 	{
+		$this->_assert_section('closing_reconcile');
 		$body = $this->_body();
 		$id = (int)(isset($body['closing_id']) ? $body['closing_id'] : (isset($body['closingid']) ? $body['closingid'] : 0));
 		if ($id <= 0 && !empty($body['campus_id']) && !empty($body['date'])) {
@@ -3208,6 +3258,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function find_closing_bank_transactions()
 	{
+		$this->_assert_section('closing_reconcile');
 		$body = $this->_body();
 		$closing_id = (int)(isset($body['closing_id']) ? $body['closing_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
 		$from_date = isset($body['from_date']) ? date('Y-m-d', strtotime($body['from_date'])) : date('Y-m-d');
@@ -3259,6 +3310,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function tag_closing_bank()
 	{
+		$this->_assert_section('closing_reconcile');
 		$body = $this->_body();
 		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : 0);
 		$closing_id = (int)(isset($body['closing_id']) ? $body['closing_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
@@ -3333,6 +3385,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function day_closing_report()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$date = $this->input->get('date');
 		if (!$date) $date = date('Y-m-d');
 
@@ -3927,6 +3980,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function bank_statement()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$from = $this->input->get('from_date');
 		$to = $this->input->get('to_date');
 		$account_id = $this->input->get('account_id');
@@ -4000,6 +4054,10 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function upload_bank_statement()
 	{
+		$this->_assert_section('bank_reconciliation');
+		if (!$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'Admin only'), 403);
+		}
 		$body = $this->_body();
 		$account_id = (int)(isset($body['account_id']) ? $body['account_id'] : $this->input->post('account_id'));
 		if ($account_id <= 0) $this->_json(array('success' => false, 'message' => 'account_id required'), 400);
@@ -4071,6 +4129,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function tag_bank_trans()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$type = isset($body['type']) ? $body['type'] : 'closing';
 		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : (isset($body['id']) ? $body['id'] : 0));
@@ -4145,6 +4204,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function untag_bank_entry()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$id = (int)(isset($body['id']) ? $body['id'] : $this->input->get('id'));
 		if ($id <= 0) $this->_json(array('success' => false, 'message' => 'id required'), 400);
@@ -4170,6 +4230,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function bank_untag()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$id = (int)(isset($body['statement_id']) ? $body['statement_id'] : (isset($body['id']) ? $body['id'] : 0));
 		$type = isset($body['untag_type']) ? $body['untag_type'] : 'auto';
@@ -4310,6 +4371,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function bank_add_expense()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['trans_id']) ? $body['trans_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : $this->input->post('trans_id')));
 		$campus_id = (int)(isset($body['ac_campus_id']) ? $body['ac_campus_id'] : (isset($body['campus_id']) ? $body['campus_id'] : $this->input->post('ac_campus_id')));
@@ -4374,6 +4436,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_find_mutual — {bank_trans_id, bank_id} */
 	public function bank_find_mutual()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$bank_id = (int)(isset($body['bank_id']) ? $body['bank_id'] : (isset($body['account_id']) ? $body['account_id'] : 0));
@@ -4416,6 +4479,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_tag_mutual — {bank_trans_id, tag_id} */
 	public function bank_tag_mutual()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : 0);
@@ -4435,6 +4499,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_find_expenses — {bank_trans_id} */
 	public function bank_find_expenses()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id required'), 400);
@@ -4470,6 +4535,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_tag_expenses — {bank_trans_id, expense_ids:[]|comma} */
 	public function bank_tag_expenses()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$ids = isset($body['expense_ids']) ? $body['expense_ids'] : (isset($body['expense_user_ids']) ? $body['expense_user_ids'] : '');
@@ -4497,6 +4563,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_find_paypro — {bank_trans_id, from_date} */
 	public function bank_find_paypro()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$from_date = isset($body['from_date']) ? $body['from_date'] : date('Y-m-d');
@@ -4526,6 +4593,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_tag_paypro — {bank_trans_id, tag_id/paypro_id, amount?} */
 	public function bank_tag_paypro()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : (isset($body['paypro_id']) ? $body['paypro_id'] : 0));
@@ -4549,6 +4617,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_cash_withdrawal — legacy add_cash_in_hand */
 	public function bank_cash_withdrawal()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['cash_trans_id']) ? $body['cash_trans_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
 		$to = (int)(isset($body['cash_account_id']) ? $body['cash_account_id'] : 0);
@@ -4588,6 +4657,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_cash_deposit — legacy add_cash_deposit */
 	public function bank_cash_deposit()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['cash_trans_id']) ? $body['cash_trans_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
 		$cash_account_id = (int)(isset($body['cash_account_id']) ? $body['cash_account_id'] : 0);
@@ -4625,6 +4695,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_council_fee — {trans_id} */
 	public function bank_council_fee()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['trans_id']) ? $body['trans_id'] : (isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0));
 		if ($trans_id <= 0) $this->_json(array('success' => false, 'message' => 'trans_id required'), 400);
@@ -4635,6 +4706,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_find_profit — {bank_trans_id, amount?} */
 	public function bank_find_profit()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id required'), 400);
@@ -4662,6 +4734,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_tag_profit — {bank_trans_id, tag_id} */
 	public function bank_tag_profit()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$profit_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : (isset($body['profit_distribution_id']) ? $body['profit_distribution_id'] : 0));
@@ -4679,6 +4752,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_find_loan — {bank_trans_id, amount?} */
 	public function bank_find_loan()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id required'), 400);
@@ -4705,6 +4779,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_tag_loan — {bank_trans_id, tag_id} — mirrors add_loan_deposit */
 	public function bank_tag_loan()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$loan_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : (isset($body['loan_id']) ? $body['loan_id'] : 0));
@@ -4784,6 +4859,7 @@ class Accountsapi extends CI_Controller {
 	/** GET/POST bank_find_salaries?expense_id= — payrolls for a salary expense */
 	public function bank_find_salaries()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$exp_id = (int)(isset($body['expense_id']) ? $body['expense_id'] : $this->input->get('expense_id'));
 		if ($exp_id <= 0) $this->_json(array('success' => false, 'message' => 'expense_id required'), 400);
@@ -4808,6 +4884,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function bank_find_salary_reverse()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$payroll_id = (int)(isset($body['payroll_id']) ? $body['payroll_id'] : (isset($body['tag_id']) ? $body['tag_id'] : 0));
@@ -4891,6 +4968,7 @@ class Accountsapi extends CI_Controller {
 	/** POST bank_tag_salary_reverse — {bank_trans_id, tag_id, payroll_id} */
 	public function bank_tag_salary_reverse()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
 		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : 0);
@@ -4919,6 +4997,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function paypro_settlements()
 	{
+		$this->_assert_section('bank_reconciliation');
 		if (!$this->_table_exists('pay_pro_settlement')) {
 			$this->_json(array('success' => true, 'settlements' => array()));
 		}
@@ -4939,6 +5018,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function paypro_settlement_entries()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$id = (int)$this->input->get('id');
 		if ($id <= 0) $this->_json(array('success' => false, 'message' => 'id required'), 400);
 		if (!$this->_table_exists('settlement_payments')) {
@@ -4958,6 +5038,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function paypro_untagged()
 	{
+		$this->_assert_section('bank_reconciliation');
 		if (!$this->_table_exists('students_payments')) {
 			$this->_json(array('success' => true, 'entries' => array()));
 		}
@@ -4982,6 +5063,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function paypro_manual_unpay()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$payment_id = (int)(isset($body['payment_id']) ? $body['payment_id'] : 0);
 		if ($payment_id <= 0) $this->_json(array('success' => false, 'message' => 'payment_id required'), 400);
@@ -4995,6 +5077,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function paypro_manual_pay()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$body = $this->_body();
 		$payment_id = (int)(isset($body['payment_id']) ? $body['payment_id'] : 0);
 		if ($payment_id <= 0) $this->_json(array('success' => false, 'message' => 'payment_id required'), 400);
@@ -5023,6 +5106,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function paypro_transactions()
 	{
+		$this->_assert_section('bank_reconciliation');
 		$from = $this->input->get('from_date');
 		$to = $this->input->get('to_date');
 		if (!$from) $from = date('Y-m-d');
@@ -5344,6 +5428,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function profit_campuses()
 	{
+		$this->_assert_section('profit_distribution');
 		$to = date('Y-m-d');
 		$sql = 'SELECT campus_id, campus_name, campus_code FROM campuses';
 		if ($this->_field_exists('campuses', 'status')) {
@@ -5385,6 +5470,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function campus_profit()
 	{
+		$this->_assert_section('profit_distribution');
 		$campus_id = (int)$this->input->get('campus_id');
 		if ($campus_id <= 0) $this->_json(array('success' => false, 'message' => 'campus_id required'), 400);
 
@@ -5592,6 +5678,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function profit_total_expenses()
 	{
+		$this->_assert_section('profit_distribution');
 		$campus_id = (int)$this->input->get('campus_id');
 		$from = $this->input->get('from');
 		if (!$from) $from = $this->input->get('from_date');
@@ -5618,6 +5705,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function profit_special_expenses()
 	{
+		$this->_assert_section('profit_distribution');
 		$campus_id = (int)$this->input->get('campus_id');
 		$from = $this->input->get('from');
 		if (!$from) $from = $this->input->get('from_date');
@@ -5641,6 +5729,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function profit_shift_fees()
 	{
+		$this->_assert_section('profit_distribution');
 		$campus_id = (int)$this->input->get('campus_id');
 		$type = $this->input->get('type');
 		if ($type !== 'earning') $type = 'deduction';
@@ -5696,6 +5785,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function profit_fee_recovery()
 	{
+		$this->_assert_section('profit_distribution');
 		$campus_id = (int)$this->input->get('campus_id');
 		$from = $this->input->get('from');
 		if (!$from) $from = $this->input->get('from_date');
@@ -5730,6 +5820,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function profit_pending_expenses()
 	{
+		$this->_assert_section('profit_distribution');
 		$campus_id = (int)$this->input->get('campus_id');
 		$from = $this->input->get('from');
 		if (!$from) $from = $this->input->get('from_date');
@@ -5776,6 +5867,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function profit_approve_expense()
 	{
+		$this->_assert_section('profit_distribution');
 		$body = $this->_body();
 		$expense_id = (int)(isset($body['expense_id']) ? $body['expense_id'] : 0);
 		$status = isset($body['status']) ? (string)$body['status'] : '1';
@@ -5816,6 +5908,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function profit_approve_all_pending()
 	{
+		$this->_assert_section('profit_distribution');
 		$body = $this->_body();
 		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
 		$from = isset($body['from']) ? $body['from'] : (isset($body['from_date']) ? $body['from_date'] : '');
@@ -5855,6 +5948,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function insert_campus_profit()
 	{
+		$this->_assert_section('profit_distribution');
 		$body = $this->_body();
 		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
 		$from_date = isset($body['from_date']) ? $body['from_date'] : (isset($body['from']) ? $body['from'] : '');
@@ -5992,6 +6086,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function misc_incomes()
 	{
+		$this->_assert_section('misc_income');
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$body = $this->_body();
 			$account = (int)(isset($body['account_id']) ? $body['account_id'] : 0);
@@ -6049,6 +6144,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function loans_accounts_queue()
 	{
+		$this->_assert_section('loan_approval_accounts');
 		if (!$this->_table_exists('loans')) {
 			$this->_json(array('success' => true, 'loans' => array()));
 		}
@@ -6086,6 +6182,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function loans_accounts_approve()
 	{
+		$this->_assert_section('loan_approval_accounts');
 		$body = $this->_body();
 		$loan_id = (int)(isset($body['id']) ? $body['id'] : (isset($body['loan_id']) ? $body['loan_id'] : 0));
 		if ($loan_id <= 0) $this->_json(array('success' => false, 'message' => 'id required'), 400);
@@ -6171,6 +6268,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function advance_staff()
 	{
+		$this->_assert_section('advance_system');
 		$rows = $this->db->query(
 			"SELECT user_id, first_name, last_name, campus_id, designation_id, department_id, status,
 					CONCAT(first_name,' ',last_name) AS name
@@ -6188,6 +6286,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function bulk_fee_meta()
 	{
+		$this->_assert_section('__admin__');
 		$campuses = $this->db->query(
 			'SELECT campus_id, campus_name FROM campuses WHERE status = 1 ORDER BY campus_name ASC'
 		)->result_array();
@@ -6210,6 +6309,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function bulk_fee_create()
 	{
+		$this->_assert_section('__admin__');
 		$body = $this->_body();
 		$class_id = (int)(isset($body['class_id']) ? $body['class_id'] : 0);
 		$fee_type = isset($body['fee_type']) ? $body['fee_type'] : 'Extra Fee';
@@ -6266,6 +6366,7 @@ class Accountsapi extends CI_Controller {
 	 */
 	public function how_to_use()
 	{
+		$this->_assert_section('how_to_use');
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$body = $this->_body();
 			$title = isset($body['title']) ? $body['title'] : '';
