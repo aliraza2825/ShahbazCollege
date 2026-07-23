@@ -31,6 +31,37 @@ class Studentsapi extends CI_Controller {
 		}
 		$this->load->model('student');
 		$this->load->model('council');
+		$this->_ensure_student_schema();
+	}
+
+	private function _ensure_student_schema()
+	{
+		if (!$this->db->table_exists('students')) return;
+		$cols = array(
+			'student_occupation_id' => 'INT NULL DEFAULT NULL',
+			'father_occupation_id' => 'INT NULL DEFAULT NULL',
+			'mother_occupation_id' => 'INT NULL DEFAULT NULL',
+			'mother_name' => 'VARCHAR(255) NULL DEFAULT NULL',
+		);
+		foreach ($cols as $col => $ddl) {
+			if (!$this->db->field_exists($col, 'students')) {
+				$this->db->query("ALTER TABLE `students` ADD `$col` $ddl");
+			}
+		}
+		$this->db->query("CREATE TABLE IF NOT EXISTS occupations (
+			occupation_id INT NOT NULL AUTO_INCREMENT,
+			occupation_name VARCHAR(255) NOT NULL,
+			sub_of INT NOT NULL DEFAULT 0,
+			has_sub TINYINT(1) NOT NULL DEFAULT 0,
+			PRIMARY KEY (occupation_id),
+			KEY sub_of (sub_of)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+	}
+
+	private function _actor_name()
+	{
+		$name = trim($this->current_user['first_name'] . ' ' . $this->current_user['last_name']);
+		return $name !== '' ? $name : 'POS';
 	}
 
 	private function _cors()
@@ -191,9 +222,25 @@ class Studentsapi extends CI_Controller {
 	public function courses()
 	{
 		$campus_id = (int)$this->input->get('campus_id');
+		$cnic = trim((string)$this->input->get('cnic'));
+		$exclude = array();
+		if ($cnic !== '') {
+			$enrolled = $this->db->query(
+				"SELECT classes.course_id FROM students
+				 JOIN classes ON classes.class_id = students.class_id
+				 WHERE students.cnic = ?",
+				array($cnic)
+			)->result_array();
+			foreach ($enrolled as $e) {
+				if (!empty($e['course_id'])) $exclude[] = (int)$e['course_id'];
+			}
+		}
 		$this->db->from('courses');
 		if ($campus_id > 0) {
 			$this->db->like('campus_ids', (string)$campus_id);
+		}
+		if (count($exclude)) {
+			$this->db->where_not_in('course_id', $exclude);
 		}
 		$this->db->order_by('course_name', 'ASC');
 		$rows = $this->db->get()->result_array();
@@ -985,5 +1032,560 @@ class Studentsapi extends CI_Controller {
 		if (!$student_id) $this->_json(array('success' => false, 'message' => 'student_id required'), 422);
 		$this->db->where(array('student_id' => $student_id, 'contract_id' => 0))->delete('payments');
 		$this->_json(array('success' => true, 'message' => 'Fee plan reset'));
+	}
+
+	// ─── Form lookups ───────────────────────────────────────
+
+	public function form_meta()
+	{
+		$contractors = $this->db->order_by('name', 'ASC')->get('contractors')->result_array();
+		$references = $this->db->get_where('reference_users', array('status' => 1))->result_array();
+		$occupation_roots = $this->db->order_by('occupation_name', 'ASC')
+			->get_where('occupations', array('sub_of' => 0))
+			->result_array();
+		$campuses = $this->db->where('status', 1)->order_by('campus_name', 'ASC')->get('campuses')->result_array();
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'permissions' => $this->_permissions(),
+				'campuses' => $campuses,
+				'contractors' => $contractors,
+				'references' => $references,
+				'occupation_roots' => $occupation_roots,
+				'religions' => array('Islam', 'Christianity', 'Hinduism', 'Sikhism', 'Other'),
+				'blood_groups' => array('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'),
+				'genders' => array('Male', 'Female'),
+				'sections' => array('First Year', 'Second Year'),
+			),
+		));
+	}
+
+	public function study_types()
+	{
+		$course_id = (int)$this->input->get('course_id');
+		$this->db->from('study_type');
+		if ($course_id > 0) $this->db->where('course_id', $course_id);
+		$this->db->order_by('name', 'ASC');
+		$this->_json(array('success' => true, 'data' => $this->db->get()->result_array()));
+	}
+
+	public function shifts()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		$study_type = (int)$this->input->get('study_type');
+		$this->db->from('shifts');
+		if ($campus_id > 0) {
+			$this->db->where("FIND_IN_SET(" . $campus_id . ", campus_id)", null, false);
+		}
+		if ($study_type > 0) $this->db->where('study_type_id', $study_type);
+		$this->db->order_by('name', 'ASC');
+		$this->_json(array('success' => true, 'data' => $this->db->get()->result_array()));
+	}
+
+	public function course_sessions()
+	{
+		$course_id = (int)$this->input->get('course_id');
+		$rows = array();
+		if ($course_id > 0 && $this->db->table_exists('course_sessions')) {
+			$rows = $this->db->get_where('course_sessions', array('course_id' => $course_id))->result_array();
+		}
+		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	public function contracts()
+	{
+		$contractor_id = (int)$this->input->get('contractor_id');
+		if (!$contractor_id) $this->_json(array('success' => true, 'data' => array()));
+		$rows = $this->db->get_where('contracts', array('contractor_id' => $contractor_id))->result_array();
+		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	/** Override classes() with for_add deadline filter via query param */
+	public function classes_for_add()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		$course_id = (int)$this->input->get('course_id');
+		$this->db->from('classes');
+		$this->db->where('status', 1);
+		$this->db->where('dead_line_entry >=', date('Y-m-d'));
+		if ($campus_id > 0) $this->db->where('campus_id', $campus_id);
+		if ($course_id > 0) $this->db->where('course_id', $course_id);
+		$class_ids = $this->_class_ids();
+		if (is_array($class_ids)) {
+			if (!count($class_ids)) $this->_json(array('success' => true, 'data' => array()));
+			$this->db->where_in('class_id', $class_ids);
+		}
+		$this->db->order_by('name', 'ASC');
+		$this->_json(array('success' => true, 'data' => $this->db->get()->result_array()));
+	}
+
+	public function check_cnic()
+	{
+		$cnic = trim((string)$this->input->get('cnic'));
+		$course_id = (int)$this->input->get('course_id');
+		$exclude = (int)$this->input->get('exclude_student_id');
+		if ($cnic === '' || !$course_id) {
+			$this->_json(array('success' => true, 'exists' => false));
+		}
+		$rows = $this->student->checkStudentNIC($cnic, $course_id);
+		if ($exclude > 0) {
+			$rows = array_values(array_filter($rows, function ($r) use ($exclude) {
+				return (int)$r['student_id'] !== $exclude;
+			}));
+		}
+		$by_cnic = $this->db->get_where('students', array('cnic' => $cnic))->row_array();
+		$this->_json(array(
+			'success' => true,
+			'exists' => count($rows) > 0,
+			'existing_for_course' => $rows,
+			'prefill' => $by_cnic ? $by_cnic : null,
+		));
+	}
+
+	// ─── Occupations ────────────────────────────────────────
+
+	public function occupations()
+	{
+		$method = $_SERVER['REQUEST_METHOD'];
+		if ($method === 'POST') {
+			$body = $this->_body();
+			$name = isset($body['occupation_name']) ? trim($body['occupation_name']) : '';
+			$sub_of = isset($body['sub_of']) ? (int)$body['sub_of'] : 0;
+			if ($name === '') $this->_json(array('success' => false, 'message' => 'occupation_name required'), 422);
+			$this->db->insert('occupations', array(
+				'occupation_name' => $name,
+				'has_sub' => 0,
+				'sub_of' => $sub_of,
+			));
+			$id = (int)$this->db->insert_id();
+			if ($sub_of > 0) {
+				$this->db->where('occupation_id', $sub_of)->update('occupations', array('has_sub' => 1));
+			}
+			$this->_json(array('success' => true, 'id' => $id));
+		}
+
+		$parent_id = $this->input->get('parent_id');
+		$tree = $this->input->get('tree');
+		if ($tree === '1' || $tree === 'true') {
+			$roots = $this->db->order_by('occupation_name', 'ASC')
+				->get_where('occupations', array('sub_of' => 0))
+				->result_array();
+			foreach ($roots as &$r) {
+				$r['children'] = $this->_occupation_children((int)$r['occupation_id']);
+			}
+			$this->_json(array('success' => true, 'data' => $roots));
+		}
+		if ($parent_id === null || $parent_id === '') {
+			$rows = $this->db->order_by('occupation_name', 'ASC')
+				->get_where('occupations', array('sub_of' => 0))
+				->result_array();
+		} else {
+			$rows = $this->db->order_by('occupation_name', 'ASC')
+				->get_where('occupations', array('sub_of' => (int)$parent_id))
+				->result_array();
+		}
+		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	private function _occupation_children($parent_id)
+	{
+		$rows = $this->db->order_by('occupation_name', 'ASC')
+			->get_where('occupations', array('sub_of' => $parent_id))
+			->result_array();
+		foreach ($rows as &$r) {
+			$r['children'] = $this->_occupation_children((int)$r['occupation_id']);
+		}
+		return $rows;
+	}
+
+	public function occupation($id = 0)
+	{
+		$id = (int)$id;
+		$row = $this->db->get_where('occupations', array('occupation_id' => $id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$method = $_SERVER['REQUEST_METHOD'];
+		if ($method === 'PUT' || $method === 'POST') {
+			$body = $this->_body();
+			$name = isset($body['occupation_name']) ? trim($body['occupation_name']) : '';
+			if ($name === '') $this->_json(array('success' => false, 'message' => 'occupation_name required'), 422);
+			$this->db->where('occupation_id', $id)->update('occupations', array('occupation_name' => $name));
+			$this->_json(array('success' => true, 'message' => 'Updated'));
+		}
+		$path = $this->_occupation_path($id);
+		$this->_json(array('success' => true, 'data' => $row, 'path' => $path));
+	}
+
+	private function _occupation_path($id)
+	{
+		$path = array();
+		$cur = (int)$id;
+		$guard = 0;
+		while ($cur > 0 && $guard < 20) {
+			$row = $this->db->get_where('occupations', array('occupation_id' => $cur))->row_array();
+			if (!$row) break;
+			array_unshift($path, $row);
+			$cur = (int)$row['sub_of'];
+			$guard++;
+		}
+		return $path;
+	}
+
+	private function _occupation_label($id)
+	{
+		if (!$id) return null;
+		$path = $this->_occupation_path((int)$id);
+		$names = array();
+		foreach ($path as $p) $names[] = $p['occupation_name'];
+		return count($names) ? implode(' → ', $names) : null;
+	}
+
+	// ─── Student create / read / update ─────────────────────
+
+	public function create()
+	{
+		if (!$this->_perm('student_add')) {
+			$this->_json(array('success' => false, 'message' => 'No permission to add student'), 403);
+		}
+		$body = $this->_body();
+		$cnic = isset($body['cnic']) ? trim($body['cnic']) : '';
+		$course_id = isset($body['course_id']) ? (int)$body['course_id'] : 0;
+		$class_id = isset($body['class_id']) ? (int)$body['class_id'] : 0;
+		$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+
+		if ($cnic === '' || !$course_id || !$class_id || !$campus_id) {
+			$this->_json(array('success' => false, 'message' => 'cnic, campus_id, course_id, class_id required'), 422);
+		}
+		$dup = $this->student->checkStudentNIC($cnic, $course_id);
+		if (count($dup) > 0) {
+			$this->_json(array('success' => false, 'message' => 'Student with CNIC ' . $cnic . ' is already added for this course'), 422);
+		}
+
+		$required = array('first_name', 'last_name', 'father_name', 'gender', 'study_campus', 'password', 'mobile', 'address');
+		foreach ($required as $f) {
+			if (!isset($body[$f]) || trim((string)$body[$f]) === '') {
+				$this->_json(array('success' => false, 'message' => $f . ' is required'), 422);
+			}
+		}
+
+		$course = $this->db->get_where('courses', array('course_id' => $course_id))->row();
+		$class = $this->db->get_where('classes', array('class_id' => $class_id))->row();
+		if (!$course || !$class) $this->_json(array('success' => false, 'message' => 'Invalid course/class'), 422);
+		if (!empty($class->dead_line_entry) && $class->dead_line_entry < date('Y-m-d')) {
+			$this->_json(array('success' => false, 'message' => 'Class admission deadline has passed'), 422);
+		}
+		$campus = $this->db->get_where('campuses', array('campus_id' => $class->campus_id))->row();
+		$count_row = $this->db->select('MAX(count) as count', false)->get_where('students', array('class_id' => $class_id))->row();
+		$student_count = ($count_row && $count_row->count !== null) ? ((int)$count_row->count + 1) : 1;
+		$roll_no = $student_count . '-' . $class->badge_no . '-' . $course->course_code . '-' . $campus->roll_no_code;
+
+		$contractor_id = isset($body['contractor_id']) ? (int)$body['contractor_id'] : 0;
+		$contract_id = isset($body['contract_id']) ? (int)$body['contract_id'] : 0;
+		if ($contractor_id === 0 || $contract_id === 0) {
+			$contractor_id = 0;
+			$contract_id = 0;
+		}
+
+		$notes = isset($body['notes']) ? $body['notes'] : (isset($body['note']) ? $body['note'] : array());
+		if (!is_array($notes)) $notes = array($notes);
+
+		$data = array(
+			'course_id' => $course_id,
+			'study_campus' => (int)$body['study_campus'],
+			'first_name' => trim($body['first_name']),
+			'last_name' => trim($body['last_name']),
+			'father_name' => trim($body['father_name']),
+			'mother_name' => isset($body['mother_name']) ? trim($body['mother_name']) : null,
+			'gender' => $body['gender'],
+			'caste' => isset($body['caste']) ? $body['caste'] : '',
+			'religion' => isset($body['religion']) ? $body['religion'] : '',
+			'qualification' => isset($body['qualification']) ? $body['qualification'] : '',
+			'class_id' => $class_id,
+			'roll_no' => $roll_no,
+			'email' => isset($body['email']) ? $body['email'] : '',
+			'cnic' => $cnic,
+			'date_of_birth' => isset($body['date_of_birth']) ? $body['date_of_birth'] : null,
+			'count' => $student_count,
+			'district' => isset($body['district']) ? $body['district'] : '',
+			'tehsil' => isset($body['tehsil']) ? $body['tehsil'] : '',
+			'mark_of_identification' => isset($body['mark_of_identification']) ? $body['mark_of_identification'] : '',
+			'place_of_birth' => isset($body['place_of_birth']) ? $body['place_of_birth'] : '',
+			'registration_date' => !empty($body['registration_date']) ? $body['registration_date'] : date('Y-m-d'),
+			'total_fee' => isset($body['total_fee']) ? (float)$body['total_fee'] : 0,
+			'current_session_fee' => 0,
+			'blood_group' => isset($body['blood_group']) ? $body['blood_group'] : '',
+			'city' => isset($body['city']) ? $body['city'] : '',
+			'address' => trim($body['address']),
+			'mobile' => trim($body['mobile']),
+			'emergency_no' => isset($body['emergency_no']) ? $body['emergency_no'] : '',
+			'status' => '1',
+			'contractor_id' => $contractor_id,
+			'contract_id' => $contract_id,
+			'board' => isset($body['board']) ? $body['board'] : '',
+			'section' => isset($body['section']) ? $body['section'] : '',
+			'shift' => isset($body['shift']) ? $body['shift'] : '',
+			'study_type' => isset($body['study_type']) ? $body['study_type'] : '',
+			'books_1' => !empty($body['books_1']) ? 1 : 0,
+			'books_2' => !empty($body['books_2']) ? 1 : 0,
+			'student_card' => !empty($body['student_card']) ? 1 : 0,
+			'password' => md5((string)$body['password']),
+			'notes' => json_encode($notes),
+			'add_by' => $this->_actor_name(),
+			'last_edit' => $this->_actor_name(),
+			'entry_date' => date('Y-m-d'),
+			'reference_user_id' => isset($body['reference_user_id']) ? (int)$body['reference_user_id'] : 0,
+			'student_occupation_id' => !empty($body['student_occupation_id']) ? (int)$body['student_occupation_id'] : null,
+			'father_occupation_id' => !empty($body['father_occupation_id']) ? (int)$body['father_occupation_id'] : null,
+			'mother_occupation_id' => !empty($body['mother_occupation_id']) ? (int)$body['mother_occupation_id'] : null,
+		);
+
+		$student_id = $this->student->storeStudent($data);
+
+		// Machine ID (legacy logic)
+		$campus_row = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
+		if ($campus_row) {
+			$sql = 'SELECT machine_id FROM machine_data WHERE campus_id=' . (int)$campus_id . ' ORDER BY machine_id DESC LIMIT 1';
+			$query = $this->db->query($sql)->result_array();
+			$last = 1;
+			if (count($query) && !empty($query[0]['machine_id'])) {
+				$last_machine_id = substr($query[0]['machine_id'], 0, -2);
+				$last = ((int)$last_machine_id) + 1;
+			}
+			$this->db->insert('machine_data', array(
+				'teacher_student_id' => $student_id,
+				'machine_id' => $last . $campus_row['campus_code'],
+				'type' => 'student',
+				'campus_id' => $campus_id,
+			));
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'id' => (int)$student_id,
+			'roll_no' => $roll_no,
+			'message' => 'Student added successfully',
+			'next' => '/students/payments/' . $student_id,
+		));
+	}
+
+	public function student($id = 0)
+	{
+		$id = (int)$id;
+		$row = $this->student->editStudent($id);
+		if (!count($row)) $this->_json(array('success' => false, 'message' => 'Student not found'), 404);
+		$s = $row[0];
+
+		$method = $_SERVER['REQUEST_METHOD'];
+		if ($method === 'PUT' || ($method === 'POST' && $this->input->get('update'))) {
+			$this->_update_student($id, $this->_body(), $s);
+		}
+
+		$s['student_occupation_label'] = $this->_occupation_label(isset($s['student_occupation_id']) ? $s['student_occupation_id'] : 0);
+		$s['father_occupation_label'] = $this->_occupation_label(isset($s['father_occupation_id']) ? $s['father_occupation_id'] : 0);
+		$s['mother_occupation_label'] = $this->_occupation_label(isset($s['mother_occupation_id']) ? $s['mother_occupation_id'] : 0);
+		$s['student_occupation_path'] = !empty($s['student_occupation_id']) ? $this->_occupation_path((int)$s['student_occupation_id']) : array();
+		$s['father_occupation_path'] = !empty($s['father_occupation_id']) ? $this->_occupation_path((int)$s['father_occupation_id']) : array();
+		$s['mother_occupation_path'] = !empty($s['mother_occupation_id']) ? $this->_occupation_path((int)$s['mother_occupation_id']) : array();
+
+		$notes = array();
+		if (!empty($s['notes'])) {
+			$decoded = json_decode($s['notes'], true);
+			$notes = is_array($decoded) ? $decoded : array($s['notes']);
+		}
+		$s['notes_list'] = $notes;
+
+		$pending = $this->db->get_where('update_student_requests', array('student_id' => $id, 'ok_by_admin' => 0))->result_array();
+
+		$this->_json(array(
+			'success' => true,
+			'data' => $s,
+			'pending_update_request' => count($pending) > 0,
+			'permissions' => $this->_permissions(),
+		));
+	}
+
+	private function _update_student($id, $body, $current)
+	{
+		if (!$this->_perm('student_edit')) {
+			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
+		}
+		$pending = $this->db->get_where('update_student_requests', array('student_id' => $id, 'ok_by_admin' => 0))->result_array();
+		if (count($pending) > 0) {
+			$this->_json(array('success' => false, 'message' => 'This Student update Request already exists. Contact Control Center.'), 422);
+		}
+
+		$class_id = isset($body['class_id']) ? (int)$body['class_id'] : (int)$current['class_id'];
+		$check_class = $this->db->get_where('classes', array('class_id' => $class_id))->row_array();
+		if (!$check_class) $this->_json(array('success' => false, 'message' => 'Invalid class'), 422);
+
+		$class_changed = ((int)$current['class_id'] !== $class_id);
+		if ($class_changed && $check_class['dead_line_entry'] < date('Y-m-d')) {
+			$this->_json(array('success' => false, 'message' => 'Cannot change class — admission deadline passed'), 422);
+		}
+
+		$contractor_id = isset($body['contractor_id']) ? (int)$body['contractor_id'] : 0;
+		$contract_id = isset($body['contract_id']) ? (int)$body['contract_id'] : 0;
+		if ($contractor_id === 0 || $contract_id === 0) {
+			$contractor_id = 0;
+			$contract_id = 0;
+		}
+
+		$password = !empty($body['password'])
+			? md5((string)$body['password'])
+			: (isset($current['password']) ? $current['password'] : '');
+
+		$notes = isset($body['notes']) ? $body['notes'] : (isset($body['note']) ? $body['note'] : array());
+		if (!is_array($notes)) $notes = array($notes);
+
+		$roll_no = isset($body['roll_no']) ? $body['roll_no'] : $current['roll_no'];
+		$count = isset($current['count']) ? $current['count'] : 0;
+		if ($class_changed) {
+			$course = $this->db->get_where('courses', array('course_id' => (int)$body['course_id']))->row();
+			$class = $this->db->get_where('classes', array('class_id' => $class_id))->row();
+			$campus = $this->db->get_where('campuses', array('campus_id' => $class->campus_id))->row();
+			$count_row = $this->db->select('MAX(count) as count', false)->get_where('students', array('class_id' => $class_id))->row();
+			$count = ($count_row && $count_row->count !== null) ? ((int)$count_row->count + 1) : 1;
+			$roll_no = $count . '-' . $class->badge_no . '-' . $course->course_code . '-' . $campus->roll_no_code;
+		}
+
+		$data = array(
+			'course_id' => isset($body['course_id']) ? (int)$body['course_id'] : $current['course_id'],
+			'study_campus' => isset($body['study_campus']) ? (int)$body['study_campus'] : $current['study_campus'],
+			'first_name' => isset($body['first_name']) ? trim($body['first_name']) : $current['first_name'],
+			'last_name' => isset($body['last_name']) ? trim($body['last_name']) : $current['last_name'],
+			'father_name' => isset($body['father_name']) ? trim($body['father_name']) : $current['father_name'],
+			'mother_name' => array_key_exists('mother_name', $body) ? trim((string)$body['mother_name']) : (isset($current['mother_name']) ? $current['mother_name'] : null),
+			'gender' => isset($body['gender']) ? $body['gender'] : $current['gender'],
+			'caste' => isset($body['caste']) ? $body['caste'] : $current['caste'],
+			'religion' => isset($body['religion']) ? $body['religion'] : $current['religion'],
+			'qualification' => isset($body['qualification']) ? $body['qualification'] : $current['qualification'],
+			'class_id' => $class_id,
+			'email' => isset($body['email']) ? $body['email'] : $current['email'],
+			'cnic' => isset($body['cnic']) ? trim($body['cnic']) : $current['cnic'],
+			'roll_no' => $roll_no,
+			'count' => $count,
+			'date_of_birth' => isset($body['date_of_birth']) ? $body['date_of_birth'] : $current['date_of_birth'],
+			'district' => isset($body['district']) ? $body['district'] : $current['district'],
+			'tehsil' => isset($body['tehsil']) ? $body['tehsil'] : $current['tehsil'],
+			'mark_of_identification' => isset($body['mark_of_identification']) ? $body['mark_of_identification'] : $current['mark_of_identification'],
+			'place_of_birth' => isset($body['place_of_birth']) ? $body['place_of_birth'] : $current['place_of_birth'],
+			'registration_date' => isset($body['registration_date']) ? $body['registration_date'] : $current['registration_date'],
+			'total_fee' => isset($body['total_fee']) ? $body['total_fee'] : $current['total_fee'],
+			'blood_group' => isset($body['blood_group']) ? $body['blood_group'] : $current['blood_group'],
+			'city' => isset($body['city']) ? $body['city'] : $current['city'],
+			'address' => isset($body['address']) ? $body['address'] : $current['address'],
+			'mobile' => isset($body['mobile']) ? $body['mobile'] : $current['mobile'],
+			'emergency_no' => isset($body['emergency_no']) ? $body['emergency_no'] : $current['emergency_no'],
+			'status' => isset($body['status']) ? $body['status'] : $current['status'],
+			'contractor_id' => $contractor_id,
+			'contract_id' => $contract_id,
+			'board' => isset($body['board']) ? $body['board'] : $current['board'],
+			'section' => isset($body['section']) ? $body['section'] : $current['section'],
+			'shift' => isset($body['shift']) ? $body['shift'] : $current['shift'],
+			'study_type' => isset($body['study_type']) ? $body['study_type'] : $current['study_type'],
+			'study_session' => isset($body['study_session']) ? $body['study_session'] : (isset($current['study_session']) ? $current['study_session'] : ''),
+			'books_1' => !empty($body['books_1']) ? 1 : 0,
+			'books_2' => !empty($body['books_2']) ? 1 : 0,
+			'student_card' => !empty($body['student_card']) ? 1 : 0,
+			'password' => $password,
+			'notes' => json_encode($notes),
+			'last_edit' => $this->_actor_name(),
+			'reference_user_id' => isset($body['reference_user_id']) ? (int)$body['reference_user_id'] : $current['reference_user_id'],
+			'student_occupation_id' => array_key_exists('student_occupation_id', $body)
+				? (!empty($body['student_occupation_id']) ? (int)$body['student_occupation_id'] : null)
+				: (isset($current['student_occupation_id']) ? $current['student_occupation_id'] : null),
+			'father_occupation_id' => array_key_exists('father_occupation_id', $body)
+				? (!empty($body['father_occupation_id']) ? (int)$body['father_occupation_id'] : null)
+				: (isset($current['father_occupation_id']) ? $current['father_occupation_id'] : null),
+			'mother_occupation_id' => array_key_exists('mother_occupation_id', $body)
+				? (!empty($body['mother_occupation_id']) ? (int)$body['mother_occupation_id'] : null)
+				: (isset($current['mother_occupation_id']) ? $current['mother_occupation_id'] : null),
+		);
+
+		$sensitive = (
+			$current['cnic'] != $data['cnic']
+			|| $current['class_id'] != $data['class_id']
+			|| $current['first_name'] != $data['first_name']
+			|| $current['last_name'] != $data['last_name']
+			|| $current['contractor_id'] != $data['contractor_id']
+			|| $current['contract_id'] != $data['contract_id']
+		);
+
+		if ($sensitive) {
+			foreach ($data as $k => $value) {
+				$this->db->set($k, $value);
+			}
+			$this->db->set('student_id', $id);
+			$this->db->insert('update_student_requests');
+			$this->_json(array(
+				'success' => true,
+				'request' => true,
+				'message' => 'Student update request submitted successfully',
+			));
+		}
+
+		$this->db->where('student_id', $id)->update('students', $data);
+		$this->_json(array('success' => true, 'request' => false, 'message' => 'Student updated successfully'));
+	}
+
+	public function payments($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$payments = $this->db->order_by('dead_line', 'ASC')->get_where('payments', array('student_id' => $student_id))->result_array();
+		$plans = array();
+		if (!empty($student['course_id'])) {
+			$plans = $this->db->get_where('fee_rules', array('course_id' => $student['course_id']))->result_array();
+		}
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => $student,
+				'payments' => $payments,
+				'plans' => $plans,
+				'has_plan' => !empty($student['plan_id']) || count($payments) > 0,
+			),
+			'legacy_base' => $this->_legacy_base(),
+		));
+	}
+
+	public function documents($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$docs = $this->db->get_where('student_documents', array('student_id' => $student_id))->result_array();
+		foreach ($docs as &$d) {
+			$d['url'] = $this->_doc_url($d);
+		}
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => $student,
+				'documents' => $docs,
+				'types' => array(
+					'ID Card', 'B - FORM', 'Photo', 'Result Card', 'Signature', 'Thumb',
+					'College Form', 'Rules and Regulation Form', 'Fee Structure Form', 'Other',
+				),
+			),
+			'legacy_base' => $this->_legacy_base(),
+		));
+	}
+
+	public function purchased($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		$rows = array();
+		if ($this->db->table_exists('orders')) {
+			$this->db->from('orders');
+			$this->db->where('student_id', $student_id);
+			$this->db->order_by('order_id', 'DESC');
+			$rows = $this->db->get()->result_array();
+		}
+		$this->_json(array(
+			'success' => true,
+			'data' => $rows,
+			'legacy_base' => $this->_legacy_base(),
+		));
 	}
 }
