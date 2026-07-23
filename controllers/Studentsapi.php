@@ -268,8 +268,9 @@ class Studentsapi extends CI_Controller {
 	}
 
 	/**
-	 * Main All Students report dispatcher.
-	 * Body mirrors legacy POST: campus_id, course_id, class_id, type, search_type, council_exam_no, class (year 1|2)
+	 * Main All Students report dispatcher (paginated + batched).
+	 * Body: campus_id, course_id, class_id, type, search_type, council_exam_no, class,
+	 *       page (1-based), page_size (default 25, max 100), q (optional search)
 	 */
 	public function all_students()
 	{
@@ -281,6 +282,12 @@ class Studentsapi extends CI_Controller {
 		$class_id = isset($body['class_id']) ? (int)$body['class_id'] : 0;
 		$council_exam_no = isset($body['council_exam_no']) ? trim($body['council_exam_no']) : '';
 		$year_class = isset($body['class']) ? trim($body['class']) : '1';
+		$q = isset($body['q']) ? trim($body['q']) : '';
+		$page = max(1, isset($body['page']) ? (int)$body['page'] : 1);
+		$page_size = isset($body['page_size']) ? (int)$body['page_size'] : 25;
+		if ($page_size < 10) $page_size = 10;
+		if ($page_size > 100) $page_size = 100;
+		$offset = ($page - 1) * $page_size;
 
 		$allowed = array(
 			'active', 'pass', 'both', 'blacklist', 'councel_list', 'archived',
@@ -303,77 +310,104 @@ class Studentsapi extends CI_Controller {
 			));
 		}
 
+		$pager = array(
+			'page' => $page,
+			'page_size' => $page_size,
+			'total' => 0,
+			'total_pages' => 0,
+		);
+
 		if ($search_type === 'councilwise_roll_no') {
-			$data = $this->_report_councilwise_roll_no($campus_id, $council_exam_no, $year_class);
-			$this->_json(array(
-				'success' => true,
-				'type' => $type,
-				'search_type' => $search_type,
-				'data' => $data,
-				'permissions' => $this->_permissions(),
-				'legacy_base' => $this->_legacy_base(),
-				'asset_base' => $this->_asset_base(),
-			));
+			$pack = $this->_report_councilwise_roll_no($campus_id, $council_exam_no, $year_class, $offset, $page_size);
+			$pager['total'] = $pack['total'];
+			$pager['total_pages'] = $page_size > 0 ? (int)ceil($pack['total'] / $page_size) : 1;
+			$this->_json($this->_report_response($type, $search_type, $pack['rows'], $body, array('pagination' => $pager)));
 		}
 
 		if ($type === 'archived') {
-			$rows = $this->_fetch_archived($campus_id, $class_id);
-			$rows = $this->_enrich_archived($rows);
-			$this->_json($this->_report_response($type, $search_type, $rows, $body));
+			$pack = $this->_fetch_archived($campus_id, $class_id, $q, $offset, $page_size);
+			$rows = $this->_enrich_archived($pack['rows']);
+			$pager['total'] = $pack['total'];
+			$pager['total_pages'] = (int)ceil($pack['total'] / $page_size);
+			$this->_json($this->_report_response($type, $search_type, $rows, $body, array('pagination' => $pager)));
 		}
 
 		if ($type === 'using_app') {
-			$rows = $this->_fetch_active_basic($campus_id, $class_id);
-			$rows = $this->_enrich_using_app($rows);
-			$this->_json($this->_report_response($type, $search_type, $rows, $body));
+			$pack = $this->_fetch_active_basic($campus_id, $class_id, $q, $offset, $page_size);
+			$rows = $this->_enrich_using_app($pack['rows']);
+			$pager['total'] = $pack['total'];
+			$pager['total_pages'] = (int)ceil($pack['total'] / $page_size);
+			$this->_json($this->_report_response($type, $search_type, $rows, $body, array('pagination' => $pager)));
 		}
 
 		if ($type === 'councel_list') {
 			if (!$class_id) $this->_json(array('success' => false, 'message' => 'class_id required for councel list'), 422);
-			$rows = $this->council->getClassStudents($class_id);
-			$rows = $this->_enrich_council_list($rows);
+			$pack = $this->_fetch_council_list($class_id, $q, $offset, $page_size);
+			$rows = $this->_enrich_council_list($pack['rows']);
+			$pager['total'] = $pack['total'];
+			$pager['total_pages'] = (int)ceil($pack['total'] / $page_size);
 			$this->_json($this->_report_response($type, $search_type, $rows, $body, array(
 				'class_id' => $class_id,
 				'campus_id' => $campus_id,
+				'pagination' => $pager,
 			)));
 		}
 
-		// Default path: getStudents-equivalent
-		$students = $this->_fetch_students($campus_id, $course_id, $class_id, $search_type, $council_exam_no);
+		// Active / pass / both / blacklist / shift / studentdetail
+		$fetch_type = $type;
+		if ($type === 'both') $fetch_type = 'active';
 
-		if ($type === 'blacklist') {
-			$rows = $this->_filter_blacklist($students);
-			$this->_json($this->_report_response($type, $search_type, $rows, $body));
+		$extra = array();
+		if ($type === 'shift') {
+			$extra['shift_studytype_counts'] = $this->_shift_counts($campus_id, $course_id, $class_id, $search_type, $council_exam_no);
 		}
 
-		if ($type === 'pass') {
-			$students = $this->_filter_pass($students);
-		} elseif ($type === 'shift') {
-			$filtered = $this->_filter_shift($students);
-			$students = $filtered['rows'];
-			$extra = array('shift_studytype_counts' => $filtered['counts']);
-			$students = $this->_enrich_shift($students);
-			$this->_json($this->_report_response($type, $search_type, $students, $body, $extra));
-		} elseif ($type === 'studentdetail') {
+		if ($type === 'studentdetail') {
+			// Full detail is heavy — keep page small and only enrich the page
+			$page_size = min($page_size, 50);
+			$offset = ($page - 1) * $page_size;
+			$pack = $this->_fetch_students_paged($campus_id, $course_id, $class_id, $search_type, $council_exam_no, 'active', $q, $offset, $page_size);
 			$range = $this->_detail_date_range($class_id);
 			$months = $this->_month_list($range['startdate'], $range['enddate']);
-			$detail = $this->_enrich_studentdetail($students, $months);
+			// Cap months to avoid huge matrices
+			if (count($months) > 36) $months = array_slice($months, -36);
+			$detail = $this->_enrich_studentdetail($pack['rows'], $months);
+			$pager['total'] = $pack['total'];
+			$pager['page_size'] = $page_size;
+			$pager['total_pages'] = (int)ceil($pack['total'] / $page_size);
 			$this->_json($this->_report_response($type, $search_type, $detail['rows'], $body, array(
 				'startdate' => $range['startdate'],
 				'enddate' => $range['enddate'],
 				'months' => $months,
 				'footer_must' => $detail['footer_must'],
 				'footer_paid' => $detail['footer_paid'],
+				'pagination' => $pager,
 			)));
 		}
 
-		// active / both / pass (after filter)
-		$rows = $this->_enrich_default($students);
-		$this->_json($this->_report_response($type, $search_type, $rows, $body));
+		$pack = $this->_fetch_students_paged(
+			$campus_id, $course_id, $class_id, $search_type, $council_exam_no,
+			$fetch_type === 'blacklist' ? 'blacklist' : ($fetch_type === 'pass' ? 'pass' : ($fetch_type === 'shift' ? 'shift' : 'active')),
+			$q, $offset, $page_size
+		);
+
+		if ($type === 'blacklist') {
+			$rows = $this->_enrich_blacklist_page($pack['rows']);
+		} elseif ($type === 'shift') {
+			$rows = $this->_enrich_shift($pack['rows']);
+		} else {
+			$rows = $this->_enrich_default($pack['rows']);
+		}
+
+		$pager['total'] = $pack['total'];
+		$pager['total_pages'] = max(1, (int)ceil($pack['total'] / $page_size));
+		$extra['pagination'] = $pager;
+		$this->_json($this->_report_response($type, $search_type, $rows, $body, $extra));
 	}
 
 	private function _report_response($type, $search_type, $rows, $body, $extra = array())
 	{
+		$total = isset($extra['pagination']['total']) ? (int)$extra['pagination']['total'] : count($rows);
 		return array_merge(array(
 			'success' => true,
 			'type' => $type,
@@ -385,7 +419,7 @@ class Studentsapi extends CI_Controller {
 				'council_exam_no' => isset($body['council_exam_no']) ? $body['council_exam_no'] : '',
 			),
 			'data' => $rows,
-			'count' => count($rows),
+			'count' => $total,
 			'permissions' => $this->_permissions(),
 			'legacy_base' => $this->_legacy_base(),
 			'asset_base' => $this->_asset_base(),
@@ -421,91 +455,273 @@ class Studentsapi extends CI_Controller {
 		);
 	}
 
-	// ─── Fetchers ───────────────────────────────────────────
+	// ─── Fetchers (paginated, no cartesian payment joins) ───
 
-	private function _fetch_students($campus_id, $course_id, $class_id, $search_type, $council_exam_no)
+	private function _apply_student_scope($campus_id, $course_id, $class_id)
 	{
-		$class_ids = $this->_class_ids();
-
-		if ($search_type === 'councilwise') {
-			$this->db->select('students.*, classes.name as class_name, classes.session as session, campuses.campus_name, courses.course_name, machine_data.machine_id', false);
-			$this->db->from('students');
-			$this->db->join('payments', 'payments.custom_student_id=students.student_id', 'left');
-			$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
-			$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
-			$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
-			$this->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id', 'left');
-			$this->db->like('payments.payment_comment', 'This fee for next exam # ' . $council_exam_no, 'both');
-			$this->db->where(array('students.status' => '1', 'payments.paid' => '1'));
-		} else {
-			$this->db->select('students.*, classes.name as class_name, classes.session as session, campuses.campus_name, courses.course_name, machine_data.machine_id', false);
-			$this->db->from('students');
-			$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
-			$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
-			$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
-			$this->db->join('payments', 'payments.student_id = students.student_id', 'left');
-			$this->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id', 'left');
-			$this->db->where(array('students.status' => '1'));
-		}
-
 		if ($campus_id > 0) $this->db->where('classes.campus_id', $campus_id);
-		if ($course_id > 0) $this->db->where('courses.course_id', $course_id);
-		if ($class_id > 0) $this->db->where('classes.class_id', $class_id);
+		if ($course_id > 0) $this->db->where('students.course_id', $course_id);
+		if ($class_id > 0) $this->db->where('students.class_id', $class_id);
+		$class_ids = $this->_class_ids();
 		if (is_array($class_ids)) {
-			if (!count($class_ids)) return array();
+			if (!count($class_ids)) return false;
 			$this->db->where_in('students.class_id', $class_ids);
 		}
-		$this->db->group_by('students.student_id');
-		$this->db->order_by('students.roll_no', 'asc');
-		return $this->db->get()->result_array();
+		return true;
 	}
 
-	private function _fetch_archived($campus_id, $class_id)
+	private function _apply_search_q($q)
 	{
+		if ($q === '') return;
+		$this->db->group_start();
+		$this->db->like('students.first_name', $q);
+		$this->db->or_like('students.last_name', $q);
+		$this->db->or_like('students.father_name', $q);
+		$this->db->or_like('students.cnic', $q);
+		$this->db->or_like('students.roll_no', $q);
+		$this->db->or_like('students.mobile', $q);
+		$this->db->group_end();
+	}
+
+	private function _apply_type_sql($type)
+	{
+		if ($type === 'pass') {
+			$this->db->where(
+				"EXISTS (
+					SELECT 1 FROM punjab_council_roll_number p
+					WHERE p.cnic = students.cnic AND p.class = '2'
+					AND p.result_remarks IN ('Pass','Pass*')
+				)",
+				null,
+				false
+			);
+		} elseif ($type === 'blacklist') {
+			$one_month = date('Y-m-d', strtotime('-1 month'));
+			$this->db->where(
+				"EXISTS (
+					SELECT 1 FROM payments p
+					WHERE p.student_id = students.student_id
+					AND p.paid = 0 AND p.dead_line < " . $this->db->escape($one_month) . "
+				)",
+				null,
+				false
+			);
+		} elseif ($type === 'shift') {
+			// Hide if any non-2nd-year roll with remarks != Pass
+			$this->db->where(
+				"NOT EXISTS (
+					SELECT 1 FROM punjab_council_roll_number p
+					WHERE p.cnic = students.cnic
+					AND p.class != '2'
+					AND (p.result_remarks IS NULL OR p.result_remarks != 'Pass')
+				)",
+				null,
+				false
+			);
+		}
+	}
+
+	/**
+	 * @return array{rows: array, total: int}
+	 */
+	private function _fetch_students_paged($campus_id, $course_id, $class_id, $search_type, $council_exam_no, $type, $q, $offset, $limit)
+	{
+		$class_ids = $this->_class_ids();
+		if (is_array($class_ids) && !count($class_ids)) {
+			return array('rows' => array(), 'total' => 0);
+		}
+
+		// COUNT
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		if ($search_type === 'councilwise') {
+			$this->db->join('payments', 'payments.custom_student_id=students.student_id', 'inner');
+			$this->db->like('payments.payment_comment', 'This fee for next exam # ' . $council_exam_no, 'both');
+			$this->db->where(array('students.status' => '1', 'payments.paid' => '1'));
+			$this->db->group_by('students.student_id');
+		} else {
+			$this->db->where('students.status', '1');
+		}
+		if (!$this->_apply_student_scope($campus_id, $course_id, $class_id)) {
+			return array('rows' => array(), 'total' => 0);
+		}
+		$this->_apply_type_sql($type);
+		$this->_apply_search_q($q);
+
+		if ($search_type === 'councilwise') {
+			$total = count($this->db->select('students.student_id')->get()->result_array());
+		} else {
+			$total = (int)$this->db->count_all_results();
+		}
+
+		if ($total < 1) return array('rows' => array(), 'total' => 0);
+
+		// PAGE ROWS — no payments join (avoids cartesian blow-up)
+		$this->db->select('students.*, classes.name as class_name, classes.session as session, campuses.campus_name, courses.course_name, machine_data.machine_id', false);
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
+		$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
+		$this->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id AND machine_data.type="student"', 'left');
+		if ($search_type === 'councilwise') {
+			$this->db->join('payments', 'payments.custom_student_id=students.student_id', 'inner');
+			$this->db->like('payments.payment_comment', 'This fee for next exam # ' . $council_exam_no, 'both');
+			$this->db->where(array('students.status' => '1', 'payments.paid' => '1'));
+			$this->db->group_by('students.student_id');
+		} else {
+			$this->db->where('students.status', '1');
+		}
+		$this->_apply_student_scope($campus_id, $course_id, $class_id);
+		$this->_apply_type_sql($type);
+		$this->_apply_search_q($q);
+		$this->db->order_by('CAST(students.roll_no AS UNSIGNED)', 'ASC', false);
+		$this->db->order_by('students.roll_no', 'ASC');
+		$this->db->limit($limit, $offset);
+		$rows = $this->db->get()->result_array();
+
+		return array('rows' => $rows, 'total' => $total);
+	}
+
+	private function _fetch_archived($campus_id, $class_id, $q = '', $offset = 0, $limit = 25)
+	{
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'inner');
+		$this->db->where('students.status', '0');
+		if ($class_id > 0) $this->db->where('students.class_id', $class_id);
+		elseif ($campus_id > 0) $this->db->where('campuses.campus_id', $campus_id);
+		$class_ids = $this->_class_ids();
+		if (is_array($class_ids)) {
+			if (!count($class_ids)) return array('rows' => array(), 'total' => 0);
+			$this->db->where_in('students.class_id', $class_ids);
+		}
+		$this->_apply_search_q($q);
+		$total = (int)$this->db->count_all_results();
+
 		$this->db->select('students.*, classes.name as class_name, classes.admission_fee as freeze_fee, courses.course_name, campuses.campus_name', false);
 		$this->db->from('students');
 		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
 		$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'inner');
 		$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
-		$this->db->where(array('students.status' => '0'));
-		if ($class_id > 0) {
-			$this->db->where('students.class_id', $class_id);
-		} elseif ($campus_id > 0) {
-			$this->db->where('campuses.campus_id', $campus_id);
-		}
-		$class_ids = $this->_class_ids();
-		if (is_array($class_ids)) {
-			if (!count($class_ids)) return array();
-			$this->db->where_in('students.class_id', $class_ids);
-		}
+		$this->db->where('students.status', '0');
+		if ($class_id > 0) $this->db->where('students.class_id', $class_id);
+		elseif ($campus_id > 0) $this->db->where('campuses.campus_id', $campus_id);
+		if (is_array($class_ids) && count($class_ids)) $this->db->where_in('students.class_id', $class_ids);
+		$this->_apply_search_q($q);
 		$this->db->order_by('students.roll_no', 'asc');
-		return $this->db->get()->result_array();
+		$this->db->limit($limit, $offset);
+		return array('rows' => $this->db->get()->result_array(), 'total' => $total);
 	}
 
-	private function _fetch_active_basic($campus_id, $class_id)
+	private function _fetch_active_basic($campus_id, $class_id, $q = '', $offset = 0, $limit = 25)
 	{
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('campuses', 'campuses.campus_id = classes.campus_id', 'inner');
+		$this->db->where('students.status', '1');
+		if ($class_id > 0) $this->db->where('students.class_id', $class_id);
+		elseif ($campus_id > 0) $this->db->where('campuses.campus_id', $campus_id);
+		$class_ids = $this->_class_ids();
+		if (is_array($class_ids)) {
+			if (!count($class_ids)) return array('rows' => array(), 'total' => 0);
+			$this->db->where_in('students.class_id', $class_ids);
+		}
+		$this->_apply_search_q($q);
+		$total = (int)$this->db->count_all_results();
+
 		$this->db->select('students.*, classes.name as class_name, classes.admission_fee as freeze_fee, courses.course_name, campuses.campus_name', false);
 		$this->db->from('students');
 		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
 		$this->db->join('campuses', 'campuses.campus_id = classes.campus_id', 'inner');
 		$this->db->join('courses', 'courses.course_id = students.course_id', 'left');
-		$this->db->where(array('students.status' => '1'));
-		if ($class_id > 0) {
-			$this->db->where('students.class_id', $class_id);
-		} elseif ($campus_id > 0) {
-			$this->db->where('campuses.campus_id', $campus_id);
-		}
-		$class_ids = $this->_class_ids();
-		if (is_array($class_ids)) {
-			if (!count($class_ids)) return array();
-			$this->db->where_in('students.class_id', $class_ids);
-		}
+		$this->db->where('students.status', '1');
+		if ($class_id > 0) $this->db->where('students.class_id', $class_id);
+		elseif ($campus_id > 0) $this->db->where('campuses.campus_id', $campus_id);
+		if (is_array($class_ids) && count($class_ids)) $this->db->where_in('students.class_id', $class_ids);
+		$this->_apply_search_q($q);
 		$this->db->order_by('students.roll_no', 'asc');
-		return $this->db->get()->result_array();
+		$this->db->limit($limit, $offset);
+		return array('rows' => $this->db->get()->result_array(), 'total' => $total);
 	}
 
-	private function _report_councilwise_roll_no($campus_id, $council_exam_no, $year_class)
+	private function _fetch_council_list($class_id, $q, $offset, $limit)
 	{
+		$this->db->from('students');
+		$this->db->where(array('class_id' => $class_id, 'status' => 1));
+		if ($q !== '') {
+			$this->db->group_start();
+			$this->db->like('first_name', $q);
+			$this->db->or_like('last_name', $q);
+			$this->db->or_like('cnic', $q);
+			$this->db->or_like('roll_no', $q);
+			$this->db->or_like('mobile', $q);
+			$this->db->group_end();
+		}
+		$total = (int)$this->db->count_all_results();
+
+		$sql = 'SELECT student_id, roll_no, cnic, gender, first_name, last_name, father_name,
+			CONCAT(first_name," ", last_name, " S/O ", father_name) as name, address, mobile, emergency_no, board
+			FROM students WHERE class_id=? AND status=1';
+		$params = array($class_id);
+		if ($q !== '') {
+			$sql .= ' AND (first_name LIKE ? OR last_name LIKE ? OR cnic LIKE ? OR roll_no LIKE ? OR mobile LIKE ?)';
+			$like = '%' . $q . '%';
+			$params = array_merge($params, array($like, $like, $like, $like, $like));
+		}
+		$sql .= ' ORDER BY CAST(roll_no as SIGNED INTEGER) ASC LIMIT ' . (int)$limit . ' OFFSET ' . (int)$offset;
+		$rows = $this->db->query($sql, $params)->result_array();
+		return array('rows' => $rows, 'total' => $total);
+	}
+
+	private function _shift_counts($campus_id, $course_id, $class_id, $search_type, $council_exam_no)
+	{
+		// Light columns only — no enrichment, capped for safety
+		$this->db->select('students.student_id, students.shift, students.study_type, students.cnic');
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		if ($search_type === 'councilwise') {
+			$this->db->join('payments', 'payments.custom_student_id=students.student_id', 'inner');
+			$this->db->like('payments.payment_comment', 'This fee for next exam # ' . $council_exam_no, 'both');
+			$this->db->where(array('students.status' => '1', 'payments.paid' => '1'));
+			$this->db->group_by('students.student_id');
+		} else {
+			$this->db->where('students.status', '1');
+		}
+		if (!$this->_apply_student_scope($campus_id, $course_id, $class_id)) return array();
+		$this->_apply_type_sql('shift');
+		$rows = $this->db->get()->result_array();
+
+		$shift_names = array();
+		$study_names = array();
+		if ($this->db->table_exists('shifts')) {
+			foreach ($this->db->get('shifts')->result_array() as $sh) $shift_names[$sh['id']] = $sh['name'];
+		}
+		if ($this->db->table_exists('study_type')) {
+			foreach ($this->db->get('study_type')->result_array() as $st) $study_names[$st['id']] = $st['name'];
+		}
+		$counts = array();
+		foreach ($rows as $s) {
+			$shift_label = isset($shift_names[$s['shift']]) ? $shift_names[$s['shift']] : (string)$s['shift'];
+			$study_label = isset($study_names[$s['study_type']]) ? $study_names[$s['study_type']] : (string)$s['study_type'];
+			$combo = trim($shift_label . ' ' . $study_label);
+			if ($combo === '') $combo = '(blank)';
+			if (!isset($counts[$combo])) $counts[$combo] = 0;
+			$counts[$combo]++;
+		}
+		return $counts;
+	}
+
+	private function _report_councilwise_roll_no($campus_id, $council_exam_no, $year_class, $offset = 0, $limit = 25)
+	{
+		$this->db->from('punjab_council_roll_number');
+		$this->db->join('students', 'students.cnic=punjab_council_roll_number.cnic', 'left');
+		$this->db->join('classes', 'students.class_id=classes.class_id', 'left');
+		$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
+		$this->db->where('punjab_council_roll_number.council_exam_no', $council_exam_no);
+		$this->db->where('punjab_council_roll_number.class', $year_class);
+		if ($campus_id > 0) $this->db->where('campuses.campus_id', $campus_id);
+		$total = (int)$this->db->count_all_results();
+
 		$this->db->select('campuses.campus_id, campuses.campus_name, punjab_council_roll_number.*, students.class_id, classes.name as class_name, classes.session as session, students.mobile, students.emergency_no, contractors.name as contractor_name, students.*, courses.*', false);
 		$this->db->from('punjab_council_roll_number');
 		$this->db->join('students', 'students.cnic=punjab_council_roll_number.cnic', 'left');
@@ -517,58 +733,89 @@ class Studentsapi extends CI_Controller {
 		$this->db->where('punjab_council_roll_number.council_exam_no', $council_exam_no);
 		$this->db->where('punjab_council_roll_number.class', $year_class);
 		if ($campus_id > 0) $this->db->where('campuses.campus_id', $campus_id);
+		$this->db->limit($limit, $offset);
 		$rows = $this->db->get()->result_array();
+
+		$ids = array();
+		foreach ($rows as $r) {
+			if (!empty($r['student_id'])) $ids[] = (int)$r['student_id'];
+		}
+		$pay_by = $this->_payment_stats_by_student($ids);
+		$unpaid_by = $this->_unpaid_rows_by_student($ids);
+
 		foreach ($rows as &$r) {
 			$sid = (int)(isset($r['student_id']) ? $r['student_id'] : 0);
-			$r['unpaid_payments'] = array();
-			$r['payable_current'] = 0;
-			if ($sid > 0) {
-				$unpaid = $this->db->order_by('dead_line', 'ASC')
-					->get_where('payments', array('student_id' => $sid, 'paid' => 0))
-					->result_array();
-				$r['unpaid_payments'] = $unpaid;
-				foreach ($unpaid as $p) {
-					if ($p['dead_line'] < date('Y-m-d')) {
-						$r['payable_current'] += (float)$p['amount'];
-					}
-				}
-			}
-			$r['result_remarks_list'] = $this->_result_remarks_data(isset($r['cnic']) ? $r['cnic'] : '');
+			$r['unpaid_payments'] = isset($unpaid_by[$sid]) ? $unpaid_by[$sid] : array();
+			$r['payable_current'] = isset($pay_by[$sid]) ? (float)$pay_by[$sid]['unpaid_till_amount'] : 0;
+			$r['result_remarks_list'] = array(); // keep light; column already has result_remarks
 		}
-		return $rows;
+		return array('rows' => $rows, 'total' => $total);
 	}
 
-	// ─── Filters (view-side logic moved server-side) ────────
-
-	private function _filter_pass($students)
+	/** @deprecated kept for BC — use _fetch_students_paged */
+	private function _fetch_students($campus_id, $course_id, $class_id, $search_type, $council_exam_no)
 	{
+		$pack = $this->_fetch_students_paged($campus_id, $course_id, $class_id, $search_type, $council_exam_no, 'active', '', 0, 10000);
+		return $pack['rows'];
+	}
+
+	// ─── Enrichment (page-sized, batched — no N+1) ──────────
+
+	private function _enrich_default($students)
+	{
+		if (!count($students)) return array();
+		$ids = array_map(function ($s) { return (int)$s['student_id']; }, $students);
+		$cnics = array_unique(array_map(function ($s) { return $s['cnic']; }, $students));
+
+		$docs_by = $this->_docs_by_student($ids);
+		$pay_stats = $this->_payment_stats_by_student($ids);
+		$contract_by = $this->_contracts_map($students);
+		$ref_by = $this->_references_map($students);
+		$council_fee_by = $this->_council_fee_expenses($ids);
+		$remarks_by = $this->_remarks_by_cnic($cnics);
+
 		$out = array();
 		foreach ($students as $s) {
-			$results = $this->db->order_by('id', 'DESC')
-				->get_where('punjab_council_roll_number', array('cnic' => $s['cnic']))
-				->result_array();
-			$show = 0;
-			foreach ($results as $result) {
-				if ($result['class'] == '2' && ($result['result_remarks'] == 'Pass' || $result['result_remarks'] == 'Pass*')) {
-					$show = 1;
-					break;
-				}
-			}
-			if ($show) $out[] = $s;
+			$sid = (int)$s['student_id'];
+			$docs = isset($docs_by[$sid]) ? $docs_by[$sid] : array();
+			$st = isset($pay_stats[$sid]) ? $pay_stats[$sid] : null;
+
+			$has_plan = $st ? !empty($st['has_own_plan']) : false;
+			$payment_alert = (!$has_plan && (int)$s['contractor_id'] <= 0);
+
+			$photo = isset($docs['Photo'][0]) ? $docs['Photo'][0] : null;
+			$s['image_url'] = $this->_doc_url($photo);
+			$s['documents'] = array(
+				'id_card' => !empty($docs['ID Card']),
+				'b_form' => !empty($docs['B - FORM']),
+				'photo' => !empty($docs['Photo']),
+				'result_card' => !empty($docs['Result Card']),
+			);
+			$s['contractor_label'] = isset($contract_by[$sid]) ? $contract_by[$sid] : ((int)$s['contractor_id'] === 0 ? 'N/A' : '');
+			$s['reference_label'] = isset($ref_by[$sid]) ? $ref_by[$sid] : null;
+			$s['payment_alert'] = $payment_alert;
+			$s['unpaid_installments'] = $st ? (int)$st['unpaid_count'] : 0;
+			$s['unpaid_installments_till_date'] = $st ? (int)$st['unpaid_till_count'] : 0;
+			$s['result_remarks'] = isset($remarks_by[$s['cnic']]) ? $remarks_by[$s['cnic']] : array();
+			$s['council_fee_remarks'] = isset($council_fee_by[$sid]) ? $council_fee_by[$sid] : array();
+			$s['has_contract'] = (int)$s['contract_id'] > 0;
+			$out[] = $s;
 		}
 		return $out;
 	}
 
-	private function _filter_blacklist($students)
+	/** Blacklist page rows — already SQL-filtered; attach fee breakdown in one payments pass */
+	private function _enrich_blacklist_page($students)
 	{
-		$one_month = date('Y-m-d', strtotime('-1 month'));
+		if (!count($students)) return array();
+		$ids = array_map(function ($s) { return (int)$s['student_id']; }, $students);
+		$pay_by = $this->_payments_by_student($ids);
+		$docs_by = $this->_docs_by_student($ids);
+		$today = date('Y-m-d');
 		$out = array();
 		foreach ($students as $s) {
-			if ((int)$s['status'] === 0) continue;
-			$payments = $this->db->order_by('dead_line', 'ASC')
-				->get_where('payments', array('student_id' => $s['student_id']))
-				->result_array();
-			$show = 0;
+			$sid = (int)$s['student_id'];
+			$payments = isset($pay_by[$sid]) ? $pay_by[$sid] : array();
 			$total_fee = 0;
 			$fee_decided = 0;
 			$total_submitted = 0;
@@ -585,7 +832,7 @@ class Studentsapi extends CI_Controller {
 					$created_council += (float)$payment['amount'];
 					if ((int)$payment['paid'] === 1) $submitted_council += (float)$payment['actual_amount'];
 				}
-				if ($payment['dead_line'] < date('Y-m-d')) {
+				if ($payment['dead_line'] < $today) {
 					$fee_decided += (float)$payment['amount'];
 					if ((int)$payment['paid'] === 0) $unpaid_till++;
 				}
@@ -593,12 +840,11 @@ class Studentsapi extends CI_Controller {
 					$total_submitted += (float)$payment['actual_amount'];
 					$paid_rows[] = $payment;
 				}
-				if ((int)$payment['paid'] === 0) {
-					$unpaid_rows[] = $payment;
-					if ($payment['dead_line'] < $one_month) $show = 1;
-				}
+				if ((int)$payment['paid'] === 0) $unpaid_rows[] = $payment;
 			}
-			if (!$show) continue;
+			$docs = isset($docs_by[$sid]) ? $docs_by[$sid] : array();
+			$photo = isset($docs['Photo'][0]) ? $docs['Photo'][0] : null;
+			$s['image_url'] = $this->_doc_url($photo);
 			$s['fee'] = array(
 				'total_fee' => $total_fee,
 				'fee_decided_current_time' => $fee_decided,
@@ -615,106 +861,19 @@ class Studentsapi extends CI_Controller {
 		return $out;
 	}
 
-	private function _filter_shift($students)
-	{
-		$out = array();
-		$counts = array();
-		$shift_names = array();
-		$study_names = array();
-		foreach ($this->db->get('shifts')->result_array() as $sh) {
-			$shift_names[$sh['id']] = $sh['name'];
-		}
-		foreach ($this->db->get('study_type')->result_array() as $st) {
-			$study_names[$st['id']] = $st['name'];
-		}
-
-		foreach ($students as $s) {
-			$results = $this->db->order_by('id', 'DESC')
-				->get_where('punjab_council_roll_number', array('cnic' => $s['cnic']))
-				->result_array();
-			$hide = 0;
-			foreach ($results as $result) {
-				if ($result['class'] != '2' && $result['result_remarks'] != 'Pass') {
-					$hide = 1;
-					break;
-				}
-			}
-			if ($hide) continue;
-
-			$shift_label = isset($shift_names[$s['shift']]) ? $shift_names[$s['shift']] : (string)$s['shift'];
-			$study_label = isset($study_names[$s['study_type']]) ? $study_names[$s['study_type']] : (string)$s['study_type'];
-			$s['shift_name'] = $shift_label;
-			$s['study_type_name'] = $study_label;
-			$combo = trim($shift_label . ' ' . $study_label);
-			if ($combo === '') $combo = '(blank)';
-			if (!isset($counts[$combo])) $counts[$combo] = 0;
-			$counts[$combo]++;
-			$out[] = $s;
-		}
-		return array('rows' => $out, 'counts' => $counts);
-	}
-
-	// ─── Enrichment ─────────────────────────────────────────
-
-	private function _enrich_default($students)
+	private function _enrich_shift($students)
 	{
 		if (!count($students)) return array();
 		$ids = array_map(function ($s) { return (int)$s['student_id']; }, $students);
-		$cnics = array_unique(array_map(function ($s) { return $s['cnic']; }, $students));
-
 		$docs_by = $this->_docs_by_student($ids);
-		$pay_by = $this->_payments_by_student($ids);
-		$contract_by = $this->_contracts_map($students);
-		$ref_by = $this->_references_map($students);
-		$council_fee_by = $this->_council_fee_expenses($ids);
-		$remarks_by = $this->_remarks_by_cnic($cnics);
-
-		$out = array();
-		foreach ($students as $s) {
-			$sid = (int)$s['student_id'];
-			$docs = isset($docs_by[$sid]) ? $docs_by[$sid] : array();
-			$payments = isset($pay_by[$sid]) ? $pay_by[$sid] : array();
-
-			$has_plan = false;
-			foreach ($payments as $p) {
-				if ((int)$p['contract_id'] === 0) { $has_plan = true; break; }
-			}
-			$payment_alert = (!$has_plan && (int)$s['contractor_id'] <= 0);
-
-			$unpaid = 0;
-			$unpaid_till = 0;
-			foreach ($payments as $p) {
-				if ((int)$p['paid'] === 0) {
-					$unpaid++;
-					if ($p['dead_line'] < date('Y-m-d')) $unpaid_till++;
-				}
-			}
-
-			$photo = isset($docs['Photo'][0]) ? $docs['Photo'][0] : null;
-			$s['image_url'] = $this->_doc_url($photo);
-			$s['documents'] = array(
-				'id_card' => !empty($docs['ID Card']),
-				'b_form' => !empty($docs['B - FORM']),
-				'photo' => !empty($docs['Photo']),
-				'result_card' => !empty($docs['Result Card']),
-			);
-			$s['contractor_label'] = isset($contract_by[$sid]) ? $contract_by[$sid] : ((int)$s['contractor_id'] === 0 ? 'N/A' : '');
-			$s['reference_label'] = isset($ref_by[$sid]) ? $ref_by[$sid] : null;
-			$s['payment_alert'] = $payment_alert;
-			$s['unpaid_installments'] = $unpaid;
-			$s['unpaid_installments_till_date'] = $unpaid_till;
-			$s['result_remarks'] = isset($remarks_by[$s['cnic']]) ? $remarks_by[$s['cnic']] : array();
-			$s['council_fee_remarks'] = isset($council_fee_by[$sid]) ? $council_fee_by[$sid] : array();
-			$s['has_contract'] = (int)$s['contract_id'] > 0;
-			$out[] = $s;
+		$shift_names = array();
+		$study_names = array();
+		if ($this->db->table_exists('shifts')) {
+			foreach ($this->db->get('shifts')->result_array() as $sh) $shift_names[$sh['id']] = $sh['name'];
 		}
-		return $out;
-	}
-
-	private function _enrich_shift($students)
-	{
-		$ids = array_map(function ($s) { return (int)$s['student_id']; }, $students);
-		$docs_by = $this->_docs_by_student($ids);
+		if ($this->db->table_exists('study_type')) {
+			foreach ($this->db->get('study_type')->result_array() as $st) $study_names[$st['id']] = $st['name'];
+		}
 		foreach ($students as &$s) {
 			$sid = (int)$s['student_id'];
 			$docs = isset($docs_by[$sid]) ? $docs_by[$sid] : array();
@@ -726,6 +885,8 @@ class Studentsapi extends CI_Controller {
 				'photo' => !empty($docs['Photo']),
 				'result_card' => !empty($docs['Result Card']),
 			);
+			$s['shift_name'] = isset($shift_names[$s['shift']]) ? $shift_names[$s['shift']] : (string)$s['shift'];
+			$s['study_type_name'] = isset($study_names[$s['study_type']]) ? $study_names[$s['study_type']] : (string)$s['study_type'];
 			$s['has_contract'] = (int)$s['contract_id'] > 0;
 		}
 		return $students;
@@ -733,8 +894,10 @@ class Studentsapi extends CI_Controller {
 
 	private function _enrich_using_app($students)
 	{
+		if (!count($students)) return array();
 		$ids = array_map(function ($s) { return (int)$s['student_id']; }, $students);
 		$docs_by = $this->_docs_by_student($ids);
+		$logins = $this->_last_logins_by_student($ids);
 		$shift_names = array();
 		$study_names = array();
 		if ($this->db->table_exists('shifts')) {
@@ -751,48 +914,45 @@ class Studentsapi extends CI_Controller {
 			$s['image_url'] = $this->_doc_url($photo);
 			$s['shift_name'] = isset($shift_names[$s['shift']]) ? $shift_names[$s['shift']] : $s['shift'];
 			$s['study_type_name'] = isset($study_names[$s['study_type']]) ? $study_names[$s['study_type']] : $s['study_type'];
-			$s['portal_last_login'] = null;
-			$s['app_last_login'] = null;
-			if ($this->db->table_exists('students_login_tracking')) {
-				$portal = $this->db->order_by('students_login_tracking_id', 'DESC')
-					->get_where('students_login_tracking', array('student_id' => $sid, 'type' => 'portal'), 1)
-					->row_array();
-				$app = $this->db->order_by('students_login_tracking_id', 'DESC')
-					->get_where('students_login_tracking', array('student_id' => $sid, 'type' => 'app'), 1)
-					->row_array();
-				$s['portal_last_login'] = $portal ? $portal['login_time'] : null;
-				$s['app_last_login'] = $app ? $app['login_time'] : null;
-			}
+			$s['portal_last_login'] = isset($logins[$sid]['portal']) ? $logins[$sid]['portal'] : null;
+			$s['app_last_login'] = isset($logins[$sid]['app']) ? $logins[$sid]['app'] : null;
 		}
 		return $students;
 	}
 
 	private function _enrich_archived($students)
 	{
+		if (!count($students)) return array();
 		$ids = array_map(function ($s) { return (int)$s['student_id']; }, $students);
 		$docs_by = $this->_docs_by_student($ids);
 		$cnics = array_unique(array_map(function ($s) { return $s['cnic']; }, $students));
 		$remarks_by = $this->_remarks_by_cnic($cnics);
+		$council_fee_by = $this->_council_fee_expenses($ids);
+		$frozen = array();
+		$deleted_by = array();
+		if (count($ids) && $this->db->table_exists('freeze_student')) {
+			foreach ($this->db->where_in('student_id', $ids)->get('freeze_student')->result_array() as $f) {
+				$frozen[(int)$f['student_id']] = true;
+			}
+		}
+		if (count($ids) && $this->db->table_exists('deleted_students')) {
+			foreach ($this->db->where_in('student_id', $ids)->where('status', 1)->get('deleted_students')->result_array() as $d) {
+				$deleted_by[(int)$d['student_id']] = isset($d['reason']) ? $d['reason'] : '';
+			}
+		}
 
 		foreach ($students as &$s) {
 			$sid = (int)$s['student_id'];
 			$docs = isset($docs_by[$sid]) ? $docs_by[$sid] : array();
 			$photo = isset($docs['Photo'][0]) ? $docs['Photo'][0] : null;
 			$s['image_url'] = $this->_doc_url($photo);
-			$freeze = $this->db->get_where('freeze_student', array('student_id' => $sid))->result_array();
-			$s['archive_type'] = count($freeze) > 0 ? 'FREEZED' : 'DELETED';
-			$s['is_freezed'] = count($freeze) > 0;
-			$deleted = $this->db->get_where('deleted_students', array('student_id' => $sid, 'status' => 1))->row_array();
-			$s['delete_reason'] = $deleted ? (isset($deleted['reason']) ? $deleted['reason'] : '') : '';
+			$is_freeze = !empty($frozen[$sid]);
+			$s['archive_type'] = $is_freeze ? 'FREEZED' : 'DELETED';
+			$s['is_freezed'] = $is_freeze;
+			$s['delete_reason'] = isset($deleted_by[$sid]) ? $deleted_by[$sid] : '';
 			$s['result_remarks'] = isset($remarks_by[$s['cnic']]) ? $remarks_by[$s['cnic']] : array();
 			$s['has_contract'] = (int)$s['contract_id'] > 0;
-			$council_fees = $this->db->select('expenses.*, campuses.campus_name, classes.session')
-				->from('expenses')
-				->join('classes', 'classes.class_id=expenses.class_id', 'left')
-				->join('campuses', 'campuses.campus_id=expenses.campus_id', 'left')
-				->where('student_id', $sid)
-				->get()->result_array();
-			$s['council_fee_remarks'] = $council_fees;
+			$s['council_fee_remarks'] = isset($council_fee_by[$sid]) ? $council_fee_by[$sid] : array();
 		}
 		return $students;
 	}
@@ -871,22 +1031,28 @@ class Studentsapi extends CI_Controller {
 			$footer_must[$m] = 0;
 			$footer_paid[$m] = 0;
 		}
+		if (!count($students)) {
+			return array('rows' => array(), 'footer_must' => $footer_must, 'footer_paid' => $footer_paid);
+		}
+
+		$ids = array_map(function ($s) { return (int)$s['student_id']; }, $students);
+		$pay_by = $this->_payments_by_student($ids);
+
 		foreach ($students as $s) {
 			$sid = (int)$s['student_id'];
+			$payments = isset($pay_by[$sid]) ? $pay_by[$sid] : array();
+			$by_month = array();
+			foreach ($payments as $p) {
+				$ym = substr($p['dead_line'], 0, 7);
+				if (!isset($by_month[$ym])) $by_month[$ym] = array();
+				$by_month[$ym][] = $p;
+			}
 			$month_cells = array();
 			$row_must = 0;
 			$row_paid = 0;
 			foreach ($months as $ym) {
-				$from = $ym . '-01';
-				$to = $ym . '-30';
-				$payments = $this->db->order_by('dead_line', 'ASC')
-					->where('student_id', $sid)
-					->where('dead_line >=', $from)
-					->where('dead_line <=', $to)
-					->get('payments')
-					->result_array();
 				$cells = array();
-				foreach ($payments as $p) {
+				foreach (isset($by_month[$ym]) ? $by_month[$ym] : array() as $p) {
 					$amt = (float)$p['amount'];
 					$act = (float)$p['actual_amount'];
 					$row_must += $amt;
@@ -939,6 +1105,72 @@ class Studentsapi extends CI_Controller {
 			$sid = (int)$r['student_id'];
 			if (!isset($map[$sid])) $map[$sid] = array();
 			$map[$sid][] = $r;
+		}
+		return $map;
+	}
+
+	/**
+	 * Lightweight payment aggregates for list views (no full row payload).
+	 * @return array<int, array{unpaid_count:int, unpaid_till_count:int, has_own_plan:int, unpaid_till_amount:float}>
+	 */
+	private function _payment_stats_by_student($ids)
+	{
+		$map = array();
+		if (!count($ids)) return $map;
+		$today = date('Y-m-d');
+		$sql = 'SELECT student_id,
+			SUM(CASE WHEN paid = 0 THEN 1 ELSE 0 END) AS unpaid_count,
+			SUM(CASE WHEN paid = 0 AND dead_line < ? THEN 1 ELSE 0 END) AS unpaid_till_count,
+			SUM(CASE WHEN paid = 0 AND dead_line < ? THEN amount ELSE 0 END) AS unpaid_till_amount,
+			SUM(CASE WHEN contract_id = 0 THEN 1 ELSE 0 END) AS has_own_plan
+			FROM payments WHERE student_id IN (' . implode(',', array_map('intval', $ids)) . ')
+			GROUP BY student_id';
+		foreach ($this->db->query($sql, array($today, $today))->result_array() as $r) {
+			$map[(int)$r['student_id']] = array(
+				'unpaid_count' => (int)$r['unpaid_count'],
+				'unpaid_till_count' => (int)$r['unpaid_till_count'],
+				'unpaid_till_amount' => (float)$r['unpaid_till_amount'],
+				'has_own_plan' => (int)$r['has_own_plan'] > 0 ? 1 : 0,
+			);
+		}
+		return $map;
+	}
+
+	private function _unpaid_rows_by_student($ids)
+	{
+		$map = array();
+		if (!count($ids)) return $map;
+		$rows = $this->db->where_in('student_id', $ids)
+			->where('paid', 0)
+			->order_by('dead_line', 'ASC')
+			->get('payments')
+			->result_array();
+		foreach ($rows as $r) {
+			$sid = (int)$r['student_id'];
+			if (!isset($map[$sid])) $map[$sid] = array();
+			$map[$sid][] = $r;
+		}
+		return $map;
+	}
+
+	private function _last_logins_by_student($ids)
+	{
+		$map = array();
+		if (!count($ids) || !$this->db->table_exists('students_login_tracking')) return $map;
+		// Latest login per student+type via self-join on max id
+		$sql = 'SELECT t.student_id, t.type, t.login_time
+			FROM students_login_tracking t
+			INNER JOIN (
+				SELECT student_id, type, MAX(students_login_tracking_id) AS max_id
+				FROM students_login_tracking
+				WHERE student_id IN (' . implode(',', array_map('intval', $ids)) . ')
+				AND type IN ("portal","app")
+				GROUP BY student_id, type
+			) x ON x.max_id = t.students_login_tracking_id';
+		foreach ($this->db->query($sql)->result_array() as $r) {
+			$sid = (int)$r['student_id'];
+			if (!isset($map[$sid])) $map[$sid] = array();
+			$map[$sid][$r['type']] = $r['login_time'];
 		}
 		return $map;
 	}
