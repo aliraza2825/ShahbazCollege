@@ -1210,7 +1210,77 @@ class Inventoryapi extends CI_Controller {
 			if ((int)$line['approval'] !== 1) $all_grn = false;
 		}
 		$has_quotes = count($quotes) > 0;
-		$agreement_done = $all_final && $all_purchased;
+
+		// Group lines by selected vendor for multi-supplier payments
+		$vendor_groups_map = array();
+		foreach ($lines as $line) {
+			$vid = !empty($line['purchase_from']) ? (int)$line['purchase_from'] : 0;
+			if ($vid <= 0) continue;
+			if (!isset($vendor_groups_map[$vid])) {
+				$vendor_groups_map[$vid] = array(
+					'vendor_id' => $vid,
+					'vendor_name' => isset($line['vendor_name']) ? $line['vendor_name'] : '',
+					'shop_name' => isset($line['vendor_shop']) ? $line['vendor_shop'] : '',
+					'phone' => isset($line['vendor_phone']) ? $line['vendor_phone'] : '',
+					'address' => isset($line['vendor_address']) ? $line['vendor_address'] : '',
+					'total' => 0,
+					'line_count' => 0,
+					'lines' => array(),
+					'payments' => array(),
+					'has_agreement' => false,
+					'purchased' => true,
+				);
+			}
+			$line_total = (float)$line['product_quantity'] * (float)$line['purchase_price'];
+			$vendor_groups_map[$vid]['total'] += $line_total;
+			$vendor_groups_map[$vid]['line_count']++;
+			$vendor_groups_map[$vid]['lines'][] = array(
+				'purchase_request_id' => (int)$line['purchase_request_id'],
+				'product_name' => isset($line['product_name']) ? $line['product_name'] : '',
+				'product_quantity' => $line['product_quantity'],
+				'purchase_price' => $line['purchase_price'],
+				'line_total' => $line_total,
+			);
+			if ((int)$line['purchased'] !== 1) {
+				$vendor_groups_map[$vid]['purchased'] = false;
+			}
+		}
+		foreach ($payments as $p) {
+			$vid = isset($p['vendor_id']) ? (int)$p['vendor_id'] : 0;
+			if ($vid <= 0) continue;
+			if (!isset($vendor_groups_map[$vid])) {
+				$vrow = $this->db->get_where('vendors', array('id' => $vid))->row_array();
+				$vendor_groups_map[$vid] = array(
+					'vendor_id' => $vid,
+					'vendor_name' => $vrow && isset($vrow['name']) ? $vrow['name'] : '',
+					'shop_name' => $vrow && isset($vrow['shop_name']) ? $vrow['shop_name'] : '',
+					'phone' => $vrow && isset($vrow['phone']) ? $vrow['phone'] : '',
+					'address' => $vrow && isset($vrow['address']) ? $vrow['address'] : '',
+					'total' => 0,
+					'line_count' => 0,
+					'lines' => array(),
+					'payments' => array(),
+					'has_agreement' => false,
+					'purchased' => false,
+				);
+			}
+			$vendor_groups_map[$vid]['payments'][] = $p;
+			$vendor_groups_map[$vid]['has_agreement'] = true;
+		}
+		$vendor_groups = array_values($vendor_groups_map);
+		$vendors_with_lines = 0;
+		$vendors_with_agreement = 0;
+		foreach ($vendor_groups as $g) {
+			if ($g['line_count'] > 0) {
+				$vendors_with_lines++;
+				if ($g['has_agreement']) $vendors_with_agreement++;
+			}
+		}
+		// Agreement done when every selected vendor has ≥1 installment
+		$agreement_done = $all_final
+			&& $all_vendor
+			&& $vendors_with_lines > 0
+			&& $vendors_with_agreement >= $vendors_with_lines;
 
 		$payments_total = count($payments);
 		$payments_unpaid = 0;
@@ -1224,7 +1294,7 @@ class Inventoryapi extends CI_Controller {
 		$payments_pending = $agreement_done && $payments_unpaid > 0;
 
 		$payment_done_label = 'Finalise & Payment Agreement';
-		$payment_hint = 'Finalise quotation then create payment installments';
+		$payment_hint = 'Finalise quotation then create payment installments per supplier';
 		if ($all_payments_settled) {
 			$payment_done_label = 'Payments Complete';
 			$payment_hint = 'All installments paid or waived';
@@ -1232,8 +1302,11 @@ class Inventoryapi extends CI_Controller {
 			$payment_done_label = 'Payments Pending (' . $payments_unpaid . ')';
 			$payment_hint = $payments_unpaid . ' installment(s) still unpaid — mark paid when cash goes out';
 		} elseif ($agreement_done) {
-			$payment_done_label = 'Payment Agreement Added';
-			$payment_hint = 'Agreement saved — add/pay installments';
+			$payment_done_label = 'Payment Agreements Added';
+			$payment_hint = 'Agreements saved for all suppliers — add/pay installments';
+		} elseif ($all_final && $vendors_with_lines > 0) {
+			$payment_done_label = 'Payment Agreements (' . $vendors_with_agreement . '/' . $vendors_with_lines . ')';
+			$payment_hint = 'Add payment installments for each supplier';
 		}
 
 		$defs = array(
@@ -1257,14 +1330,14 @@ class Inventoryapi extends CI_Controller {
 				'id' => 'quote_add',
 				'pending_label' => 'Add Quotation',
 				'done_label' => 'Quotations Added',
-				'hint' => 'Add vendor prices for each item',
+				'hint' => 'Add vendor prices (vendors may quote some or all items)',
 				'done' => $has_quotes,
 			),
 			array(
 				'id' => 'quote_select',
 				'pending_label' => 'Select Quotation',
-				'done_label' => 'Quotation Selected',
-				'hint' => 'Select one vendor quotation from the list',
+				'done_label' => 'Vendors Selected',
+				'hint' => 'Pick a vendor quotation for each item',
 				'done' => $all_vendor,
 			),
 			array(
@@ -1393,6 +1466,9 @@ class Inventoryapi extends CI_Controller {
 				'lines' => $lines,
 				'quotes' => $quotes,
 				'payments' => $payments,
+				'vendor_groups' => $vendor_groups,
+				'vendors_with_agreement' => $vendors_with_agreement,
+				'vendors_with_lines' => $vendors_with_lines,
 				'gate_receives' => $gate_receives,
 				'steps' => $steps,
 				'current_step' => $current,
@@ -1516,10 +1592,21 @@ class Inventoryapi extends CI_Controller {
 		$body = $this->_body();
 		$id = (int)(isset($body['id']) ? $body['id'] : (isset($body['purchase_request_price_id']) ? $body['purchase_request_price_id'] : 0));
 		$purchase_request_id = (int)(isset($body['purchase_request_id']) ? $body['purchase_request_id'] : 0);
-		if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
+		$vendor_id = (int)(isset($body['vendor_id']) ? $body['vendor_id'] : 0);
 
-		$quote = $this->db->get_where('purchase_request_prices', array('purchase_request_price_id' => $id))->row_array();
-		if (!$quote) $this->_json(array('success' => false, 'message' => 'Quote not found'), 404);
+		// Allow approve by purchase_request_id + vendor_id (no price row id)
+		if (!$id && $purchase_request_id && $vendor_id) {
+			$quote = $this->db->get_where('purchase_request_prices', array(
+				'purchase_request_id' => $purchase_request_id,
+				'vendor_id' => $vendor_id,
+			))->row_array();
+			if (!$quote) $this->_json(array('success' => false, 'message' => 'Quote not found for this vendor/item'), 404);
+			$id = (int)$quote['purchase_request_price_id'];
+		} else {
+			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
+			$quote = $this->db->get_where('purchase_request_prices', array('purchase_request_price_id' => $id))->row_array();
+			if (!$quote) $this->_json(array('success' => false, 'message' => 'Quote not found'), 404);
+		}
 		if (!$purchase_request_id) $purchase_request_id = (int)$quote['purchase_request_id'];
 
 		$this->_ensure_journey_audit_columns();
@@ -1539,7 +1626,76 @@ class Inventoryapi extends CI_Controller {
 	}
 
 	/**
-	 * Select one vendor's full quotation for a PR (all items).
+	 * Batch per-line vendor selection.
+	 * POST { purchase_no, selections: [{ purchase_request_id, vendor_id }] }
+	 */
+	public function approve_line_quotations()
+	{
+		$body = $this->_body();
+		$purchase_no = isset($body['purchase_no']) ? trim($body['purchase_no']) : '';
+		$selections = isset($body['selections']) && is_array($body['selections']) ? $body['selections'] : array();
+		if ($purchase_no === '' || !count($selections)) {
+			$this->_json(array('success' => false, 'message' => 'purchase_no and selections required'), 422);
+		}
+
+		$lines = $this->db->get_where('purchase_requests', array('purchase_no' => $purchase_no))->result_array();
+		if (!count($lines)) {
+			$this->_json(array('success' => false, 'message' => 'Purchase request not found'), 404);
+		}
+		$line_ids = array();
+		foreach ($lines as $line) {
+			$line_ids[(int)$line['purchase_request_id']] = true;
+		}
+
+		$this->_ensure_journey_audit_columns();
+		$name = $this->_actor_name();
+		$now = date('Y-m-d H:i:s');
+		$selected = 0;
+
+		foreach ($selections as $sel) {
+			$pr_id = (int)(isset($sel['purchase_request_id']) ? $sel['purchase_request_id'] : 0);
+			$vendor_id = (int)(isset($sel['vendor_id']) ? $sel['vendor_id'] : 0);
+			if (!$pr_id || !$vendor_id) continue;
+			if (empty($line_ids[$pr_id])) {
+				$this->_json(array('success' => false, 'message' => 'Line does not belong to this purchase request'), 422);
+			}
+			$quote = $this->db->get_where('purchase_request_prices', array(
+				'purchase_request_id' => $pr_id,
+				'vendor_id' => $vendor_id,
+			))->row_array();
+			if (!$quote) {
+				$this->_json(array(
+					'success' => false,
+					'message' => 'No quotation from this vendor for purchase_request_id ' . $pr_id,
+				), 422);
+			}
+			$this->db->where('purchase_request_id', $pr_id)->update('purchase_request_prices', array('approve' => 0));
+			$this->db->where('purchase_request_price_id', $quote['purchase_request_price_id'])
+				->update('purchase_request_prices', array('approve' => 1));
+			$this->db->where('purchase_request_id', $pr_id)->update('purchase_requests', array(
+				'purchase_from' => $vendor_id,
+				'purchase_price' => $quote['price'],
+				'purchased' => 0,
+				'quote_select_by' => $name,
+				'quote_select_at' => $now,
+			));
+			$selected++;
+		}
+
+		if (!$selected) {
+			$this->_json(array('success' => false, 'message' => 'No valid selections'), 422);
+		}
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Line quotations selected',
+			'selected_lines' => $selected,
+			'quote_select_by' => $name,
+			'quote_select_at' => $now,
+		));
+	}
+
+	/**
+	 * Select this vendor for every line they quoted (partial OK — skips unquoted lines).
 	 * POST { purchase_no, vendor_id }
 	 */
 	public function approve_vendor_quotation()
@@ -1566,12 +1722,7 @@ class Inventoryapi extends CI_Controller {
 				'purchase_request_id' => $pr_id,
 				'vendor_id' => $vendor_id,
 			))->row_array();
-			if (!$quote) {
-				$this->_json(array(
-					'success' => false,
-					'message' => 'This vendor has no quotation for every item. Add prices for all items first.',
-				), 422);
-			}
+			if (!$quote) continue; // partial coverage allowed
 			$this->db->where('purchase_request_id', $pr_id)->update('purchase_request_prices', array('approve' => 0));
 			$this->db->where('purchase_request_price_id', $quote['purchase_request_price_id'])
 				->update('purchase_request_prices', array('approve' => 1));
@@ -1585,9 +1736,16 @@ class Inventoryapi extends CI_Controller {
 			$selected++;
 		}
 
+		if (!$selected) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'This vendor has no quotation on any item.',
+			), 422);
+		}
+
 		$this->_json(array(
 			'success' => true,
-			'message' => 'Quotation selected',
+			'message' => 'Quotation selected for ' . $selected . ' item(s)',
 			'selected_lines' => $selected,
 			'vendor_id' => $vendor_id,
 			'quote_select_by' => $name,
@@ -1600,6 +1758,22 @@ class Inventoryapi extends CI_Controller {
 		$body = $this->_body();
 		$purchase_no = isset($body['purchase_no']) ? trim($body['purchase_no']) : '';
 		if ($purchase_no === '') $this->_json(array('success' => false, 'message' => 'purchase_no required'), 422);
+
+		$lines = $this->db->get_where('purchase_requests', array('purchase_no' => $purchase_no))->result_array();
+		if (!count($lines)) {
+			$this->_json(array('success' => false, 'message' => 'Purchase request not found'), 404);
+		}
+		$missing = 0;
+		foreach ($lines as $line) {
+			if (empty($line['purchase_from']) || (float)$line['purchase_from'] <= 0) $missing++;
+		}
+		if ($missing > 0) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Every item needs a selected vendor before finalise (' . $missing . ' missing).',
+			), 422);
+		}
+
 		$name = trim($this->current_user['first_name'] . ' ' . $this->current_user['last_name']);
 		if ($name === '') $name = 'POS';
 		$now = date('Y-m-d H:i:s');
