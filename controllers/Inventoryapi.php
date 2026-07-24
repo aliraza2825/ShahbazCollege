@@ -104,6 +104,8 @@ class Inventoryapi extends CI_Controller {
 			'gate_received_qty' => "ALTER TABLE `purchase_requests` ADD `gate_received_qty` INT(11) NOT NULL DEFAULT 0",
 			'grn_by' => "ALTER TABLE `purchase_requests` ADD `grn_by` VARCHAR(255) NULL DEFAULT NULL",
 			'grn_at' => "ALTER TABLE `purchase_requests` ADD `grn_at` DATETIME NULL DEFAULT NULL",
+			'cancelled_by' => "ALTER TABLE `purchase_requests` ADD `cancelled_by` VARCHAR(255) NULL DEFAULT NULL",
+			'cancelled_at' => "ALTER TABLE `purchase_requests` ADD `cancelled_at` DATETIME NULL DEFAULT NULL",
 			'project_id' => "ALTER TABLE `purchase_requests` ADD `project_id` INT(11) NULL DEFAULT NULL",
 		);
 		foreach ($pr_cols as $col => $sql) {
@@ -1161,6 +1163,103 @@ class Inventoryapi extends CI_Controller {
 		));
 	}
 
+	/**
+	 * Cancel a PR at any journey step, only if:
+	 * - no GRN yet (no line with approval=1)
+	 * - no installment paid/waived yet
+	 */
+	public function cancel_purchase_request()
+	{
+		$body = $this->_body();
+		$purchase_no = isset($body['purchase_no']) ? trim((string)$body['purchase_no']) : '';
+		if ($purchase_no === '') {
+			$this->_json(array('success' => false, 'message' => 'purchase_no required'), 422);
+		}
+
+		$this->_ensure_journey_audit_columns();
+
+		$lines = $this->db->get_where('purchase_requests', array('purchase_no' => $purchase_no))->result_array();
+		if (!count($lines)) {
+			$this->_json(array('success' => false, 'message' => 'Purchase request not found'), 404);
+		}
+
+		$all_rejected = true;
+		$has_grn = false;
+		foreach ($lines as $line) {
+			if ((int)$line['status'] !== 2) $all_rejected = false;
+			if ((int)$line['approval'] === 1) $has_grn = true;
+		}
+		if ($all_rejected) {
+			$this->_json(array('success' => false, 'message' => 'Purchase request is already cancelled / rejected'), 409);
+		}
+		if ($has_grn) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Cannot cancel — GRN / stock entry already done for this purchase request',
+			), 422);
+		}
+
+		$paid_count = 0;
+		if ($this->db->table_exists('payment_aggrements')) {
+			$paid_count = (int)$this->db
+				->where('purchase_no', $purchase_no)
+				->where('paid', 1)
+				->count_all_results('payment_aggrements');
+		}
+		if ($paid_count > 0) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Cannot cancel — payment already made (or waived) on this purchase request',
+			), 422);
+		}
+
+		$name = $this->_actor_name();
+		$now = date('Y-m-d H:i:s');
+		$update = array(
+			'status' => 2,
+			'purchased' => 0,
+		);
+		if ($this->db->field_exists('cancelled_by', 'purchase_requests')) {
+			$update['cancelled_by'] = $name;
+		}
+		if ($this->db->field_exists('cancelled_at', 'purchase_requests')) {
+			$update['cancelled_at'] = $now;
+		}
+		// If never approved, also stamp approve fields so lists show who stopped it
+		if ($this->db->field_exists('approve_by', 'purchase_requests')) {
+			$has_approver = false;
+			foreach ($lines as $line) {
+				if (!empty($line['approve_by']) && (int)$line['status'] === 1) {
+					$has_approver = true;
+					break;
+				}
+			}
+			if (!$has_approver) {
+				$update['approve_by'] = $name;
+				if ($this->db->field_exists('approved_at', 'purchase_requests')) {
+					$update['approved_at'] = $now;
+				}
+			}
+		}
+
+		$this->db->where('purchase_no', $purchase_no)->update('purchase_requests', $update);
+
+		// Drop unpaid agreements so they leave Payments / dashboard queues
+		$deleted_agreements = 0;
+		if ($this->db->table_exists('payment_aggrements')) {
+			$this->db->where('purchase_no', $purchase_no)->where('paid', 0)->delete('payment_aggrements');
+			$deleted_agreements = $this->db->affected_rows();
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Purchase request cancelled',
+			'cancelled_by' => $name,
+			'cancelled_at' => $now,
+			'deleted_agreements' => $deleted_agreements,
+		));
+	}
+
 	public function delete_purchase_request($id = 0)
 	{
 		$this->db->where('purchase_request_id', (int)$id)->delete('purchase_requests');
@@ -1217,6 +1316,9 @@ class Inventoryapi extends CI_Controller {
 		$all_purchased = true;
 		$all_gate = true;
 		$all_grn = true;
+		$has_any_grn = false;
+		$cancelled_by = '';
+		$cancelled_at = '';
 		foreach ($lines as $line) {
 			$st = (int)$line['status'];
 			if ($st !== 1) $all_approved = false;
@@ -1226,6 +1328,13 @@ class Inventoryapi extends CI_Controller {
 			if ((int)$line['purchased'] !== 1) $all_purchased = false;
 			if ((int)$line['gate_approval'] !== 1) $all_gate = false;
 			if ((int)$line['approval'] !== 1) $all_grn = false;
+			if ((int)$line['approval'] === 1) $has_any_grn = true;
+			if ($cancelled_by === '' && !empty($line['cancelled_by'])) {
+				$cancelled_by = $line['cancelled_by'];
+			}
+			if ($cancelled_at === '' && !empty($line['cancelled_at'])) {
+				$cancelled_at = $line['cancelled_at'];
+			}
 		}
 		$has_quotes = count($quotes) > 0;
 
@@ -1307,6 +1416,17 @@ class Inventoryapi extends CI_Controller {
 			if (!empty($p['paid'])) $payments_paid++;
 			else $payments_unpaid++;
 		}
+		// Cancel allowed until any GRN or any paid/waived installment
+		$cancellable = !$all_rejected && !$has_any_grn && $payments_paid === 0;
+		$cancel_blocked_reason = '';
+		if ($all_rejected) {
+			$cancel_blocked_reason = 'Already cancelled / rejected';
+		} elseif ($has_any_grn) {
+			$cancel_blocked_reason = 'GRN / stock entry already done';
+		} elseif ($payments_paid > 0) {
+			$cancel_blocked_reason = 'Payment already made (or waived)';
+		}
+
 		// Settled only when agreement exists and every installment is paid/waived
 		$all_payments_settled = $agreement_done && $payments_total > 0 && $payments_unpaid === 0;
 		$payments_pending = $agreement_done && $payments_unpaid > 0;
@@ -1338,9 +1458,13 @@ class Inventoryapi extends CI_Controller {
 			array(
 				'id' => 'approve',
 				'pending_label' => 'Approve Purchase Request',
-				'done_label' => $all_rejected ? 'Purchase Request Rejected' : 'Purchase Request Approved',
+				'done_label' => $all_rejected
+					? ($cancelled_by !== '' ? 'Purchase Request Cancelled' : 'Purchase Request Rejected')
+					: 'Purchase Request Approved',
 				'hint' => $all_rejected
-					? 'This purchase request was rejected'
+					? ($cancelled_by !== ''
+						? 'This purchase request was cancelled'
+						: 'This purchase request was rejected')
 					: 'Approve or reject this purchase request',
 				'done' => $all_approved || $all_rejected,
 			),
@@ -1498,6 +1622,11 @@ class Inventoryapi extends CI_Controller {
 				'payments_total' => $payments_total,
 				'all_payments_settled' => $all_payments_settled,
 				'rejected' => $all_rejected,
+				'cancelled' => $all_rejected && $cancelled_by !== '',
+				'cancellable' => $cancellable,
+				'cancel_blocked_reason' => $cancel_blocked_reason,
+				'cancelled_by' => $cancelled_by,
+				'cancelled_at' => $cancelled_at,
 				'vendor' => $pay_vendor,
 				'add_by' => isset($L['add_by']) ? $L['add_by'] : '',
 				'created_at' => isset($L['created_at']) ? $L['created_at'] : '',
@@ -1827,6 +1956,7 @@ class Inventoryapi extends CI_Controller {
 		$this->db->from('purchase_requests');
 		$this->db->join('campuses', 'campuses.campus_id = purchase_requests.campus_id', 'left');
 		$this->db->where('purchase_requests.final', 1);
+		$this->db->where('purchase_requests.status !=', 2);
 		$this->_apply_campus_filter('purchase_requests.campus_id', $campus_id, true);
 		$this->db->group_by('purchase_requests.purchase_no');
 		$this->db->order_by('created_at', 'DESC');
@@ -2936,7 +3066,11 @@ class Inventoryapi extends CI_Controller {
 			SUM(purchase_requests.product_quantity * IFNULL(purchase_requests.purchase_price,0)) as total_amount', false);
 		$this->db->from('purchase_requests');
 		$this->db->join('campuses', 'campuses.campus_id = purchase_requests.campus_id', 'left');
-		$this->db->where(array('purchase_requests.final' => 1, 'purchase_requests.purchased' => 0));
+		$this->db->where(array(
+			'purchase_requests.final' => 1,
+			'purchase_requests.purchased' => 0,
+			'purchase_requests.status' => 1,
+		));
 		$this->_apply_campus_filter('purchase_requests.campus_id', $campus_id, true);
 		$this->db->group_by('purchase_requests.purchase_no');
 		$this->db->order_by('purchase_requests.purchase_no', 'DESC');
@@ -2949,7 +3083,7 @@ class Inventoryapi extends CI_Controller {
 		unset($ap);
 
 		$this->db->from('purchase_requests');
-		$this->db->where(array('final' => 1, 'purchased' => 0));
+		$this->db->where(array('final' => 1, 'purchased' => 0, 'status' => 1));
 		$this->_apply_campus_filter('campus_id', $campus_id, true);
 		$this->db->select('purchase_no');
 		$this->db->group_by('purchase_no');
