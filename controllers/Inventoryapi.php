@@ -916,6 +916,7 @@ class Inventoryapi extends CI_Controller {
 	{
 		$q = trim((string)$this->input->get('q'));
 		$campus_id = (int)$this->input->get('campus_id');
+		$status = strtolower(trim((string)$this->input->get('status')));
 		// Real columns: name, shop_name, phone, address, image, campus_id, product_name_ids, status
 		$this->db->select('vendors.*, vendors.name AS vendor_name, vendors.shop_name AS company_name, campuses.campus_name', false);
 		$this->db->from('vendors');
@@ -928,12 +929,29 @@ class Inventoryapi extends CI_Controller {
 			$this->db->group_end();
 		}
 		if ($campus_id > 0) $this->db->where('vendors.campus_id', $campus_id);
+		if ($status === 'active') {
+			$this->db->group_start();
+			$this->db->where('vendors.status', 'active');
+			$this->db->or_where('vendors.status', '1');
+			$this->db->or_where('vendors.status', 1);
+			$this->db->group_end();
+		} elseif ($status === 'inactive') {
+			$this->db->group_start();
+			$this->db->where('vendors.status', 'inactive');
+			$this->db->or_where('vendors.status', '0');
+			$this->db->or_where('vendors.status', 0);
+			$this->db->group_end();
+		}
+		// status=all or empty → no status filter
 		$this->db->order_by('vendors.name', 'ASC');
 		$rows = $this->db->get()->result_array();
 		foreach ($rows as &$row) {
 			if (empty($row['vendor_name']) && !empty($row['name'])) $row['vendor_name'] = $row['name'];
 			if (empty($row['company_name']) && !empty($row['shop_name'])) $row['company_name'] = $row['shop_name'];
 			$row['image_url'] = $this->_img_url(isset($row['image']) ? $row['image'] : '');
+			// Normalize status for SPA
+			$st = isset($row['status']) ? strtolower(trim((string)$row['status'])) : 'active';
+			$row['status'] = ($st === 'inactive' || $st === '0') ? 'inactive' : 'active';
 			$ids = array();
 			if (!empty($row['product_name_ids'])) {
 				foreach (explode(',', $row['product_name_ids']) as $pid) {
