@@ -996,6 +996,7 @@
                                         <label class="checkbox-inline"><input type="checkbox" name="construction_add_contractor" value="1" <?php if(@$access_values[0]['construction_add_contractor']!=NULL){echo 'checked';}?> /> Add Contractor</label>
                                         <label class="checkbox-inline"><input type="checkbox" name="construction_contractor_payment" value="1" <?php if(@$access_values[0]['construction_contractor_payment']!=NULL){echo 'checked';}?> /> Contractor Payment</label>
                                         <label class="checkbox-inline"><input type="checkbox" name="construction_reports" value="1" <?php if(@$access_values[0]['construction_reports']!=NULL){echo 'checked';}?> /> Reports</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="construction_expense_verify" value="1" <?php if(@$access_values[0]['construction_expense_verify']!=NULL){echo 'checked';}?> /> Verify Expense Closing</label>
                                     </div>
                                 </div>
 

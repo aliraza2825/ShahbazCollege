@@ -1045,6 +1045,11 @@ class Inventoryapi extends CI_Controller {
 		if ($project_id > 0 && $this->db->field_exists('project_id', 'purchase_requests')) {
 			$this->db->where('purchase_requests.project_id', $project_id);
 		}
+		$has_project = trim((string)$this->input->get('has_project'));
+		if ($has_project === '1' && $this->db->field_exists('project_id', 'purchase_requests')) {
+			$this->db->where('purchase_requests.project_id IS NOT NULL', null, false);
+			$this->db->where('purchase_requests.project_id >', 0);
+		}
 		$this->_apply_campus_filter('purchase_requests.campus_id', $campus_id, true);
 		$this->db->order_by('purchase_requests.purchase_request_id', 'DESC');
 		$this->db->limit(500);
@@ -1892,6 +1897,23 @@ class Inventoryapi extends CI_Controller {
 			'clear_by' => '',
 			'upload_image' => 0,
 		);
+		// Link to construction project when PR is project-tagged (for expense daily closing)
+		if ($purchase_no !== '' && $this->db->table_exists('purchase_requests')
+			&& $this->db->field_exists('project_id', 'purchase_requests')
+			&& $this->db->field_exists('construction_project_id', 'expenses')) {
+			$pr_proj = $this->db->query(
+				'SELECT project_id FROM purchase_requests
+				 WHERE purchase_no = ? AND project_id IS NOT NULL AND project_id > 0
+				 LIMIT 1',
+				array($purchase_no)
+			)->row_array();
+			if ($pr_proj) {
+				$expense['construction_project_id'] = (int)$pr_proj['project_id'];
+				if ($this->db->field_exists('construction_source', 'expenses')) {
+					$expense['construction_source'] = 'purchase';
+				}
+			}
+		}
 		$this->db->insert('expenses', $expense);
 		$expense_id = (int)$this->db->insert_id();
 		if (!$expense_id) {

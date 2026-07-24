@@ -164,6 +164,14 @@ class Posapi extends CI_Controller {
 			'can_manage_access' => $is_admin, // always via CI /access
 			'can_inventory' => $has_inventory,
 			'inventory_campus_ids' => $inventory_campus_ids,
+			'can_construction' => $is_admin
+				|| ($row && (
+					!empty($row['construction_sidebar'])
+					|| !empty($row['construction_site_expense'])
+					|| !empty($row['construction_projects'])
+				)),
+			'can_verify_construction_expense' => $is_admin
+				|| ($row && !empty($row['construction_expense_verify'])),
 		);
 	}
 

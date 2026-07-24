@@ -26,7 +26,8 @@ class Accesses extends CI_Model {
             'construction_contractors',
             'construction_add_contractor',
             'construction_contractor_payment',
-            'construction_reports'
+            'construction_reports',
+            'construction_expense_verify'
         );
     }
 

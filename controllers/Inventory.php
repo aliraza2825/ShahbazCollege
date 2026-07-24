@@ -3230,6 +3230,23 @@ class Inventory extends CI_Controller {
 		$this->db->set('payment_type',$paid_type);
 		$this->db->set('paid_type',$paid_type);
 		$this->db->set('purchase_no',$purchase_no);
+		// Link construction project when PR is project-tagged (expense daily closing)
+		if ($this->db->table_exists('purchase_requests')
+			&& $this->db->field_exists('project_id', 'purchase_requests')
+			&& $this->db->field_exists('construction_project_id', 'expenses')) {
+			$pr_proj = $this->db->query(
+				'SELECT project_id FROM purchase_requests
+				 WHERE purchase_no = ? AND project_id IS NOT NULL AND project_id > 0
+				 LIMIT 1',
+				array($purchase_no)
+			)->row_array();
+			if ($pr_proj) {
+				$this->db->set('construction_project_id', (int)$pr_proj['project_id']);
+				if ($this->db->field_exists('construction_source', 'expenses')) {
+					$this->db->set('construction_source', 'purchase');
+				}
+			}
+		}
 		$this->db->insert('expenses');
 		$expense_id = $this->db->insert_id();
 
