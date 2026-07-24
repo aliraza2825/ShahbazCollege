@@ -1817,7 +1817,7 @@ class Inventoryapi extends CI_Controller {
 	{
 		$campus_id = (int)$this->input->get('campus_id');
 		$this->db->select('purchase_requests.purchase_no, purchase_requests.title, purchase_requests.campus_id, campuses.campus_name,
-			MAX(purchase_requests.purchased) as purchased, COUNT(*) as line_count,
+			MIN(purchase_requests.purchased) as purchased, COUNT(*) as line_count,
 			SUM(purchase_requests.product_quantity * IFNULL(purchase_requests.purchase_price,0)) as total_amount,
 			MAX(purchase_requests.created_at) as created_at,
 			MAX(purchase_requests.approve_by) as approve_by,
@@ -2930,7 +2930,32 @@ class Inventoryapi extends CI_Controller {
 		$this->db->group_by('purchase_no');
 		$quote_pr_count = count($this->db->get()->result_array());
 
-		// Unpaid payments
+		// Finalized POs still missing payment agreement (any line purchased=0)
+		$this->db->select('purchase_requests.purchase_no, purchase_requests.title, campuses.campus_name,
+			COUNT(*) as line_count,
+			SUM(purchase_requests.product_quantity * IFNULL(purchase_requests.purchase_price,0)) as total_amount', false);
+		$this->db->from('purchase_requests');
+		$this->db->join('campuses', 'campuses.campus_id = purchase_requests.campus_id', 'left');
+		$this->db->where(array('purchase_requests.final' => 1, 'purchase_requests.purchased' => 0));
+		$this->_apply_campus_filter('purchase_requests.campus_id', $campus_id, true);
+		$this->db->group_by('purchase_requests.purchase_no');
+		$this->db->order_by('purchase_requests.purchase_no', 'DESC');
+		$this->db->limit($limit);
+		$agreement_pending = $this->db->get()->result_array();
+		foreach ($agreement_pending as &$ap) {
+			$ap['kind'] = 'agreement_pending';
+			$ap['id'] = 'agree-' . $ap['purchase_no'];
+		}
+		unset($ap);
+
+		$this->db->from('purchase_requests');
+		$this->db->where(array('final' => 1, 'purchased' => 0));
+		$this->_apply_campus_filter('campus_id', $campus_id, true);
+		$this->db->select('purchase_no');
+		$this->db->group_by('purchase_no');
+		$agreement_pending_count = count($this->db->get()->result_array());
+
+		// Unpaid installments (agreement already created)
 		$this->db->select('payment_aggrements.*, payment_aggrements.payment_aggrement_id AS id, payment_aggrements.date AS due_date, vendors.name AS vendor_name,
 			(SELECT pr.title FROM purchase_requests pr WHERE pr.purchase_no = payment_aggrements.purchase_no LIMIT 1) AS title', false);
 		$this->db->from('payment_aggrements');
@@ -2938,8 +2963,16 @@ class Inventoryapi extends CI_Controller {
 		$this->db->where('payment_aggrements.paid', 0);
 		$this->db->order_by('payment_aggrements.date', 'ASC');
 		$this->db->limit($limit);
-		$payments = $this->db->get()->result_array();
-		$payment_count = $this->db->where('paid', 0)->count_all_results('payment_aggrements');
+		$installments = $this->db->get()->result_array();
+		foreach ($installments as &$inst) {
+			$inst['kind'] = 'installment';
+		}
+		unset($inst);
+		$installment_count = $this->db->where('paid', 0)->count_all_results('payment_aggrements');
+
+		// Agreement-pending first, then unpaid installments (cap list for dashboard)
+		$payments = array_slice(array_merge($agreement_pending, $installments), 0, $limit);
+		$payment_count = $agreement_pending_count + $installment_count;
 
 		// Gate
 		$this->db->select('purchase_requests.purchase_request_id, purchase_requests.purchase_no, purchase_requests.title, purchase_requests.product_quantity, campuses.campus_name, product_names.product_name');
