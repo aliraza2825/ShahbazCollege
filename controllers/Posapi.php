@@ -1706,9 +1706,10 @@ class Posapi extends CI_Controller {
 		$to = $this->input->get('to_date') ? $this->input->get('to_date') : date('Y-m-d');
 		$perms = $this->_permissions();
 
-		$this->db->select('pos_orders.*, users.first_name, users.last_name');
+		$this->db->select('pos_orders.*, users.first_name, users.last_name, students.roll_no AS student_roll', false);
 		$this->db->from('pos_orders');
 		$this->db->join('users', 'users.user_id = pos_orders.sold_by', 'left');
+		$this->db->join('students', 'students.student_id = pos_orders.student_id', 'left');
 		$this->db->where('DATE(pos_orders.created_at) >=', $from);
 		$this->db->where('DATE(pos_orders.created_at) <=', $to);
 		if (!$perms['is_admin']) {
@@ -1721,6 +1722,55 @@ class Posapi extends CI_Controller {
 		$this->db->order_by('pos_orders.order_id', 'DESC');
 		$this->db->limit(100);
 		$rows = $this->db->get()->result_array();
+
+		// Attach sold products summary for list view
+		if (count($rows) && $this->db->table_exists('pos_order_items')) {
+			$ids = array();
+			foreach ($rows as $r) {
+				$ids[] = (int)$r['order_id'];
+			}
+			$ids = array_values(array_filter(array_unique($ids)));
+			$items_by_order = array();
+			if (count($ids)) {
+				$this->db->select('order_id, name, quantity, is_free', false);
+				$this->db->from('pos_order_items');
+				$this->db->where_in('order_id', $ids);
+				$this->db->order_by('order_item_id', 'ASC');
+				$items = $this->db->get()->result_array();
+				foreach ($items as $it) {
+					$oid = (int)$it['order_id'];
+					if (!isset($items_by_order[$oid])) $items_by_order[$oid] = array();
+					$qty = (int)$it['quantity'];
+					$label = trim((string)$it['name']);
+					if ($label === '') $label = 'Item';
+					if ($qty > 1) $label .= ' ×' . $qty;
+					if (!empty($it['is_free'])) $label .= ' (free)';
+					$items_by_order[$oid][] = $label;
+				}
+			}
+			foreach ($rows as &$r) {
+				$oid = (int)$r['order_id'];
+				$labels = isset($items_by_order[$oid]) ? $items_by_order[$oid] : array();
+				$r['student_roll'] = isset($r['student_roll']) && $r['student_roll'] !== null
+					? (string)$r['student_roll']
+					: '';
+				$r['products'] = $labels;
+				$r['products_summary'] = count($labels) ? implode(', ', $labels) : '';
+				$r['item_count'] = count($labels);
+			}
+			unset($r);
+		} else {
+			foreach ($rows as &$r) {
+				$r['student_roll'] = isset($r['student_roll']) && $r['student_roll'] !== null
+					? (string)$r['student_roll']
+					: '';
+				$r['products'] = array();
+				$r['products_summary'] = '';
+				$r['item_count'] = 0;
+			}
+			unset($r);
+		}
+
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
 

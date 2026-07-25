@@ -504,6 +504,7 @@ class Constructionapi extends CI_Controller {
 			if ($campus_id < 1) {
 				$this->_json(array('success' => false, 'message' => 'Campus is required'), 422);
 			}
+			$status = $this->_normalize_project_status(isset($body['status']) ? $body['status'] : 'Active');
 			$this->db->insert('construction_projects', array(
 				'project_name' => $name,
 				'location' => isset($body['location']) ? trim($body['location']) : '',
@@ -511,7 +512,7 @@ class Constructionapi extends CI_Controller {
 				'start_date' => !empty($body['start_date']) ? $body['start_date'] : null,
 				'expected_completion_date' => !empty($body['expected_completion_date']) ? $body['expected_completion_date'] : null,
 				'budget' => isset($body['budget']) ? (float)$body['budget'] : 0,
-				'status' => isset($body['status']) ? $body['status'] : 'Active',
+				'status' => $status,
 				'campus_id' => $campus_id,
 				'created_by' => (int)$this->current_user['user_id'],
 				'created_at' => date('Y-m-d H:i:s'),
@@ -520,15 +521,53 @@ class Constructionapi extends CI_Controller {
 		}
 
 		$campus_id = (int)$this->input->get('campus_id');
+		$status_filter = trim((string)$this->input->get('status'));
 		if ($campus_id > 0 && $this->db->field_exists('campus_id', 'construction_projects')) {
 			// Strict campus filter — only that campus's projects
 			$this->db->where('campus_id', $campus_id);
 		}
+		if ($status_filter !== '' && strtolower($status_filter) !== 'all') {
+			$norm = $this->_normalize_project_status($status_filter);
+			$aliases = $this->_project_status_aliases($norm);
+			$this->db->where_in('status', $aliases);
+		}
 		$rows = $this->db->order_by('id', 'DESC')->get('construction_projects')->result_array();
 		foreach ($rows as &$r) {
+			$r['status'] = $this->_normalize_project_status(isset($r['status']) ? $r['status'] : 'Active');
 			$r['summary'] = $this->_project_summary($r['id']);
 		}
+		unset($r);
 		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	/** Allowed project statuses: Active | Inactive | Completed */
+	private function _normalize_project_status($status)
+	{
+		$s = strtolower(trim((string)$status));
+		if (in_array($s, array('inactive', 'paused', 'on hold', 'onhold', 'hold'), true)) {
+			return 'Inactive';
+		}
+		if (in_array($s, array('completed', 'complete', 'done', 'finished'), true)) {
+			return 'Completed';
+		}
+		// Planning / Running / Active / blank → Active
+		return 'Active';
+	}
+
+	/** DB values that map to a normalized status (legacy rows included). */
+	private function _project_status_aliases($normalized)
+	{
+		$normalized = $this->_normalize_project_status($normalized);
+		if ($normalized === 'Inactive') {
+			return array('Inactive', 'inactive', 'Paused', 'paused', 'On Hold', 'on hold', 'Hold', 'hold');
+		}
+		if ($normalized === 'Completed') {
+			return array('Completed', 'completed', 'Complete', 'complete', 'Done', 'done', 'Finished', 'finished');
+		}
+		return array(
+			'Active', 'active', 'Planning', 'planning', 'Running', 'running',
+			'In Progress', 'in progress', 'Open', 'open', '',
+		);
 	}
 
 	public function project($id = 0)
@@ -536,6 +575,45 @@ class Constructionapi extends CI_Controller {
 		$id = (int)$id;
 		$project = $this->_project($id);
 		if (!$project) $this->_json(array('success' => false, 'message' => 'Project not found'), 404);
+
+		$method = $_SERVER['REQUEST_METHOD'];
+		if ($method === 'PUT' || $method === 'POST') {
+			$this->_assert_manage();
+			$body = $this->_body();
+			$upd = array();
+			if (array_key_exists('project_name', $body)) {
+				$name = trim((string)$body['project_name']);
+				if ($name === '') $this->_json(array('success' => false, 'message' => 'project_name required'), 422);
+				$upd['project_name'] = $name;
+			}
+			if (array_key_exists('location', $body)) $upd['location'] = trim((string)$body['location']);
+			if (array_key_exists('client', $body)) $upd['client'] = trim((string)$body['client']);
+			if (array_key_exists('budget', $body)) $upd['budget'] = (float)$body['budget'];
+			if (array_key_exists('start_date', $body)) {
+				$upd['start_date'] = !empty($body['start_date']) ? $body['start_date'] : null;
+			}
+			if (array_key_exists('expected_completion_date', $body)) {
+				$upd['expected_completion_date'] = !empty($body['expected_completion_date'])
+					? $body['expected_completion_date']
+					: null;
+			}
+			if (array_key_exists('status', $body)) {
+				$upd['status'] = $this->_normalize_project_status($body['status']);
+			}
+			if (array_key_exists('campus_id', $body) && (int)$body['campus_id'] > 0) {
+				$upd['campus_id'] = (int)$body['campus_id'];
+			}
+			if (!count($upd)) {
+				$this->_json(array('success' => false, 'message' => 'Nothing to update'), 422);
+			}
+			$upd['updated_at'] = date('Y-m-d H:i:s');
+			$this->db->where('id', $id)->update('construction_projects', $upd);
+			$project = $this->_project($id);
+			$project['status'] = $this->_normalize_project_status(isset($project['status']) ? $project['status'] : 'Active');
+			$this->_json(array('success' => true, 'message' => 'Project updated', 'data' => $project));
+		}
+
+		$project['status'] = $this->_normalize_project_status(isset($project['status']) ? $project['status'] : 'Active');
 
 		$contractors = $this->_contractors_for_project($id);
 		foreach ($contractors as &$c) {
@@ -2075,6 +2153,296 @@ class Constructionapi extends CI_Controller {
 			'expense_id' => $expense_id,
 			'construction_ref_id' => $ref_id,
 			'message' => 'Expense added',
+		));
+	}
+
+	/**
+	 * Construction ERP dashboard — one-shot rollups for owner / PM.
+	 * GET dashboard
+	 */
+	public function dashboard()
+	{
+		$today = date('Y-m-d');
+		$week_start = date('Y-m-d', strtotime('monday this week'));
+		$month_start = date('Y-m-01');
+		$year_start = date('Y-01-01');
+
+		$projects = array();
+		if ($this->db->table_exists('construction_projects')) {
+			$projects = $this->db->order_by('id', 'DESC')->get('construction_projects')->result_array();
+		}
+
+		$total_budget = 0;
+		$total_expenses = 0;
+		$contractor_paid_all = 0;
+		$contractor_remaining_all = 0;
+		$contracts_value_all = 0;
+		$active_projects = 0;
+		$completed_projects = 0;
+		$project_rows = array();
+		$over_budget_names = array();
+
+		foreach ($projects as $p) {
+			$pid = (int)$p['id'];
+			$budget = (float)$p['budget'];
+			$sum = $this->_project_summary($pid);
+			$expense = (float)$sum['expense_total'];
+			$remaining = $budget - $expense;
+			$util = $budget > 0 ? round(($expense / $budget) * 100, 1) : 0;
+			$status = trim((string)$p['status']);
+			$status_l = strtolower($status);
+			$is_completed = in_array($status_l, array('completed', 'complete', 'done', 'finished'), true);
+			$is_inactive = in_array($status_l, array('inactive', 'paused', 'on hold', 'onhold', 'hold'), true);
+			$is_cancelled = in_array($status_l, array('cancelled', 'canceled'), true);
+			if ($is_completed) $completed_projects++;
+			elseif (!$is_cancelled && !$is_inactive) $active_projects++;
+			// Normalize display status for dashboard rows
+			if ($is_completed) $status = 'Completed';
+			elseif ($is_inactive) $status = 'Inactive';
+			else $status = 'Active';
+
+			$health = 'on_track';
+			if ($budget > 0 && $expense > $budget + 0.009) {
+				$health = 'over_budget';
+				$over_budget_names[] = $p['project_name'];
+			} elseif (
+				!$is_completed && !$is_cancelled
+				&& !empty($p['expected_completion_date'])
+				&& $p['expected_completion_date'] < $today
+			) {
+				$health = 'delayed';
+			}
+
+			$total_budget += $budget;
+			$total_expenses += $expense;
+			$contractor_paid_all += (float)$sum['contractor_paid'];
+			$contractor_remaining_all += (float)$sum['contractor_remaining'];
+			$contracts_value_all += (float)$sum['contractor_done'];
+
+			$project_rows[] = array(
+				'id' => $pid,
+				'project_name' => $p['project_name'],
+				'location' => isset($p['location']) ? $p['location'] : '',
+				'client' => isset($p['client']) ? $p['client'] : '',
+				'status' => $status,
+				'budget' => $budget,
+				'expense_total' => $expense,
+				'remaining' => $remaining,
+				'utilization_pct' => $util,
+				'contractor_paid' => (float)$sum['contractor_paid'],
+				'contractor_remaining' => (float)$sum['contractor_remaining'],
+				'expected_completion_date' => isset($p['expected_completion_date']) ? $p['expected_completion_date'] : null,
+				'health' => $health,
+			);
+		}
+
+		$total_contractors = 0;
+		if ($this->db->table_exists('construction_contractors')) {
+			$total_contractors = (int)$this->db->count_all('construction_contractors');
+		}
+		$total_labours = 0;
+		$active_labours = 0;
+		$labour_wages_paid = 0;
+		if ($this->db->table_exists('construction_labours')) {
+			$total_labours = (int)$this->db->count_all('construction_labours');
+			$active_labours = (int)$this->db->where('status', 1)->count_all_results('construction_labours');
+			if ($this->db->table_exists('expenses') && $this->db->field_exists('construction_source', 'expenses')) {
+				$lw = $this->db->query(
+					"SELECT COALESCE(SUM(amount),0) AS t FROM expenses
+					 WHERE construction_project_id > 0 AND construction_source = 'labour'"
+				)->row_array();
+				$labour_wages_paid = (float)$lw['t'];
+			}
+		}
+
+		$unpaid_installments = 0;
+		if ($this->db->table_exists('construction_contract_installments')) {
+			$ui = $this->db->query(
+				'SELECT COALESCE(SUM(amount),0) AS t FROM construction_contract_installments WHERE paid = 0'
+			)->row_array();
+			$unpaid_installments = (float)$ui['t'];
+		}
+
+		$expense_periods = array('today' => 0, 'week' => 0, 'month' => 0, 'year' => 0);
+		$expense_by_source = array('labour' => 0, 'contractor' => 0, 'misc' => 0, 'purchase' => 0);
+		$monthly_expenses = array();
+		$recent_expenses = array();
+
+		if ($this->db->table_exists('expenses') && $this->db->field_exists('construction_project_id', 'expenses')) {
+			$period_sums = array(
+				'today' => array($today, $today),
+				'week' => array($week_start, $today),
+				'month' => array($month_start, $today),
+				'year' => array($year_start, $today),
+			);
+			foreach ($period_sums as $key => $range) {
+				$row = $this->db->query(
+					"SELECT COALESCE(SUM(amount),0) AS t FROM expenses
+					 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
+					   AND date >= ? AND date <= ?",
+					$range
+				)->row_array();
+				$expense_periods[$key] = (float)$row['t'];
+			}
+
+			$src_rows = $this->db->query(
+				"SELECT COALESCE(NULLIF(construction_source,''), 'misc') AS src, COALESCE(SUM(amount),0) AS t
+				 FROM expenses
+				 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
+				 GROUP BY src"
+			)->result_array();
+			foreach ($src_rows as $sr) {
+				$src = $sr['src'];
+				if (!isset($expense_by_source[$src])) $src = 'misc';
+				$expense_by_source[$src] += (float)$sr['t'];
+			}
+
+			// Last 12 calendar months (fill zeros)
+			$month_map = array();
+			for ($i = 11; $i >= 0; $i--) {
+				$key = date('Y-m', strtotime(date('Y-m-01') . " -{$i} months"));
+				$month_map[$key] = 0;
+			}
+			$from12 = date('Y-m-01', strtotime(date('Y-m-01') . ' -11 months'));
+			$mrows = $this->db->query(
+				"SELECT DATE_FORMAT(date, '%Y-%m') AS ym, COALESCE(SUM(amount),0) AS t
+				 FROM expenses
+				 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
+				   AND date >= ?
+				 GROUP BY ym
+				 ORDER BY ym ASC",
+				array($from12)
+			)->result_array();
+			foreach ($mrows as $mr) {
+				if (isset($month_map[$mr['ym']])) $month_map[$mr['ym']] = (float)$mr['t'];
+			}
+			foreach ($month_map as $ym => $t) {
+				$monthly_expenses[] = array('month' => $ym, 'total' => $t);
+			}
+
+			$this->db->select(
+				'expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name',
+				false
+			);
+			$this->db->from('expenses');
+			$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
+			$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
+			$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
+			$this->db->where('expenses.construction_project_id IS NOT NULL', null, false);
+			$this->db->where('expenses.construction_project_id >', 0);
+			$this->db->order_by('expenses.date', 'DESC');
+			$this->db->order_by('expenses.expense_id', 'DESC');
+			$this->db->limit(10);
+			$recent_expenses = $this->db->get()->result_array();
+			foreach ($recent_expenses as &$re) {
+				$this->_decorate_expense_row($re);
+			}
+			unset($re);
+		}
+
+		$contractors_top = array();
+		if ($this->db->table_exists('construction_contractors')) {
+			$top = $this->db->query(
+				"SELECT c.id, c.contractor_name, c.image,
+					COALESCE(SUM(p.amount),0) AS paid_amount
+				 FROM construction_contractors c
+				 LEFT JOIN construction_contractor_payments p ON p.contractor_id = c.id
+				 GROUP BY c.id
+				 ORDER BY paid_amount DESC
+				 LIMIT 5"
+			)->result_array();
+			foreach ($top as $t) {
+				$contractors_top[] = array(
+					'id' => (int)$t['id'],
+					'contractor_name' => $t['contractor_name'],
+					'paid_amount' => (float)$t['paid_amount'],
+					'image_url' => $this->_contractor_image_url(isset($t['image']) ? $t['image'] : ''),
+				);
+			}
+		}
+
+		$last_verified = $this->_last_verified_expense_date();
+		$next_pending = $this->_next_pending_expense_date();
+
+		$purchase_pipeline = array('count' => 0, 'amount' => 0);
+		if ($this->db->table_exists('purchase_requests')
+			&& $this->db->field_exists('project_id', 'purchase_requests')) {
+			$pr = $this->db->query(
+				"SELECT COUNT(DISTINCT purchase_no) AS n,
+					COALESCE(SUM(product_quantity * IFNULL(purchase_price,0)),0) AS amt
+				 FROM purchase_requests
+				 WHERE project_id IS NOT NULL AND project_id > 0
+				   AND (final = 0 OR purchased = 0 OR gate_approval = 0 OR approval = 0)
+				   AND status != 2"
+			)->row_array();
+			if ($pr) {
+				$purchase_pipeline['count'] = (int)$pr['n'];
+				$purchase_pipeline['amount'] = (float)$pr['amt'];
+			}
+		}
+
+		$alerts = array();
+		foreach ($over_budget_names as $name) {
+			$alerts[] = array(
+				'level' => 'danger',
+				'code' => 'over_budget',
+				'message' => 'Budget exceeded: ' . $name,
+			);
+		}
+		if ($unpaid_installments > 0.009) {
+			$alerts[] = array(
+				'level' => 'warning',
+				'code' => 'unpaid_installments',
+				'message' => 'Unpaid contractor installments: ' . number_format($unpaid_installments, 0),
+			);
+		}
+		if ($next_pending) {
+			$alerts[] = array(
+				'level' => 'info',
+				'code' => 'closing_pending',
+				'message' => 'Expense closing pending for ' . $next_pending,
+			);
+		}
+		if ($purchase_pipeline['count'] > 0) {
+			$alerts[] = array(
+				'level' => 'info',
+				'code' => 'purchase_pipeline',
+				'message' => $purchase_pipeline['count'] . ' project purchase(s) still in pipeline',
+			);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'kpis' => array(
+					'total_projects' => count($projects),
+					'active_projects' => $active_projects,
+					'completed_projects' => $completed_projects,
+					'total_budget' => $total_budget,
+					'total_expenses' => $total_expenses,
+					'remaining_budget' => $total_budget - $total_expenses,
+					'total_contractors' => $total_contractors,
+					'total_labours' => $total_labours,
+					'active_labours' => $active_labours,
+					'labour_wages_paid' => $labour_wages_paid,
+					'contractor_paid' => $contractor_paid_all,
+					'contractor_remaining' => $contractor_remaining_all,
+					'unpaid_installments_amount' => $unpaid_installments,
+					'contracts_value' => $contracts_value_all,
+				),
+				'expense_periods' => $expense_periods,
+				'expense_by_source' => $expense_by_source,
+				'monthly_expenses' => $monthly_expenses,
+				'projects' => $project_rows,
+				'contractors_top' => $contractors_top,
+				'recent_expenses' => $recent_expenses,
+				'closing' => array(
+					'last_verified_date' => $last_verified,
+					'next_pending_date' => $next_pending,
+				),
+				'purchase_pipeline' => $purchase_pipeline,
+				'alerts' => $alerts,
+			),
 		));
 	}
 

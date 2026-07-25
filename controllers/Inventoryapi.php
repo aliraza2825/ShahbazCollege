@@ -1394,20 +1394,38 @@ class Inventoryapi extends CI_Controller {
 			$vendor_groups_map[$vid]['payments'][] = $p;
 			$vendor_groups_map[$vid]['has_agreement'] = true;
 		}
+		foreach ($vendor_groups_map as &$vg) {
+			$agreed = 0;
+			foreach ($vg['payments'] as $p) {
+				$agreed += (float)$p['amount'];
+			}
+			$total = (float)$vg['total'];
+			$remaining = round($total - $agreed, 2);
+			if ($remaining < 0) $remaining = 0;
+			$vg['agreed_amount'] = round($agreed, 2);
+			$vg['remaining_amount'] = $remaining;
+			// Full when owed total is covered (or no price and at least one installment exists)
+			$vg['agreement_full'] = $total > 0
+				? ($agreed + 0.009 >= $total)
+				: !empty($vg['has_agreement']);
+		}
+		unset($vg);
 		$vendor_groups = array_values($vendor_groups_map);
 		$vendors_with_lines = 0;
 		$vendors_with_agreement = 0;
+		$vendors_agreement_full = 0;
 		foreach ($vendor_groups as $g) {
 			if ($g['line_count'] > 0) {
 				$vendors_with_lines++;
 				if ($g['has_agreement']) $vendors_with_agreement++;
+				if (!empty($g['agreement_full'])) $vendors_agreement_full++;
 			}
 		}
-		// Agreement done when every selected vendor has ≥1 installment
+		// Agreement done when every selected vendor's installments cover their owed total
 		$agreement_done = $all_final
 			&& $all_vendor
 			&& $vendors_with_lines > 0
-			&& $vendors_with_agreement >= $vendors_with_lines;
+			&& $vendors_agreement_full >= $vendors_with_lines;
 
 		$payments_total = count($payments);
 		$payments_unpaid = 0;
@@ -2009,13 +2027,18 @@ class Inventoryapi extends CI_Controller {
 		$purchase_no = isset($body['purchase_no']) ? trim($body['purchase_no']) : '';
 		$vendor_id = (int)(isset($body['vendor_id']) ? $body['vendor_id'] : 0);
 		$installments = isset($body['installments']) && is_array($body['installments']) ? $body['installments'] : array();
-		// append=true → add more installments on existing agreement (re-agreement / extra amounts)
+		// append=true → add more installments on existing agreement (only while remaining > 0)
 		$append = !empty($body['append']);
 		if ($purchase_no === '' || !count($installments)) {
 			$this->_json(array('success' => false, 'message' => 'purchase_no and installments required'), 422);
 		}
 		$lines = $this->db->get_where('purchase_requests', array('purchase_no' => $purchase_no, 'final' => 1))->result_array();
 		if (!count($lines)) $this->_json(array('success' => false, 'message' => 'PO not found'), 404);
+		foreach ($lines as $line) {
+			if ((int)$line['status'] === 2) {
+				$this->_json(array('success' => false, 'message' => 'Cannot add installments — purchase request is cancelled'), 422);
+			}
+		}
 		if (!$vendor_id) {
 			foreach ($lines as $line) {
 				if (!empty($line['purchase_from'])) {
@@ -2026,19 +2049,79 @@ class Inventoryapi extends CI_Controller {
 		}
 		if (!$vendor_id) $this->_json(array('success' => false, 'message' => 'vendor_id required (approve a quote first)'), 422);
 
+		// Amount owed to this vendor = qty × purchase_price on their lines
+		$vendor_total = 0;
+		$vendor_line_count = 0;
+		foreach ($lines as $line) {
+			if ((int)$line['purchase_from'] === $vendor_id) {
+				$vendor_total += (float)$line['product_quantity'] * (float)$line['purchase_price'];
+				$vendor_line_count++;
+			}
+		}
+		if ($vendor_line_count === 0) {
+			$this->_json(array('success' => false, 'message' => 'This vendor has no selected lines on this PO'), 422);
+		}
+
+		$existing = 0;
+		if ($this->db->table_exists('payment_aggrements')) {
+			$existing_rows = $this->db->get_where('payment_aggrements', array(
+				'purchase_no' => $purchase_no,
+				'vendor_id' => $vendor_id,
+			))->result_array();
+			foreach ($existing_rows as $er) {
+				$existing += (float)$er['amount'];
+			}
+		}
+		$remaining = round($vendor_total - $existing, 2);
+		if ($remaining < 0) $remaining = 0;
+
+		$new_sum = 0;
+		$valid_installments = array();
+		foreach ($installments as $inst) {
+			$amount = isset($inst['amount']) ? (float)$inst['amount'] : 0;
+			$due = isset($inst['due_date']) ? trim((string)$inst['due_date']) : (isset($inst['date']) ? trim((string)$inst['date']) : '');
+			if ($amount <= 0 || $due === '') continue;
+			$valid_installments[] = array(
+				'amount' => $amount,
+				'due' => $due,
+				'comment' => isset($inst['comment']) ? $inst['comment'] : '',
+			);
+			$new_sum += $amount;
+		}
+		if (!count($valid_installments)) {
+			$this->_json(array('success' => false, 'message' => 'Each installment needs amount and due date'), 422);
+		}
+
+		if ($vendor_total > 0 && $remaining <= 0.009) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Full amount already covered by installments for this vendor (' . number_format($vendor_total, 2, '.', '') . '). No more installments allowed.',
+				'vendor_total' => $vendor_total,
+				'agreed_amount' => $existing,
+				'remaining_amount' => 0,
+			), 422);
+		}
+		if ($vendor_total > 0 && round($new_sum, 2) > $remaining + 0.01) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Installments exceed remaining amount for this vendor. Remaining: ' . number_format($remaining, 2, '.', '') . ' (owed ' . number_format($vendor_total, 2, '.', '') . ', already agreed ' . number_format($existing, 2, '.', '') . ').',
+				'vendor_total' => $vendor_total,
+				'agreed_amount' => $existing,
+				'remaining_amount' => $remaining,
+				'new_sum' => $new_sum,
+			), 422);
+		}
+
 		$this->_ensure_journey_audit_columns();
 		$name = $this->_actor_name();
 		$now = date('Y-m-d H:i:s');
 		$added = 0;
 
-		foreach ($installments as $inst) {
-			$amount = isset($inst['amount']) ? (float)$inst['amount'] : 0;
-			$due = isset($inst['due_date']) ? trim((string)$inst['due_date']) : (isset($inst['date']) ? trim((string)$inst['date']) : '');
-			if ($amount <= 0 || $due === '') continue;
+		foreach ($valid_installments as $inst) {
 			$row = array(
-				'amount' => $amount,
-				'date' => $due,
-				'comment' => isset($inst['comment']) ? $inst['comment'] : '',
+				'amount' => $inst['amount'],
+				'date' => $inst['due'],
+				'comment' => $inst['comment'],
 				'vendor_id' => $vendor_id,
 				'purchase_no' => $purchase_no,
 				'image' => '',
@@ -2049,9 +2132,6 @@ class Inventoryapi extends CI_Controller {
 			$this->db->insert('payment_aggrements', $row);
 			$added++;
 		}
-		if (!$added) {
-			$this->_json(array('success' => false, 'message' => 'Each installment needs amount and due date'), 422);
-		}
 
 		$pr_upd = array(
 			'purchased' => 1,
@@ -2060,13 +2140,24 @@ class Inventoryapi extends CI_Controller {
 		);
 		$this->db->where(array('purchase_no' => $purchase_no, 'purchase_from' => $vendor_id))
 			->update('purchase_requests', $pr_upd);
+
+		$agreed_after = round($existing + $new_sum, 2);
+		$remaining_after = round($vendor_total - $agreed_after, 2);
+		if ($remaining_after < 0) $remaining_after = 0;
+
 		$this->_json(array(
 			'success' => true,
 			'added' => $added,
 			'append' => $append ? 1 : 0,
+			'vendor_total' => $vendor_total,
+			'agreed_amount' => $agreed_after,
+			'remaining_amount' => $remaining_after,
+			'agreement_full' => ($vendor_total > 0 && $agreed_after + 0.009 >= $vendor_total) ? 1 : 0,
 			'payment_agree_by' => $name,
 			'payment_agree_at' => $now,
-			'message' => $append ? 'Extra installments added' : 'Payment agreement saved',
+			'message' => ($remaining_after <= 0.009 && $vendor_total > 0)
+				? 'Payment agreement complete for this vendor'
+				: ($append ? 'Extra installments added' : 'Payment agreement saved'),
 		));
 	}
 
