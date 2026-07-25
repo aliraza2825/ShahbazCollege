@@ -468,25 +468,142 @@ class Constructionapi extends CI_Controller {
 		return $this->db->get()->result_array();
 	}
 
+	/**
+	 * Closing-day match for construction expenses.
+	 * Bank: DATE(actual_date) = tag/statement day; cash/legacy: date = expense day.
+	 * Returns SQL fragment; bind $date twice when using.
+	 */
+	private function _expense_closing_day_sql($alias = 'e')
+	{
+		$a = $alias !== '' ? rtrim($alias, '.') . '.' : '';
+		return "(
+			(LOWER(COALESCE({$a}paid_type,'')) = 'bank' AND DATE({$a}actual_date) = ?)
+			OR
+			(LOWER(COALESCE({$a}paid_type,'')) <> 'bank' AND {$a}date = ?)
+		)";
+	}
+
+	/** Calendar day used for closing lock checks on an existing expense row. */
+	private function _expense_closing_day_for_row($row)
+	{
+		$paid = isset($row['paid_type']) ? strtolower(trim((string)$row['paid_type'])) : '';
+		if ($paid === 'bank' && !empty($row['actual_date'])) {
+			return date('Y-m-d', strtotime($row['actual_date']));
+		}
+		return !empty($row['date']) ? $row['date'] : date('Y-m-d');
+	}
+
+	private function _brs_debit($row)
+	{
+		if (!$row) return 0.0;
+		$v = isset($row['debit']) ? $row['debit'] : 0;
+		if (is_string($v)) $v = str_replace(',', '', $v);
+		return (float)$v;
+	}
+
+	/** Active petty cash row assigned to a user (legacy Inventory/Expenses pattern). */
+	private function _user_petty_row($user_id)
+	{
+		$user_id = (int)$user_id;
+		if ($user_id <= 0 || !$this->db->table_exists('petty_cash_college_wise')) return null;
+		$petty = $this->db->get_where('petty_cash_college_wise', array(
+			'assign_to' => $user_id,
+			'petty_status' => 1,
+		))->row_array();
+		if (!$petty) {
+			$petty = $this->db->get_where('petty_cash_college_wise', array(
+				'assign_to' => $user_id,
+			))->row_array();
+		}
+		return $petty;
+	}
+
+	private function _petty_live_balance($petty)
+	{
+		if (!$petty) return 0.0;
+		if (!function_exists('pettycash_statement')) {
+			$this->load->helper('custom');
+		}
+		return function_exists('pettycash_statement')
+			? (float)pettycash_statement((int)$petty['id'])
+			: (float)$petty['remaining_amount'];
+	}
+
+	/** Ensure user can spend $amount from petty cash; returns petty row. */
+	private function _assert_petty_cash_for_amount($amount, $user_id = null)
+	{
+		$amount = (float)$amount;
+		$user_id = $user_id !== null ? (int)$user_id : (int)$this->current_user['user_id'];
+		$petty = $this->_user_petty_row($user_id);
+		if (!$petty) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'No petty cash account assigned. Cannot pay from cash.',
+			), 422);
+		}
+		$bal = $this->_petty_live_balance($petty);
+		if ($bal + 0.0001 < $amount) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Insufficient petty cash. Balance: ' . number_format($bal, 0)
+					. ', needed: ' . number_format($amount, 0) . '. Kindly add cash first.',
+			), 422);
+		}
+		return $petty;
+	}
+
+	private function _petty_deduct_for_user($user_id, $amount)
+	{
+		$amount = (float)$amount;
+		$user_id = (int)$user_id;
+		if ($amount <= 0 || $user_id <= 0 || !$this->db->table_exists('petty_cash_college_wise')) return;
+		$this->db->set('remaining_amount', 'remaining_amount - ' . $amount, false);
+		$this->db->where('assign_to', $user_id);
+		$this->db->update('petty_cash_college_wise');
+	}
+
+	private function _petty_restore_for_user($user_id, $amount)
+	{
+		$amount = (float)$amount;
+		$user_id = (int)$user_id;
+		if ($amount <= 0 || $user_id <= 0 || !$this->db->table_exists('petty_cash_college_wise')) return;
+		$this->db->set('remaining_amount', 'remaining_amount + ' . $amount, false);
+		$this->db->where('assign_to', $user_id);
+		$this->db->update('petty_cash_college_wise');
+	}
+
 	private function _insert_expense($opts)
 	{
 		if (!$this->db->table_exists('expenses')) {
 			$this->_json(array('success' => false, 'message' => 'expenses table missing'), 500);
 		}
 		$name = $this->_user_name();
+		$paid_type = isset($opts['paid_type']) ? strtolower(trim((string)$opts['paid_type'])) : 'cash';
+		if ($paid_type !== 'bank') $paid_type = 'cash';
+
+		$expense_date = $opts['date'];
+		if (!empty($opts['actual_date'])) {
+			$actual_date = $opts['actual_date'];
+			if (strlen($actual_date) === 10) {
+				$actual_date .= ' 00:00:00';
+			}
+		} else {
+			$actual_date = $expense_date . (strlen($expense_date) === 10 ? ' 00:00:00' : '');
+		}
+
 		$row = array(
 			'campus_id' => (int)$opts['campus_id'],
 			'expense_category_id' => self::EXPENSE_CATEGORY_ID,
-			'date' => $opts['date'],
-			'actual_date' => date('Y-m-d H:i:s'),
+			'date' => $expense_date,
+			'actual_date' => $actual_date,
 			'amount' => (float)$opts['amount'],
 			'purpose' => $opts['purpose'],
 			'add_by' => $name,
 			'last_edit' => $name,
 			'add_by_id' => (int)$this->current_user['user_id'],
 			'approved_status' => 1,
-			'payment_type' => 'cash',
-			'paid_type' => 'cash',
+			'payment_type' => $paid_type,
+			'paid_type' => $paid_type,
 			'image' => !empty($opts['image']) ? $opts['image'] : '',
 			'construction_project_id' => (int)$opts['project_id'],
 			'construction_contractor_id' => isset($opts['contractor_id']) ? (int)$opts['contractor_id'] : null,
@@ -494,6 +611,9 @@ class Constructionapi extends CI_Controller {
 			'construction_source' => $opts['source'],
 			'construction_ref_id' => isset($opts['ref_id']) ? (int)$opts['ref_id'] : 0,
 		);
+		if ($this->db->field_exists('bank_statement_id', 'expenses') && !empty($opts['bank_trans_id'])) {
+			$row['bank_statement_id'] = (int)$opts['bank_trans_id'];
+		}
 		if ($this->db->field_exists('construction_installment_id', 'expenses') && !empty($opts['installment_id'])) {
 			$row['construction_installment_id'] = (int)$opts['installment_id'];
 		}
@@ -916,6 +1036,10 @@ class Constructionapi extends CI_Controller {
 		$r['image_url'] = $this->_expense_image_url(isset($r['image']) ? $r['image'] : '');
 		$closing_id = isset($r['construction_closing_id']) ? (int)$r['construction_closing_id'] : 0;
 		$r['is_verified'] = $closing_id > 0 || !empty($r['approved_by']);
+		$paid = isset($r['paid_type']) ? strtolower(trim((string)$r['paid_type'])) : '';
+		if ($paid !== 'bank') $paid = 'cash';
+		$r['paid_type'] = $paid;
+		$r['closing_date'] = $this->_expense_closing_day_for_row($r);
 	}
 
 	/** Subquery: purchase_no → project_id (one row per PR). */
@@ -981,6 +1105,7 @@ class Constructionapi extends CI_Controller {
 		);
 		if (!$this->db->table_exists('expenses')) return $totals;
 
+		$day_sql = $this->_expense_closing_day_sql('e');
 		$pr_join = $this->_purchase_project_join_sql();
 		if ($pr_join) {
 			$sql = "SELECT src, COALESCE(SUM(amount),0) AS t, COUNT(*) AS n FROM (
@@ -992,21 +1117,22 @@ class Constructionapi extends CI_Controller {
 					END AS src
 				FROM expenses e
 				LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
-				WHERE e.date = ?
+				WHERE {$day_sql}
 				  AND (
 					(e.construction_project_id IS NOT NULL AND e.construction_project_id > 0)
 					OR (pr.project_id IS NOT NULL AND pr.project_id > 0)
 				  )
 			) x GROUP BY src";
-			$rows = $this->db->query($sql, array($date))->result_array();
+			$rows = $this->db->query($sql, array($date, $date))->result_array();
 		} elseif ($this->db->field_exists('construction_project_id', 'expenses')) {
+			$day_sql_plain = $this->_expense_closing_day_sql('');
 			$rows = $this->db->query(
 				"SELECT construction_source AS src, COALESCE(SUM(amount),0) AS t, COUNT(*) AS n
 				 FROM expenses
 				 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
-				   AND date = ?
+				   AND {$day_sql_plain}
 				 GROUP BY construction_source",
-				array($date)
+				array($date, $date)
 			)->result_array();
 		} else {
 			return $totals;
@@ -1030,6 +1156,7 @@ class Constructionapi extends CI_Controller {
 	{
 		if (!$this->db->table_exists('expenses')) return array();
 
+		$day_sql = $this->_expense_closing_day_sql('e');
 		$pr_join = $this->_purchase_project_join_sql();
 		if ($pr_join) {
 			$sql = "SELECT e.*,
@@ -1051,27 +1178,24 @@ class Constructionapi extends CI_Controller {
 				LEFT JOIN construction_projects cp ON cp.id = e.construction_project_id
 				LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
 				LEFT JOIN construction_projects cp2 ON cp2.id = pr.project_id
-				WHERE e.date = ?
+				WHERE {$day_sql}
 				  AND (
 					(e.construction_project_id IS NOT NULL AND e.construction_project_id > 0)
 					OR (pr.project_id IS NOT NULL AND pr.project_id > 0)
 				  )
 				ORDER BY e.expense_id DESC";
-			$rows = $this->db->query($sql, array($date))->result_array();
+			$rows = $this->db->query($sql, array($date, $date))->result_array();
 		} elseif ($this->db->field_exists('construction_project_id', 'expenses')) {
-			$this->db->select(
-				'expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name',
-				false
-			);
-			$this->db->from('expenses');
-			$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
-			$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
-			$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
-			$this->db->where('expenses.construction_project_id IS NOT NULL', null, false);
-			$this->db->where('expenses.construction_project_id >', 0);
-			$this->db->where('expenses.date', $date);
-			$this->db->order_by('expenses.expense_id', 'DESC');
-			$rows = $this->db->get()->result_array();
+			$day_sql_e = $this->_expense_closing_day_sql('expenses');
+			$sql = "SELECT expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name
+				FROM expenses
+				LEFT JOIN construction_contractors ON construction_contractors.id = expenses.construction_contractor_id
+				LEFT JOIN construction_labours ON construction_labours.id = expenses.construction_labour_id
+				LEFT JOIN construction_projects ON construction_projects.id = expenses.construction_project_id
+				WHERE expenses.construction_project_id IS NOT NULL AND expenses.construction_project_id > 0
+				  AND {$day_sql_e}
+				ORDER BY expenses.expense_id DESC";
+			$rows = $this->db->query($sql, array($date, $date))->result_array();
 		} else {
 			return array();
 		}
@@ -1996,14 +2120,38 @@ class Constructionapi extends CI_Controller {
 		$method = $_SERVER['REQUEST_METHOD'];
 		if ($method === 'PUT' || $method === 'POST') {
 			$this->_assert_manage();
-			$this->_assert_expense_day_open($row['date']);
+			$closing_day = $this->_expense_closing_day_for_row($row);
+			$this->_assert_expense_day_open($closing_day);
 			$body = $this->_body();
-			$amount = isset($body['amount']) ? (float)$body['amount'] : (float)$row['amount'];
+			$paid = isset($row['paid_type']) ? strtolower(trim((string)$row['paid_type'])) : 'cash';
+			$is_bank = ($paid === 'bank');
+
+			// Bank-tagged amounts are locked to the statement debit.
+			$amount = $is_bank
+				? (float)$row['amount']
+				: (isset($body['amount']) ? (float)$body['amount'] : (float)$row['amount']);
 			$date = !empty($body['date']) ? $body['date'] : $row['date'];
 			$description = array_key_exists('description', $body) ? trim($body['description']) : null;
 			if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
-			if ($date !== $row['date']) {
+			if ($date !== $row['date'] && !$is_bank) {
 				$this->_assert_expense_day_open($date);
+			}
+			if ($is_bank && isset($body['amount']) && abs((float)$body['amount'] - (float)$row['amount']) > 0.0001) {
+				$this->_json(array('success' => false, 'message' => 'Bank expense amount is locked to the statement entry'), 422);
+			}
+
+			$old_amount = (float)$row['amount'];
+			$delta = $amount - $old_amount;
+			$petty_user = !empty($row['add_by_id'])
+				? (int)$row['add_by_id']
+				: (int)$this->current_user['user_id'];
+			if (!$is_bank && abs($delta) > 0.0001) {
+				if ($delta > 0) {
+					$this->_assert_petty_cash_for_amount($delta, $petty_user);
+					$this->_petty_deduct_for_user($petty_user, $delta);
+				} else {
+					$this->_petty_restore_for_user($petty_user, abs($delta));
+				}
 			}
 
 			$project = $this->_project((int)$row['construction_project_id']);
@@ -2036,6 +2184,10 @@ class Constructionapi extends CI_Controller {
 				'purpose' => $purpose,
 				'last_edit' => $name,
 			);
+			// Cash: keep actual_date aligned with expense date for closing.
+			if (!$is_bank && $this->db->field_exists('actual_date', 'expenses')) {
+				$exp_update['actual_date'] = $date . ' 00:00:00';
+			}
 			$this->db->where('expense_id', $id)->update('expenses', $exp_update);
 
 			if ($src === 'contractor' && $ref_id > 0) {
@@ -2058,15 +2210,39 @@ class Constructionapi extends CI_Controller {
 
 		if ($method === 'DELETE') {
 			$this->_assert_manage();
-			$this->_assert_expense_day_open($row['date']);
+			$closing_day = $this->_expense_closing_day_for_row($row);
+			$this->_assert_expense_day_open($closing_day);
 			$src = isset($row['construction_source']) ? $row['construction_source'] : 'misc';
 			$ref_id = (int)(isset($row['construction_ref_id']) ? $row['construction_ref_id'] : 0);
 			if ($src === 'contractor' && $ref_id > 0) {
+				$pay = $this->db->get_where('construction_contractor_payments', array('id' => $ref_id))->row_array();
+				if ($pay && !empty($pay['installment_id'])) {
+					$this->db->where('id', (int)$pay['installment_id'])->update('construction_contract_installments', array(
+						'paid' => 0,
+						'paid_date' => null,
+						'paid_amount' => null,
+						'payment_id' => null,
+						'expense_id' => null,
+					));
+				}
 				$this->db->where('id', $ref_id)->delete('construction_contractor_payments');
 			} elseif ($src === 'labour' && $ref_id > 0) {
 				$this->db->where('id', $ref_id)->delete('construction_labour_advances');
 			} elseif ($src === 'misc' && $ref_id > 0 && $this->db->table_exists('construction_site_expenses')) {
 				$this->db->where('id', $ref_id)->delete('construction_site_expenses');
+			}
+			// Untag bank statement (legacy pattern)
+			if ($this->db->table_exists('bank_reconciliation_statement')) {
+				$this->db->where('expense_id', $id)
+					->update('bank_reconciliation_statement', array('expense_id' => null));
+			}
+			$paid = isset($row['paid_type']) ? strtolower(trim((string)$row['paid_type'])) : 'cash';
+			if ($paid !== 'bank') {
+				// Restore petty cash to whoever booked the cash expense
+				$restore_user = !empty($row['add_by_id'])
+					? (int)$row['add_by_id']
+					: (int)$this->current_user['user_id'];
+				$this->_petty_restore_for_user($restore_user, (float)$row['amount']);
 			}
 			$this->db->where('expense_id', $id)->delete('expenses');
 			$this->_json(array('success' => true, 'message' => 'Deleted'));
@@ -2092,7 +2268,7 @@ class Constructionapi extends CI_Controller {
 		if (!$row || empty($row['construction_project_id'])) {
 			$this->_json(array('success' => false, 'message' => 'Expense not found'), 404);
 		}
-		$this->_assert_expense_day_open($row['date']);
+		$this->_assert_expense_day_open($this->_expense_closing_day_for_row($row));
 		$file = $this->_upload_expense_image('image');
 		if ($file === '') $this->_json(array('success' => false, 'message' => 'Image upload failed'), 422);
 		$this->db->where('expense_id', $id)->update('expenses', array('image' => $file));
@@ -2112,14 +2288,49 @@ class Constructionapi extends CI_Controller {
 		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
 		$date = !empty($body['date']) ? $body['date'] : date('Y-m-d');
 		$description = isset($body['description']) ? trim($body['description']) : '';
+		$paid_type = isset($body['paid_type']) ? strtolower(trim((string)$body['paid_type'])) : 'cash';
+		if ($paid_type !== 'bank') $paid_type = 'cash';
+		$bank_trans_id = isset($body['bank_trans_id']) ? (int)$body['bank_trans_id'] : 0;
 
 		if (!in_array($type, array('labour', 'contractor', 'misc'), true)) {
 			$this->_json(array('success' => false, 'message' => 'type must be labour|contractor|misc'), 422);
 		}
-		if (!$project_id || $amount <= 0) {
-			$this->_json(array('success' => false, 'message' => 'project_id and amount required'), 422);
+		if (!$project_id) {
+			$this->_json(array('success' => false, 'message' => 'project_id required'), 422);
 		}
-		$this->_assert_expense_day_open($date);
+
+		$actual_date = $date;
+		$brs = null;
+		if ($paid_type === 'bank') {
+			if ($bank_trans_id <= 0) {
+				$this->_json(array('success' => false, 'message' => 'Select a bank statement entry'), 422);
+			}
+			if (!$this->db->table_exists('bank_reconciliation_statement')) {
+				$this->_json(array('success' => false, 'message' => 'bank_reconciliation_statement missing'), 500);
+			}
+			$brs = $this->db->get_where('bank_reconciliation_statement', array('id' => $bank_trans_id))->row_array();
+			if (!$brs) {
+				$this->_json(array('success' => false, 'message' => 'Bank statement entry not found'), 404);
+			}
+			if (!empty($brs['expense_id'])) {
+				$this->_json(array('success' => false, 'message' => 'This statement entry is already tagged'), 422);
+			}
+			$debit = $this->_brs_debit($brs);
+			if ($debit <= 0) {
+				$this->_json(array('success' => false, 'message' => 'Statement entry has no debit amount'), 422);
+			}
+			$amount = $debit;
+			$actual_date = !empty($brs['trans_date'])
+				? date('Y-m-d', strtotime($brs['trans_date']))
+				: $date;
+			$this->_assert_expense_day_open($actual_date);
+		} else {
+			if ($amount <= 0) {
+				$this->_json(array('success' => false, 'message' => 'project_id and amount required'), 422);
+			}
+			$this->_assert_expense_day_open($date);
+		}
+
 		$project = $this->_project($project_id);
 		if (!$project) $this->_json(array('success' => false, 'message' => 'Project not found'), 404);
 
@@ -2157,7 +2368,7 @@ class Constructionapi extends CI_Controller {
 					$this->_json(array('success' => false, 'message' => 'installment does not belong to this project'), 422);
 				}
 				$contract_id = (int)$installment['contract_id'];
-				if ($amount <= 0) $amount = (float)$installment['amount'];
+				if ($paid_type === 'cash' && $amount <= 0) $amount = (float)$installment['amount'];
 				$installment_id_paid = $installment_id;
 				$contract_id_paid = $contract_id;
 			}
@@ -2219,7 +2430,6 @@ class Constructionapi extends CI_Controller {
 			$title = 'Construction · Misc expense';
 			$purpose = 'Construction ' . $project['project_name'] . ' · Misc'
 				. ($description !== '' ? ' · ' . $description : '');
-			// Optional mirror in construction_site_expenses for legacy views
 			if ($this->db->table_exists('construction_site_expenses')) {
 				$this->db->insert('construction_site_expenses', array(
 					'project_id' => $project_id,
@@ -2235,6 +2445,14 @@ class Constructionapi extends CI_Controller {
 			}
 		}
 
+		if ($amount <= 0) {
+			$this->_json(array('success' => false, 'message' => 'amount required'), 422);
+		}
+
+		if ($paid_type === 'cash') {
+			$this->_assert_petty_cash_for_amount($amount);
+		}
+
 		$expense_id = $this->_insert_expense(array(
 			'campus_id' => $campus_id,
 			'project_id' => $project_id,
@@ -2244,11 +2462,43 @@ class Constructionapi extends CI_Controller {
 			'ref_id' => $ref_id,
 			'amount' => $amount,
 			'date' => $date,
+			'actual_date' => $actual_date,
+			'paid_type' => $paid_type,
+			'bank_trans_id' => $bank_trans_id,
 			'title' => $title,
 			'purpose' => $purpose,
 			'installment_id' => $installment_id_paid,
 			'contract_id' => $contract_id_paid,
 		));
+
+		if ($paid_type === 'cash') {
+			// Expense row is the petty-cash statement transaction (paid_type=cash).
+			$this->_petty_deduct_for_user((int)$this->current_user['user_id'], $amount);
+		} elseif ($paid_type === 'bank' && $bank_trans_id > 0 && $expense_id > 0) {
+			$this->db->where('id', $bank_trans_id)
+				->where('(expense_id IS NULL OR expense_id = 0)', null, false)
+				->update('bank_reconciliation_statement', array('expense_id' => $expense_id));
+			if ($this->db->affected_rows() < 1) {
+				if ($type === 'contractor' && $ref_id > 0) {
+					if ($installment_id_paid) {
+						$this->db->where('id', $installment_id_paid)->update('construction_contract_installments', array(
+							'paid' => 0,
+							'paid_date' => null,
+							'paid_amount' => null,
+							'payment_id' => null,
+							'expense_id' => null,
+						));
+					}
+					$this->db->where('id', $ref_id)->delete('construction_contractor_payments');
+				} elseif ($type === 'labour' && $ref_id > 0) {
+					$this->db->where('id', $ref_id)->delete('construction_labour_advances');
+				} elseif ($type === 'misc' && $ref_id > 0 && $this->db->table_exists('construction_site_expenses')) {
+					$this->db->where('id', $ref_id)->delete('construction_site_expenses');
+				}
+				$this->db->where('expense_id', $expense_id)->delete('expenses');
+				$this->_json(array('success' => false, 'message' => 'Statement entry was tagged by someone else'), 409);
+			}
+		}
 
 		if ($installment_id_paid) {
 			$this->db->where('id', $installment_id_paid)->update('construction_contract_installments', array(
@@ -2260,7 +2510,80 @@ class Constructionapi extends CI_Controller {
 			'success' => true,
 			'expense_id' => $expense_id,
 			'construction_ref_id' => $ref_id,
+			'paid_type' => $paid_type,
+			'amount' => $amount,
 			'message' => 'Expense added',
+		));
+	}
+
+	/**
+	 * GET bank_accounts — active bank accounts for expense tagging (no Accounts section required).
+	 */
+	public function bank_accounts()
+	{
+		$this->_assert_manage();
+		if (!$this->db->table_exists('accounts')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$rows = $this->db->query(
+			"SELECT id, account_name, account_title, amount, type
+			 FROM accounts WHERE type = '1' OR type = 1
+			 ORDER BY account_title ASC, account_name ASC"
+		)->result_array();
+		$out = array();
+		foreach ($rows as $r) {
+			$title = trim((string)(isset($r['account_title']) ? $r['account_title'] : ''));
+			$name = trim((string)(isset($r['account_name']) ? $r['account_name'] : ''));
+			$out[] = array(
+				'id' => (int)$r['id'],
+				'account_name' => $name,
+				'account_title' => $title,
+				'label' => $title !== '' ? $title : ($name !== '' ? $name : ('Account #' . $r['id'])),
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $out));
+	}
+
+	/**
+	 * GET bank_day_entries?account_id=&date=
+	 * Untagged debit rows for that bank on that statement day.
+	 */
+	public function bank_day_entries()
+	{
+		$this->_assert_manage();
+		$account_id = (int)$this->input->get('account_id');
+		$date = trim((string)$this->input->get('date'));
+		if ($account_id <= 0 || $date === '') {
+			$this->_json(array('success' => false, 'message' => 'account_id and date required'), 422);
+		}
+		if (!$this->db->table_exists('bank_reconciliation_statement')) {
+			$this->_json(array('success' => true, 'data' => array(), 'account_id' => $account_id, 'date' => $date));
+		}
+
+		$sql = "SELECT brs.id, brs.account_id, brs.trans_date, brs.description, brs.reference_no,
+					brs.statement_no, brs.debit, brs.credit, brs.balance, brs.expense_id
+				FROM bank_reconciliation_statement brs
+				WHERE brs.account_id = ?
+				  AND DATE(brs.trans_date) = ?
+				  AND (brs.expense_id IS NULL OR brs.expense_id = 0)
+				  AND CAST(REPLACE(COALESCE(brs.debit, '0'), ',', '') AS DECIMAL(18,2)) > 0
+				ORDER BY brs.id ASC
+				LIMIT 500";
+		$rows = $this->db->query($sql, array($account_id, $date))->result_array();
+		foreach ($rows as &$r) {
+			$r['id'] = (int)$r['id'];
+			$r['account_id'] = (int)$r['account_id'];
+			$r['debit'] = $this->_brs_debit($r);
+			$r['credit'] = isset($r['credit']) ? (float)str_replace(',', '', (string)$r['credit']) : 0;
+			$r['trans_date'] = !empty($r['trans_date']) ? date('Y-m-d', strtotime($r['trans_date'])) : $date;
+		}
+		unset($r);
+		$this->_json(array(
+			'success' => true,
+			'data' => $rows,
+			'account_id' => $account_id,
+			'date' => $date,
+			'count' => count($rows),
 		));
 	}
 
