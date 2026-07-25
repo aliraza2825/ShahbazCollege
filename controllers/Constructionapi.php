@@ -398,35 +398,54 @@ class Constructionapi extends CI_Controller {
 			array($project_id)
 		)->row_array();
 
-		$labour_row = $this->db->query(
-			"SELECT COALESCE(SUM(amount),0) AS t FROM expenses
-			 WHERE construction_project_id = ? AND construction_source = 'labour'",
-			array($project_id)
-		)->row_array();
-		$misc_row = $this->db->query(
-			"SELECT COALESCE(SUM(amount),0) AS t FROM expenses
-			 WHERE construction_project_id = ? AND construction_source = 'misc'",
-			array($project_id)
-		)->row_array();
-		$expense_all = $this->db->query(
-			"SELECT COALESCE(SUM(amount),0) AS t FROM expenses
-			 WHERE construction_project_id = ?",
-			array($project_id)
-		)->row_array();
-		$contractor_exp = $this->db->query(
-			"SELECT COALESCE(SUM(amount),0) AS t FROM expenses
-			 WHERE construction_project_id = ? AND construction_source = 'contractor'",
-			array($project_id)
-		)->row_array();
+		// Include purchase installment expenses linked via purchase_no → project_id
+		// (same rule as daily closing / expenses report).
+		$pr_join = $this->_purchase_project_join_sql();
+		$by_src = array('labour' => 0, 'contractor' => 0, 'misc' => 0, 'purchase' => 0);
+		$expense_total = 0;
+		if ($pr_join) {
+			$rows = $this->db->query(
+				"SELECT src, COALESCE(SUM(amount),0) AS t FROM (
+					SELECT e.amount,
+						CASE
+							WHEN e.construction_source IN ('contractor','labour','misc','purchase') THEN e.construction_source
+							WHEN pr.project_id IS NOT NULL AND pr.project_id > 0 THEN 'purchase'
+							ELSE COALESCE(NULLIF(e.construction_source,''), 'misc')
+						END AS src
+					FROM expenses e
+					LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
+					WHERE COALESCE(e.construction_project_id, pr.project_id) = ?
+				) x GROUP BY src",
+				array($project_id)
+			)->result_array();
+		} elseif ($this->db->table_exists('expenses') && $this->db->field_exists('construction_project_id', 'expenses')) {
+			$rows = $this->db->query(
+				"SELECT COALESCE(NULLIF(construction_source,''), 'misc') AS src, COALESCE(SUM(amount),0) AS t
+				 FROM expenses
+				 WHERE construction_project_id = ?
+				 GROUP BY src",
+				array($project_id)
+			)->result_array();
+		} else {
+			$rows = array();
+		}
+		foreach ($rows as $r) {
+			$src = isset($r['src']) ? $r['src'] : 'misc';
+			if (!isset($by_src[$src])) $src = 'misc';
+			$amt = (float)$r['t'];
+			$by_src[$src] += $amt;
+			$expense_total += $amt;
+		}
 
 		return array(
 			'contractor_done' => $done,
 			'contractor_paid' => $contractor_paid,
 			'contractor_remaining' => max(0, $done - $contractor_paid),
-			'labour_paid' => (float)$labour_row['t'],
-			'misc_total' => (float)$misc_row['t'],
-			'contractor_expense' => (float)$contractor_exp['t'],
-			'expense_total' => (float)$expense_all['t'],
+			'labour_paid' => $by_src['labour'],
+			'misc_total' => $by_src['misc'],
+			'contractor_expense' => $by_src['contractor'],
+			'purchase_expense' => $by_src['purchase'],
+			'expense_total' => $expense_total,
 			'contractor_count' => (int)$count_row['n'],
 		);
 	}
@@ -1831,45 +1850,109 @@ class Constructionapi extends CI_Controller {
 		$date_to = trim((string)$this->input->get('date_to'));
 		$date = trim((string)$this->input->get('date'));
 
-		$this->db->select('expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name', false);
-		$this->db->from('expenses');
-		$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
-		$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
-		$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
-		$this->db->where('expenses.construction_project_id IS NOT NULL', null, false);
-		$this->db->where('expenses.construction_project_id >', 0);
-		if ($project_id > 0) $this->db->where('expenses.construction_project_id', $project_id);
-		if ($source !== '' && in_array($source, array('labour', 'contractor', 'misc'), true)) {
-			$this->db->where('expenses.construction_source', $source);
-		}
+		// Build a shared date WHERE + bindings for either exact day or range.
+		$date_where = '';
+		$date_bind = array();
 		if ($date !== '') {
-			$this->db->where('expenses.date', $date);
+			$date_where = 'e.date = ?';
+			$date_bind[] = $date;
 		} else {
-			if ($date_from !== '') $this->db->where('expenses.date >=', $date_from);
-			if ($date_to !== '') $this->db->where('expenses.date <=', $date_to);
+			$parts = array();
+			if ($date_from !== '') {
+				$parts[] = 'e.date >= ?';
+				$date_bind[] = $date_from;
+			}
+			if ($date_to !== '') {
+				$parts[] = 'e.date <= ?';
+				$date_bind[] = $date_to;
+			}
+			$date_where = count($parts) ? implode(' AND ', $parts) : '1=1';
 		}
-		$this->db->order_by('expenses.date', 'DESC');
-		$this->db->order_by('expenses.expense_id', 'DESC');
-		$rows = $this->db->get()->result_array();
+
+		$pr_join = $this->_purchase_project_join_sql();
+		$rows = array();
+
+		if ($pr_join) {
+			// Mirror _day_expense_rows: catch purchase installment expenses linked via
+			// purchase_no → purchase_requests.project_id, and enrich with vendor name.
+			$sql = "SELECT e.*,
+					cc.contractor_name, cl.labour_name,
+					COALESCE(cp.project_name, cp2.project_name) AS project_name,
+					COALESCE(e.construction_project_id, pr.project_id) AS linked_project_id,
+					CASE
+						WHEN e.construction_source IN ('contractor','labour','misc','purchase') THEN e.construction_source
+						WHEN pr.project_id IS NOT NULL AND pr.project_id > 0 THEN 'purchase'
+						ELSE COALESCE(NULLIF(e.construction_source,''), 'misc')
+					END AS construction_source_resolved,
+					(SELECT v.name FROM payment_aggrements pa
+					 LEFT JOIN vendors v ON v.id = pa.vendor_id
+					 WHERE pa.purchase_no = e.purchase_no
+					 ORDER BY pa.paid DESC, pa.date DESC LIMIT 1) AS vendor_name
+				FROM expenses e
+				LEFT JOIN construction_contractors cc ON cc.id = e.construction_contractor_id
+				LEFT JOIN construction_labours cl ON cl.id = e.construction_labour_id
+				LEFT JOIN construction_projects cp ON cp.id = e.construction_project_id
+				LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
+				LEFT JOIN construction_projects cp2 ON cp2.id = pr.project_id
+				WHERE {$date_where}
+				  AND (
+					(e.construction_project_id IS NOT NULL AND e.construction_project_id > 0)
+					OR (pr.project_id IS NOT NULL AND pr.project_id > 0)
+				  )";
+			$bind = $date_bind;
+			if ($project_id > 0) {
+				$sql .= " AND COALESCE(e.construction_project_id, pr.project_id) = ?";
+				$bind[] = $project_id;
+			}
+			$sql .= " ORDER BY e.date DESC, e.expense_id DESC";
+			$rows = $this->db->query($sql, $bind)->result_array();
+		} else {
+			$this->db->select('expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name', false);
+			$this->db->from('expenses');
+			$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
+			$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
+			$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
+			$this->db->where('expenses.construction_project_id IS NOT NULL', null, false);
+			$this->db->where('expenses.construction_project_id >', 0);
+			if ($project_id > 0) $this->db->where('expenses.construction_project_id', $project_id);
+			if ($date !== '') {
+				$this->db->where('expenses.date', $date);
+			} else {
+				if ($date_from !== '') $this->db->where('expenses.date >=', $date_from);
+				if ($date_to !== '') $this->db->where('expenses.date <=', $date_to);
+			}
+			$this->db->order_by('expenses.date', 'DESC');
+			$this->db->order_by('expenses.expense_id', 'DESC');
+			$rows = $this->db->get()->result_array();
+		}
 
 		$total = 0;
-		$by_source = array('contractor' => 0, 'labour' => 0, 'misc' => 0);
+		$by_source = array('contractor' => 0, 'labour' => 0, 'misc' => 0, 'purchase' => 0);
+		$filtered = array();
 		foreach ($rows as &$r) {
-			$amt = (float)$r['amount'];
-			$total += $amt;
+			$this->_decorate_expense_row($r);
 			$src = isset($r['construction_source']) ? $r['construction_source'] : 'misc';
 			if (!isset($by_source[$src])) $src = 'misc';
+			// Optional source filter (labour|contractor|misc|purchase)
+			if ($source !== '' && in_array($source, array('labour', 'contractor', 'misc', 'purchase'), true)
+				&& $src !== $source) {
+				continue;
+			}
+			$amt = (float)$r['amount'];
+			$total += $amt;
 			$by_source[$src] += $amt;
-			$this->_decorate_expense_row($r);
+			$filtered[] = $r;
 		}
+		unset($r);
 
 		$this->_json(array(
 			'success' => true,
-			'data' => $rows,
+			'data' => $filtered,
 			'total' => $total,
 			'contractor_total' => $by_source['contractor'],
 			'labour_total' => $by_source['labour'],
 			'misc_total' => $by_source['misc'],
+			'purchase_total' => $by_source['purchase'],
 			'date' => $date !== '' ? $date : null,
 		));
 	}
@@ -2269,71 +2352,144 @@ class Constructionapi extends CI_Controller {
 		$recent_expenses = array();
 
 		if ($this->db->table_exists('expenses') && $this->db->field_exists('construction_project_id', 'expenses')) {
+			$pr_join = $this->_purchase_project_join_sql();
 			$period_sums = array(
 				'today' => array($today, $today),
 				'week' => array($week_start, $today),
 				'month' => array($month_start, $today),
 				'year' => array($year_start, $today),
 			);
-			foreach ($period_sums as $key => $range) {
-				$row = $this->db->query(
-					"SELECT COALESCE(SUM(amount),0) AS t FROM expenses
+
+			if ($pr_join) {
+				$resolved = "CASE
+						WHEN e.construction_source IN ('contractor','labour','misc','purchase') THEN e.construction_source
+						WHEN pr.project_id IS NOT NULL AND pr.project_id > 0 THEN 'purchase'
+						ELSE COALESCE(NULLIF(e.construction_source,''), 'misc')
+					END";
+				$scope = "(
+					(e.construction_project_id IS NOT NULL AND e.construction_project_id > 0)
+					OR (pr.project_id IS NOT NULL AND pr.project_id > 0)
+				)";
+
+				foreach ($period_sums as $key => $range) {
+					$row = $this->db->query(
+						"SELECT COALESCE(SUM(e.amount),0) AS t
+						 FROM expenses e
+						 LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
+						 WHERE {$scope}
+						   AND e.date >= ? AND e.date <= ?",
+						$range
+					)->row_array();
+					$expense_periods[$key] = (float)$row['t'];
+				}
+
+				$src_rows = $this->db->query(
+					"SELECT src, COALESCE(SUM(amount),0) AS t FROM (
+						SELECT e.amount, {$resolved} AS src
+						FROM expenses e
+						LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
+						WHERE {$scope}
+					) x GROUP BY src"
+				)->result_array();
+
+				// Last 12 calendar months (fill zeros)
+				$month_map = array();
+				for ($i = 11; $i >= 0; $i--) {
+					$key = date('Y-m', strtotime(date('Y-m-01') . " -{$i} months"));
+					$month_map[$key] = 0;
+				}
+				$from12 = date('Y-m-01', strtotime(date('Y-m-01') . ' -11 months'));
+				$mrows = $this->db->query(
+					"SELECT DATE_FORMAT(e.date, '%Y-%m') AS ym, COALESCE(SUM(e.amount),0) AS t
+					 FROM expenses e
+					 LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
+					 WHERE {$scope}
+					   AND e.date >= ?
+					 GROUP BY ym
+					 ORDER BY ym ASC",
+					array($from12)
+				)->result_array();
+
+				$recent_sql = "SELECT e.*,
+						cc.contractor_name, cl.labour_name,
+						COALESCE(cp.project_name, cp2.project_name) AS project_name,
+						COALESCE(e.construction_project_id, pr.project_id) AS linked_project_id,
+						{$resolved} AS construction_source_resolved,
+						(SELECT v.name FROM payment_aggrements pa
+						 LEFT JOIN vendors v ON v.id = pa.vendor_id
+						 WHERE pa.purchase_no = e.purchase_no
+						 ORDER BY pa.paid DESC, pa.date DESC LIMIT 1) AS vendor_name
+					FROM expenses e
+					LEFT JOIN construction_contractors cc ON cc.id = e.construction_contractor_id
+					LEFT JOIN construction_labours cl ON cl.id = e.construction_labour_id
+					LEFT JOIN construction_projects cp ON cp.id = e.construction_project_id
+					LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
+					LEFT JOIN construction_projects cp2 ON cp2.id = pr.project_id
+					WHERE {$scope}
+					ORDER BY e.date DESC, e.expense_id DESC
+					LIMIT 10";
+				$recent_expenses = $this->db->query($recent_sql)->result_array();
+			} else {
+				foreach ($period_sums as $key => $range) {
+					$row = $this->db->query(
+						"SELECT COALESCE(SUM(amount),0) AS t FROM expenses
+						 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
+						   AND date >= ? AND date <= ?",
+						$range
+					)->row_array();
+					$expense_periods[$key] = (float)$row['t'];
+				}
+
+				$src_rows = $this->db->query(
+					"SELECT COALESCE(NULLIF(construction_source,''), 'misc') AS src, COALESCE(SUM(amount),0) AS t
+					 FROM expenses
 					 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
-					   AND date >= ? AND date <= ?",
-					$range
-				)->row_array();
-				$expense_periods[$key] = (float)$row['t'];
+					 GROUP BY src"
+				)->result_array();
+
+				$month_map = array();
+				for ($i = 11; $i >= 0; $i--) {
+					$key = date('Y-m', strtotime(date('Y-m-01') . " -{$i} months"));
+					$month_map[$key] = 0;
+				}
+				$from12 = date('Y-m-01', strtotime(date('Y-m-01') . ' -11 months'));
+				$mrows = $this->db->query(
+					"SELECT DATE_FORMAT(date, '%Y-%m') AS ym, COALESCE(SUM(amount),0) AS t
+					 FROM expenses
+					 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
+					   AND date >= ?
+					 GROUP BY ym
+					 ORDER BY ym ASC",
+					array($from12)
+				)->result_array();
+
+				$this->db->select(
+					'expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name',
+					false
+				);
+				$this->db->from('expenses');
+				$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
+				$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
+				$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
+				$this->db->where('expenses.construction_project_id IS NOT NULL', null, false);
+				$this->db->where('expenses.construction_project_id >', 0);
+				$this->db->order_by('expenses.date', 'DESC');
+				$this->db->order_by('expenses.expense_id', 'DESC');
+				$this->db->limit(10);
+				$recent_expenses = $this->db->get()->result_array();
 			}
 
-			$src_rows = $this->db->query(
-				"SELECT COALESCE(NULLIF(construction_source,''), 'misc') AS src, COALESCE(SUM(amount),0) AS t
-				 FROM expenses
-				 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
-				 GROUP BY src"
-			)->result_array();
 			foreach ($src_rows as $sr) {
 				$src = $sr['src'];
 				if (!isset($expense_by_source[$src])) $src = 'misc';
 				$expense_by_source[$src] += (float)$sr['t'];
 			}
-
-			// Last 12 calendar months (fill zeros)
-			$month_map = array();
-			for ($i = 11; $i >= 0; $i--) {
-				$key = date('Y-m', strtotime(date('Y-m-01') . " -{$i} months"));
-				$month_map[$key] = 0;
-			}
-			$from12 = date('Y-m-01', strtotime(date('Y-m-01') . ' -11 months'));
-			$mrows = $this->db->query(
-				"SELECT DATE_FORMAT(date, '%Y-%m') AS ym, COALESCE(SUM(amount),0) AS t
-				 FROM expenses
-				 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
-				   AND date >= ?
-				 GROUP BY ym
-				 ORDER BY ym ASC",
-				array($from12)
-			)->result_array();
 			foreach ($mrows as $mr) {
 				if (isset($month_map[$mr['ym']])) $month_map[$mr['ym']] = (float)$mr['t'];
 			}
 			foreach ($month_map as $ym => $t) {
 				$monthly_expenses[] = array('month' => $ym, 'total' => $t);
 			}
-
-			$this->db->select(
-				'expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name',
-				false
-			);
-			$this->db->from('expenses');
-			$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
-			$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
-			$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
-			$this->db->where('expenses.construction_project_id IS NOT NULL', null, false);
-			$this->db->where('expenses.construction_project_id >', 0);
-			$this->db->order_by('expenses.date', 'DESC');
-			$this->db->order_by('expenses.expense_id', 'DESC');
-			$this->db->limit(10);
-			$recent_expenses = $this->db->get()->result_array();
 			foreach ($recent_expenses as &$re) {
 				$this->_decorate_expense_row($re);
 			}
