@@ -763,14 +763,104 @@ class Inventoryapi extends CI_Controller {
 
 	// ─── Product names ──────────────────────────────────────
 
-	public function names()
+	private function _ensure_low_stock_alert_column()
 	{
-		if (!$this->db->field_exists('low_stock_alert_qty', 'product_names')) {
+		if ($this->db->table_exists('product_names')
+			&& !$this->db->field_exists('low_stock_alert_qty', 'product_names')) {
 			$this->db->query(
 				"ALTER TABLE `product_names`
 				 ADD `low_stock_alert_qty` INT NOT NULL DEFAULT 0"
 			);
 		}
+	}
+
+	/**
+	 * Overall low-stock alerts (all unit kinds, not just saleable).
+	 * GET low_stock_alerts?campus_id=&q=
+	 */
+	public function low_stock_alerts()
+	{
+		$this->_ensure_low_stock_alert_column();
+		$campus_id = (int)$this->input->get('campus_id');
+		$q = trim((string)$this->input->get('q'));
+
+		// Campus scope lives inside the LEFT JOIN so zero-stock items still surface.
+		$campus_sql = '';
+		if ($campus_id > 0) {
+			$this->_assert_campus_access($campus_id);
+			$campus_sql = ' AND p.campus_id = ' . $campus_id;
+		} elseif (!$this->_is_admin()) {
+			$allowed = $this->_inventory_campus_ids();
+			if (!count($allowed)) {
+				$this->_json(array(
+					'success' => true,
+					'data' => array(),
+					'count' => 0,
+					'out_of_stock_count' => 0,
+					'campus_id' => $campus_id ? $campus_id : null,
+				));
+			}
+			$campus_sql = ' AND p.campus_id IN (' . implode(',', array_map('intval', $allowed)) . ')';
+		}
+
+		$where_q = '';
+		$binds = array();
+		if ($q !== '') {
+			$where_q = ' AND pn.product_name LIKE ?';
+			$binds[] = '%' . $q . '%';
+		}
+
+		$sql = "SELECT
+				pn.product_name_id,
+				pn.product_name,
+				CAST(pn.low_stock_alert_qty AS UNSIGNED) AS alert_quantity,
+				COUNT(p.product_id) AS stock,
+				SUM(CASE WHEN p.saleable = 1 THEN 1 ELSE 0 END) AS saleable_count,
+				SUM(CASE WHEN p.consumeable = 1 THEN 1 ELSE 0 END) AS consumable_count,
+				MAX(NULLIF(p.product_image, '')) AS product_image
+			FROM product_names pn
+			LEFT JOIN products p
+				ON p.product_name_id = pn.product_name_id
+				AND p.sold = 0
+				AND p.consume = 0
+				AND p.status = 1
+				{$campus_sql}
+			WHERE pn.low_stock_alert_qty > 0
+				{$where_q}
+			GROUP BY pn.product_name_id, pn.product_name, pn.low_stock_alert_qty
+			HAVING COUNT(p.product_id) <= CAST(pn.low_stock_alert_qty AS UNSIGNED)
+			ORDER BY COUNT(p.product_id) ASC, pn.product_name ASC
+			LIMIT 500";
+		$rows = count($binds)
+			? $this->db->query($sql, $binds)->result_array()
+			: $this->db->query($sql)->result_array();
+
+		$out_of_stock = 0;
+		foreach ($rows as &$row) {
+			$row['product_name_id'] = (int)$row['product_name_id'];
+			$row['stock'] = (int)$row['stock'];
+			$row['alert_quantity'] = (int)$row['alert_quantity'];
+			$row['saleable_count'] = (int)$row['saleable_count'];
+			$row['consumable_count'] = (int)$row['consumable_count'];
+			$row['shortage'] = max(0, $row['alert_quantity'] - $row['stock']);
+			$row['severity'] = $row['stock'] <= 0 ? 'out' : 'low';
+			if ($row['stock'] <= 0) $out_of_stock++;
+			$row['image_url'] = $this->_img_url(isset($row['product_image']) ? $row['product_image'] : '');
+		}
+		unset($row);
+
+		$this->_json(array(
+			'success' => true,
+			'data' => $rows,
+			'count' => count($rows),
+			'out_of_stock_count' => $out_of_stock,
+			'campus_id' => $campus_id ? $campus_id : null,
+		));
+	}
+
+	public function names()
+	{
+		$this->_ensure_low_stock_alert_column();
 		// Full catalogue for tree UI (legacy add_product_name). Optional q filters by name.
 		$q = trim((string)$this->input->get('q'));
 		$this->db->select('product_names.*,
@@ -809,12 +899,7 @@ class Inventoryapi extends CI_Controller {
 		if ($type !== null && ($type === 0 || $type === 1)) {
 			$data['type'] = $type;
 		}
-		if (!$this->db->field_exists('low_stock_alert_qty', 'product_names')) {
-			$this->db->query(
-				"ALTER TABLE `product_names`
-				 ADD `low_stock_alert_qty` INT NOT NULL DEFAULT 0"
-			);
-		}
+		$this->_ensure_low_stock_alert_column();
 		if ($low_stock_alert_qty !== null) {
 			$data['low_stock_alert_qty'] = $low_stock_alert_qty;
 		}
