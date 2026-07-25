@@ -29,6 +29,17 @@ class Posapi extends CI_Controller {
 		}
 	}
 
+	private function _ensure_low_stock_alert_column()
+	{
+		if ($this->db->table_exists('product_names')
+			&& !$this->db->field_exists('low_stock_alert_qty', 'product_names')) {
+			$this->db->query(
+				"ALTER TABLE `product_names`
+				 ADD `low_stock_alert_qty` INT NOT NULL DEFAULT 0"
+			);
+		}
+	}
+
 	private function _cors()
 	{
 		$origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '*';
@@ -718,6 +729,85 @@ class Posapi extends CI_Controller {
 				'bundles' => $bundles,
 				'items' => $items,
 			)
+		));
+	}
+
+	/**
+	 * Saleable item stock alerts for the selected POS campus.
+	 * GET low_stock_alerts?campus_id=1
+	 */
+	public function low_stock_alerts()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		if ($campus_id < 1) {
+			$this->_json(array('success' => false, 'message' => 'campus_id required'), 422);
+		}
+		$this->_require_campus_access($campus_id);
+		$this->_ensure_low_stock_alert_column();
+
+		$sql = "SELECT
+				pn.product_name_id,
+				pn.product_name,
+				CAST(pn.low_stock_alert_qty AS UNSIGNED) AS alert_quantity,
+				COUNT(p.product_id) AS stock,
+				MAX(NULLIF(p.product_image, '')) AS product_image
+			FROM product_names pn
+			LEFT JOIN products p
+				ON p.product_name_id = pn.product_name_id
+				AND p.campus_id = ?
+				AND p.saleable = 1
+				AND p.sold = 0
+				AND p.consume = 0
+				AND p.status = 1
+			WHERE pn.low_stock_alert_qty > 0
+				AND COALESCE(pn.type, 0) = 0
+				AND (
+					EXISTS (
+						SELECT 1 FROM pos_category_items pci
+						LEFT JOIN pos_categories pc ON pc.category_id = pci.category_id
+						WHERE pci.product_name_id = pn.product_name_id
+							AND (
+								pci.campus_id = ?
+								OR pc.campus_id = ?
+								OR pci.campus_id IS NULL
+							)
+					)
+					OR EXISTS (
+						SELECT 1 FROM products ph
+						WHERE ph.product_name_id = pn.product_name_id
+							AND ph.campus_id = ?
+							AND ph.saleable = 1
+					)
+				)
+			GROUP BY pn.product_name_id, pn.product_name, pn.low_stock_alert_qty
+			HAVING COUNT(p.product_id) <= CAST(pn.low_stock_alert_qty AS UNSIGNED)
+			ORDER BY COUNT(p.product_id) ASC, pn.product_name ASC";
+		$rows = $this->db->query(
+			$sql,
+			array($campus_id, $campus_id, $campus_id, $campus_id)
+		)->result_array();
+
+		$out_of_stock = 0;
+		foreach ($rows as &$row) {
+			$row['product_name_id'] = (int)$row['product_name_id'];
+			$row['stock'] = (int)$row['stock'];
+			$row['alert_quantity'] = (int)$row['alert_quantity'];
+			$row['shortage'] = max(0, $row['alert_quantity'] - $row['stock']);
+			$row['severity'] = $row['stock'] <= 0 ? 'out' : 'low';
+			if ($row['stock'] <= 0) $out_of_stock++;
+			$img = isset($row['product_image']) ? trim((string)$row['product_image']) : '';
+			$row['image_url'] = $img !== ''
+				? rtrim(base_url(), '/') . '/inventory_images/' . rawurlencode($img)
+				: null;
+		}
+		unset($row);
+
+		$this->_json(array(
+			'success' => true,
+			'data' => $rows,
+			'count' => count($rows),
+			'out_of_stock_count' => $out_of_stock,
+			'campus_id' => $campus_id,
 		));
 	}
 

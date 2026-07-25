@@ -765,6 +765,12 @@ class Inventoryapi extends CI_Controller {
 
 	public function names()
 	{
+		if (!$this->db->field_exists('low_stock_alert_qty', 'product_names')) {
+			$this->db->query(
+				"ALTER TABLE `product_names`
+				 ADD `low_stock_alert_qty` INT NOT NULL DEFAULT 0"
+			);
+		}
 		// Full catalogue for tree UI (legacy add_product_name). Optional q filters by name.
 		$q = trim((string)$this->input->get('q'));
 		$this->db->select('product_names.*,
@@ -791,6 +797,9 @@ class Inventoryapi extends CI_Controller {
 			if ($sub_of <= 0) $sub_of = null;
 		}
 		$type = isset($body['type']) ? (int)$body['type'] : null; // 0 Inventory, 1 Asset
+		$low_stock_alert_qty = isset($body['low_stock_alert_qty'])
+			? max(0, (int)$body['low_stock_alert_qty'])
+			: null;
 
 		$data = array('product_name' => $name);
 		if ($sub_of !== null) $data['sub_of'] = $sub_of;
@@ -799,6 +808,15 @@ class Inventoryapi extends CI_Controller {
 		}
 		if ($type !== null && ($type === 0 || $type === 1)) {
 			$data['type'] = $type;
+		}
+		if (!$this->db->field_exists('low_stock_alert_qty', 'product_names')) {
+			$this->db->query(
+				"ALTER TABLE `product_names`
+				 ADD `low_stock_alert_qty` INT NOT NULL DEFAULT 0"
+			);
+		}
+		if ($low_stock_alert_qty !== null) {
+			$data['low_stock_alert_qty'] = $low_stock_alert_qty;
 		}
 
 		if ($id > 0) {
