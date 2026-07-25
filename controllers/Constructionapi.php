@@ -171,6 +171,7 @@ class Constructionapi extends CI_Controller {
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8");
 
 		$this->_ensure_column('construction_projects', 'campus_id', 'INT NULL');
+		$this->_ensure_column('construction_projects', 'progress_percent', 'DECIMAL(5,2) NOT NULL DEFAULT 0');
 
 		$this->db->query("CREATE TABLE IF NOT EXISTS construction_labours (
 			id INT NOT NULL AUTO_INCREMENT,
@@ -524,7 +525,10 @@ class Constructionapi extends CI_Controller {
 				$this->_json(array('success' => false, 'message' => 'Campus is required'), 422);
 			}
 			$status = $this->_normalize_project_status(isset($body['status']) ? $body['status'] : 'Active');
-			$this->db->insert('construction_projects', array(
+			$progress = isset($body['progress_percent']) ? (float)$body['progress_percent'] : 0;
+			if ($progress < 0) $progress = 0;
+			if ($progress > 100) $progress = 100;
+			$insert = array(
 				'project_name' => $name,
 				'location' => isset($body['location']) ? trim($body['location']) : '',
 				'client' => isset($body['client']) ? trim($body['client']) : '',
@@ -535,7 +539,11 @@ class Constructionapi extends CI_Controller {
 				'campus_id' => $campus_id,
 				'created_by' => (int)$this->current_user['user_id'],
 				'created_at' => date('Y-m-d H:i:s'),
-			));
+			);
+			if ($this->db->field_exists('progress_percent', 'construction_projects')) {
+				$insert['progress_percent'] = $progress;
+			}
+			$this->db->insert('construction_projects', $insert);
 			$this->_json(array('success' => true, 'id' => (int)$this->db->insert_id()));
 		}
 
@@ -553,7 +561,17 @@ class Constructionapi extends CI_Controller {
 		$rows = $this->db->order_by('id', 'DESC')->get('construction_projects')->result_array();
 		foreach ($rows as &$r) {
 			$r['status'] = $this->_normalize_project_status(isset($r['status']) ? $r['status'] : 'Active');
-			$r['summary'] = $this->_project_summary($r['id']);
+			$sum = $this->_project_summary($r['id']);
+			$r['summary'] = $sum;
+			$budget = (float)(isset($r['budget']) ? $r['budget'] : 0);
+			$expense = (float)$sum['expense_total'];
+			$r['expense_total'] = $expense;
+			$r['remaining'] = $budget - $expense;
+			$r['utilization_pct'] = $budget > 0 ? round(($expense / $budget) * 100, 1) : 0;
+			$prog = isset($r['progress_percent']) ? (float)$r['progress_percent'] : 0;
+			if ($prog < 0) $prog = 0;
+			if ($prog > 100) $prog = 100;
+			$r['progress_percent'] = $prog;
 		}
 		unset($r);
 		$this->_json(array('success' => true, 'data' => $rows));
@@ -618,6 +636,13 @@ class Constructionapi extends CI_Controller {
 			}
 			if (array_key_exists('status', $body)) {
 				$upd['status'] = $this->_normalize_project_status($body['status']);
+			}
+			if (array_key_exists('progress_percent', $body)
+				&& $this->db->field_exists('progress_percent', 'construction_projects')) {
+				$prog = (float)$body['progress_percent'];
+				if ($prog < 0) $prog = 0;
+				if ($prog > 100) $prog = 100;
+				$upd['progress_percent'] = $prog;
 			}
 			if (array_key_exists('campus_id', $body) && (int)$body['campus_id'] > 0) {
 				$upd['campus_id'] = (int)$body['campus_id'];
@@ -2312,6 +2337,7 @@ class Constructionapi extends CI_Controller {
 				'expense_total' => $expense,
 				'remaining' => $remaining,
 				'utilization_pct' => $util,
+				'progress_percent' => isset($p['progress_percent']) ? (float)$p['progress_percent'] : 0,
 				'contractor_paid' => (float)$sum['contractor_paid'],
 				'contractor_remaining' => (float)$sum['contractor_remaining'],
 				'expected_completion_date' => isset($p['expected_completion_date']) ? $p['expected_completion_date'] : null,
@@ -2599,6 +2625,249 @@ class Constructionapi extends CI_Controller {
 				'purchase_pipeline' => $purchase_pipeline,
 				'alerts' => $alerts,
 			),
+		));
+	}
+
+	/**
+	 * Dashboard KPI drill-down (all projects).
+	 * GET dashboard_ledger?type=contractor_paid|contractor_remaining|unpaid_installments|contracts_value
+	 */
+	public function dashboard_ledger()
+	{
+		$type = trim((string)$this->input->get('type'));
+		$allowed = array('contractor_paid', 'contractor_remaining', 'unpaid_installments', 'contracts_value');
+		if (!in_array($type, $allowed, true)) {
+			$this->_json(array('success' => false, 'message' => 'type required: ' . implode('|', $allowed)), 422);
+		}
+
+		$rows = array();
+		$total = 0.0;
+		$title = '';
+
+		if ($type === 'contractor_paid') {
+			if (!$this->db->table_exists('construction_contractor_payments')) {
+				$this->_json(array('success' => true, 'data' => array(), 'total' => 0, 'type' => $type, 'title' => 'Contractor payments'));
+			}
+			$this->db->select(
+				'construction_contractor_payments.*, construction_contractors.contractor_name,
+				 construction_contracts.title as contract_title, construction_projects.project_name',
+				false
+			);
+			$this->db->from('construction_contractor_payments');
+			$this->db->join(
+				'construction_contractors',
+				'construction_contractors.id = construction_contractor_payments.contractor_id',
+				'left'
+			);
+			$this->db->join(
+				'construction_contracts',
+				'construction_contracts.id = construction_contractor_payments.contract_id',
+				'left'
+			);
+			$this->db->join(
+				'construction_projects',
+				'construction_projects.id = construction_contractor_payments.project_id',
+				'left'
+			);
+			$this->db->order_by('construction_contractor_payments.payment_date', 'DESC');
+			$this->db->order_by('construction_contractor_payments.id', 'DESC');
+			$pays = $this->db->get()->result_array();
+			foreach ($pays as $p) {
+				$total += (float)$p['amount'];
+				$rows[] = array(
+					'row_kind' => 'payment',
+					'id' => (int)$p['id'],
+					'date' => $p['payment_date'],
+					'amount' => (float)$p['amount'],
+					'party_name' => $p['contractor_name'],
+					'contractor_id' => (int)$p['contractor_id'],
+					'project_id' => (int)$p['project_id'],
+					'project_name' => isset($p['project_name']) ? $p['project_name'] : '',
+					'payment_type' => $p['payment_type'],
+					'purpose' => trim(
+						(isset($p['project_name']) && $p['project_name'] ? $p['project_name'] . ' · ' : '')
+						. ($p['contract_title'] ? $p['contract_title'] . ' · ' : '')
+						. ($p['payment_type'] ?: 'payment')
+						. ($p['remarks'] ? ' · ' . $p['remarks'] : '')
+					),
+					'construction_source' => 'contractor',
+				);
+			}
+			$title = 'Contractor payments (paid)';
+		} elseif ($type === 'unpaid_installments') {
+			if (!$this->db->table_exists('construction_contract_installments')) {
+				$this->_json(array('success' => true, 'data' => array(), 'total' => 0, 'type' => $type, 'title' => 'Unpaid installments'));
+			}
+			$this->db->select(
+				'construction_contract_installments.*, construction_contracts.title as contract_title,
+				 construction_contractors.contractor_name, construction_projects.project_name',
+				false
+			);
+			$this->db->from('construction_contract_installments');
+			$this->db->join(
+				'construction_contracts',
+				'construction_contracts.id = construction_contract_installments.contract_id',
+				'left'
+			);
+			$this->db->join(
+				'construction_contractors',
+				'construction_contractors.id = construction_contract_installments.contractor_id',
+				'left'
+			);
+			$this->db->join(
+				'construction_projects',
+				'construction_projects.id = construction_contract_installments.project_id',
+				'left'
+			);
+			$this->db->where('construction_contract_installments.paid', 0);
+			$this->db->order_by('construction_contract_installments.due_date', 'ASC');
+			$this->db->order_by('construction_contract_installments.id', 'ASC');
+			$insts = $this->db->get()->result_array();
+			foreach ($insts as $i) {
+				$total += (float)$i['amount'];
+				$rows[] = array(
+					'row_kind' => 'installment',
+					'id' => (int)$i['id'],
+					'date' => $i['due_date'],
+					'amount' => (float)$i['amount'],
+					'party_name' => $i['contractor_name'],
+					'contractor_id' => (int)$i['contractor_id'],
+					'project_id' => (int)$i['project_id'],
+					'project_name' => isset($i['project_name']) ? $i['project_name'] : '',
+					'purpose' => trim(
+						(isset($i['project_name']) && $i['project_name'] ? $i['project_name'] . ' · ' : '')
+						. ($i['contract_title'] ?: 'Contract')
+						. ' · '
+						. ($i['label'] ?: ('Inst #' . $i['installment_no']))
+					),
+					'construction_source' => 'contractor',
+				);
+			}
+			$title = 'Unpaid installments';
+		} elseif ($type === 'contractor_remaining') {
+			// Match KPI: max(0, contract total − payments) per non-cancelled contract
+			if (!$this->db->table_exists('construction_contracts')) {
+				$this->_json(array('success' => true, 'data' => array(), 'total' => 0, 'type' => $type, 'title' => 'Contractor remaining'));
+			}
+			$this->db->select(
+				'construction_contracts.*, construction_contractors.contractor_name, construction_projects.project_name',
+				false
+			);
+			$this->db->from('construction_contracts');
+			$this->db->join(
+				'construction_contractors',
+				'construction_contractors.id = construction_contracts.contractor_id',
+				'left'
+			);
+			$this->db->join(
+				'construction_projects',
+				'construction_projects.id = construction_contracts.project_id',
+				'left'
+			);
+			$this->db->where('construction_contracts.status !=', 'cancelled');
+			$this->db->order_by('construction_contracts.id', 'DESC');
+			$contracts = $this->db->get()->result_array();
+			foreach ($contracts as $ct) {
+				$cid = (int)$ct['id'];
+				$paid_row = $this->db->query(
+					'SELECT COALESCE(SUM(amount),0) AS t FROM construction_contractor_payments WHERE contract_id = ?',
+					array($cid)
+				)->row_array();
+				$paid_amt = (float)$paid_row['t'];
+				// Fallback: payments without contract_id linked only by contractor+project
+				if ($paid_amt < 0.009) {
+					$paid_row = $this->db->query(
+						'SELECT COALESCE(SUM(amount),0) AS t FROM construction_contractor_payments
+						 WHERE contractor_id = ? AND project_id = ? AND (contract_id IS NULL OR contract_id = 0)',
+						array((int)$ct['contractor_id'], (int)$ct['project_id'])
+					)->row_array();
+					$paid_amt = (float)$paid_row['t'];
+				}
+				$contract_total = (float)$ct['total_amount'];
+				$rem = max(0, $contract_total - $paid_amt);
+				if ($rem <= 0.009) continue;
+				$total += $rem;
+				$rows[] = array(
+					'row_kind' => 'contract_remaining',
+					'id' => $cid,
+					'date' => $ct['start_date'],
+					'amount' => $rem,
+					'party_name' => isset($ct['contractor_name']) ? $ct['contractor_name'] : '',
+					'contractor_id' => (int)$ct['contractor_id'],
+					'project_id' => (int)$ct['project_id'],
+					'project_name' => isset($ct['project_name']) ? $ct['project_name'] : '',
+					'title' => $ct['title'],
+					'total_amount' => $contract_total,
+					'paid_amount' => $paid_amt,
+					'remaining' => $rem,
+					'purpose' => trim(
+						(isset($ct['project_name']) && $ct['project_name'] ? $ct['project_name'] . ' · ' : '')
+						. ($ct['title'] ?: 'Contract')
+						. ' · Contract ' . number_format($contract_total, 0)
+						. ' · Paid ' . number_format($paid_amt, 0)
+					),
+					'construction_source' => 'contractor',
+				);
+			}
+			$title = 'Contractor remaining (by contract)';
+		} else {
+			// contracts_value — all non-cancelled contracts
+			if (!$this->db->table_exists('construction_contracts')) {
+				$this->_json(array('success' => true, 'data' => array(), 'total' => 0, 'type' => $type, 'title' => 'Contracts value'));
+			}
+			$this->db->select(
+				'construction_contracts.*, construction_contractors.contractor_name, construction_projects.project_name',
+				false
+			);
+			$this->db->from('construction_contracts');
+			$this->db->join(
+				'construction_contractors',
+				'construction_contractors.id = construction_contracts.contractor_id',
+				'left'
+			);
+			$this->db->join(
+				'construction_projects',
+				'construction_projects.id = construction_contracts.project_id',
+				'left'
+			);
+			$this->db->where('construction_contracts.status !=', 'cancelled');
+			$this->db->order_by('construction_contracts.id', 'DESC');
+			$contracts = $this->db->get()->result_array();
+			foreach ($contracts as $ct) {
+				$ct = $this->_enrich_contract($ct);
+				$amt = (float)$ct['total_amount'];
+				$total += $amt;
+				$rows[] = array(
+					'row_kind' => 'contract',
+					'id' => (int)$ct['id'],
+					'date' => $ct['start_date'],
+					'amount' => $amt,
+					'party_name' => isset($ct['contractor_name']) ? $ct['contractor_name'] : '',
+					'contractor_id' => (int)$ct['contractor_id'],
+					'project_id' => (int)$ct['project_id'],
+					'project_name' => isset($ct['project_name']) ? $ct['project_name'] : '',
+					'title' => $ct['title'],
+					'total_amount' => $amt,
+					'paid_amount' => (float)$ct['paid_amount'],
+					'remaining' => (float)$ct['remaining'],
+					'purpose' => trim(
+						(isset($ct['project_name']) && $ct['project_name'] ? $ct['project_name'] . ' · ' : '')
+						. ($ct['title'] ?: 'Contract')
+						. ' · Paid ' . number_format((float)$ct['paid_amount'], 0)
+						. ' · Rem ' . number_format((float)$ct['remaining'], 0)
+					),
+					'construction_source' => 'contractor',
+				);
+			}
+			$title = 'Contracts value';
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => $rows,
+			'total' => $total,
+			'type' => $type,
+			'title' => $title,
 		));
 	}
 
