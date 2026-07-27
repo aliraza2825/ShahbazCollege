@@ -7,7 +7,8 @@ defined('BASEPATH') OR exit('No direct script access allowed');
  * Auth: X-Pos-Token; Admin or construction access flags
  *
  * Daily expenses write to `expenses` with construction_* FK columns.
- * Misc / labour / contractor all use expense_category_id = 448 until separate IDs are provided.
+ * Labour / contractor default to expense_category_id 448.
+ * Misc requires a selected expense_category_id (supports parent → subcategory).
  */
 class Constructionapi extends CI_Controller {
 
@@ -347,9 +348,9 @@ class Constructionapi extends CI_Controller {
 		$this->load->library('upload');
 		$config = array(
 			'upload_path' => $dir,
-			'allowed_types' => 'gif|jpg|jpeg|png|webp',
+			'allowed_types' => 'gif|jpg|jpeg|png|webp|pdf|doc|docx|xls|xlsx|txt|csv',
 			'encrypt_name' => true,
-			'max_size' => 5120,
+			'max_size' => 10240,
 		);
 		$this->upload->initialize($config);
 		if (!$this->upload->do_upload($field)) return '';
@@ -593,7 +594,9 @@ class Constructionapi extends CI_Controller {
 
 		$row = array(
 			'campus_id' => (int)$opts['campus_id'],
-			'expense_category_id' => self::EXPENSE_CATEGORY_ID,
+			'expense_category_id' => !empty($opts['expense_category_id'])
+				? (int)$opts['expense_category_id']
+				: self::EXPENSE_CATEGORY_ID,
 			'date' => $expense_date,
 			'actual_date' => $actual_date,
 			'amount' => (float)$opts['amount'],
@@ -2270,7 +2273,7 @@ class Constructionapi extends CI_Controller {
 		}
 		$this->_assert_expense_day_open($this->_expense_closing_day_for_row($row));
 		$file = $this->_upload_expense_image('image');
-		if ($file === '') $this->_json(array('success' => false, 'message' => 'Image upload failed'), 422);
+		if ($file === '') $this->_json(array('success' => false, 'message' => 'File upload failed — use image or PDF/document (max 10MB)'), 422);
 		$this->db->where('expense_id', $id)->update('expenses', array('image' => $file));
 		$this->_json(array(
 			'success' => true,
@@ -2344,6 +2347,7 @@ class Constructionapi extends CI_Controller {
 		$labour_id = null;
 		$installment_id_paid = null;
 		$contract_id_paid = null;
+		$expense_category_id = 0;
 		$title = '';
 		$purpose = '';
 
@@ -2427,13 +2431,30 @@ class Constructionapi extends CI_Controller {
 			$purpose = 'Construction ' . $project['project_name'] . ' · Labour · ' . $l['labour_name']
 				. ($description !== '' ? ' · ' . $description : '');
 		} else {
+			$expense_category_id = isset($body['expense_category_id'])
+				? (int)$body['expense_category_id']
+				: 0;
+			if ($expense_category_id <= 0) {
+				$this->_json(array('success' => false, 'message' => 'Select an expense category'), 422);
+			}
+			if (!$this->db->table_exists('expense_category')) {
+				$this->_json(array('success' => false, 'message' => 'expense_category table missing'), 500);
+			}
+			$cat = $this->db->get_where('expense_category', array(
+				'expense_category_id' => $expense_category_id,
+			))->row_array();
+			if (!$cat) {
+				$this->_json(array('success' => false, 'message' => 'Invalid expense category'), 422);
+			}
+			$cat_name = isset($cat['name']) ? trim((string)$cat['name']) : '';
 			$title = 'Construction · Misc expense';
 			$purpose = 'Construction ' . $project['project_name'] . ' · Misc'
+				. ($cat_name !== '' ? ' · ' . $cat_name : '')
 				. ($description !== '' ? ' · ' . $description : '');
 			if ($this->db->table_exists('construction_site_expenses')) {
 				$this->db->insert('construction_site_expenses', array(
 					'project_id' => $project_id,
-					'category' => 'Miscellaneous',
+					'category' => $cat_name !== '' ? $cat_name : 'Miscellaneous',
 					'expense_date' => $date,
 					'amount' => $amount,
 					'description' => $description,
@@ -2469,6 +2490,9 @@ class Constructionapi extends CI_Controller {
 			'purpose' => $purpose,
 			'installment_id' => $installment_id_paid,
 			'contract_id' => $contract_id_paid,
+			'expense_category_id' => $type === 'misc'
+				? $expense_category_id
+				: self::EXPENSE_CATEGORY_ID,
 		));
 
 		if ($paid_type === 'cash') {
@@ -3200,6 +3224,33 @@ class Constructionapi extends CI_Controller {
 		$this->db->where('status', 1);
 		$this->db->order_by('campus_name', 'ASC');
 		$this->_json(array('success' => true, 'data' => $this->db->get()->result_array()));
+	}
+
+	/** GET expense_categories — flat list for misc expense category / subcategory picker */
+	public function expense_categories()
+	{
+		if (!$this->db->table_exists('expense_category')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$this->db->select('expense_category_id, name, sub_of', false);
+		$this->db->from('expense_category');
+		if ($this->db->field_exists('status', 'expense_category')) {
+			$this->db->group_start();
+			$this->db->where('status', 'active');
+			$this->db->or_where('status', 1);
+			$this->db->or_where('status IS NULL', null, false);
+			$this->db->or_where('status', '');
+			$this->db->group_end();
+		}
+		$this->db->order_by('name', 'ASC');
+		$rows = $this->db->get()->result_array();
+		foreach ($rows as &$r) {
+			$r['expense_category_id'] = (int)$r['expense_category_id'];
+			$sub = isset($r['sub_of']) ? $r['sub_of'] : null;
+			$r['sub_of'] = ($sub === null || $sub === '' || (int)$sub === 0) ? null : (int)$sub;
+		}
+		unset($r);
+		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
 	/** GET expense_closing — last verified + next pending + optional ?date= day preview */

@@ -1822,7 +1822,7 @@ class Posapi extends CI_Controller {
 			$ids = array_values(array_filter(array_unique($ids)));
 			$items_by_order = array();
 			if (count($ids)) {
-				$this->db->select('order_id, name, quantity, is_free', false);
+				$this->db->select('order_id, item_type, ref_id, name, quantity, is_free', false);
 				$this->db->from('pos_order_items');
 				$this->db->where_in('order_id', $ids);
 				$this->db->order_by('order_item_id', 'ASC');
@@ -1833,20 +1833,59 @@ class Posapi extends CI_Controller {
 					$qty = (int)$it['quantity'];
 					$label = trim((string)$it['name']);
 					if ($label === '') $label = 'Item';
-					if ($qty > 1) $label .= ' ×' . $qty;
-					if (!empty($it['is_free'])) $label .= ' (free)';
-					$items_by_order[$oid][] = $label;
+					$item_type = isset($it['item_type']) ? trim((string)$it['item_type']) : 'item';
+					$row = array(
+						'item_type' => $item_type,
+						'name' => $label,
+						'quantity' => $qty,
+						'is_free' => !empty($it['is_free']),
+						'children' => array(),
+					);
+					if ($item_type === 'bundle') {
+						$bundle_id = (int)$it['ref_id'];
+						$bundleItems = $this->_bundle_items($bundle_id);
+						foreach ($bundleItems as $bi) {
+							$childQty = max(1, (int)$bi['quantity']) * max(1, $qty);
+							$childName = trim((string)$bi['product_name']);
+							if ($childName === '') $childName = 'Item';
+							$row['children'][] = array(
+								'name' => $childName,
+								'quantity' => $childQty,
+							);
+						}
+					}
+					$items_by_order[$oid][] = $row;
 				}
 			}
 			foreach ($rows as &$r) {
 				$oid = (int)$r['order_id'];
-				$labels = isset($items_by_order[$oid]) ? $items_by_order[$oid] : array();
+				$line_items = isset($items_by_order[$oid]) ? $items_by_order[$oid] : array();
+				$labels = array();
+				foreach ($line_items as $li) {
+					$lqty = (int)$li['quantity'];
+					$lbl = $li['name'];
+					if ($lqty > 1) $lbl .= ' ×' . $lqty;
+					if (!empty($li['is_free'])) $lbl .= ' (free)';
+					if ($li['item_type'] === 'bundle') $lbl = 'Bundle: ' . $lbl;
+					$labels[] = $lbl;
+					foreach ($li['children'] as $ch) {
+						$cqty = (int)$ch['quantity'];
+						$clbl = '↳ ' . $ch['name'];
+						if ($cqty > 1) $clbl .= ' ×' . $cqty;
+						$labels[] = $clbl;
+					}
+				}
 				$r['student_roll'] = isset($r['student_roll']) && $r['student_roll'] !== null
 					? (string)$r['student_roll']
 					: '';
+				$r['sold_by_name'] = trim(
+					(isset($r['first_name']) ? $r['first_name'] : '') . ' ' .
+					(isset($r['last_name']) ? $r['last_name'] : '')
+				);
+				$r['line_items'] = $line_items;
 				$r['products'] = $labels;
 				$r['products_summary'] = count($labels) ? implode(', ', $labels) : '';
-				$r['item_count'] = count($labels);
+				$r['item_count'] = count($line_items);
 			}
 			unset($r);
 		} else {
@@ -1854,6 +1893,11 @@ class Posapi extends CI_Controller {
 				$r['student_roll'] = isset($r['student_roll']) && $r['student_roll'] !== null
 					? (string)$r['student_roll']
 					: '';
+				$r['sold_by_name'] = trim(
+					(isset($r['first_name']) ? $r['first_name'] : '') . ' ' .
+					(isset($r['last_name']) ? $r['last_name'] : '')
+				);
+				$r['line_items'] = array();
 				$r['products'] = array();
 				$r['products_summary'] = '';
 				$r['item_count'] = 0;
