@@ -12,7 +12,7 @@ class Payroll_service {
     public function __construct()
     {
         require_once APPPATH . 'controllers/Salary.php';
-        $this->salary = new Salary();
+        $this->salary = new Salary(true);
     }
 
     public function build_generate_salary_payload($user_id, $campus_id, $month, $year)

@@ -3,9 +3,21 @@
 defined('BASEPATH') OR exit('No direct script access allowed');
 class Salary  extends CI_Controller{
 
-    public function __construct()
+    public function __construct($as_service = false)
     {
-        parent::__construct();
+        if ($as_service) {
+            $CI =& get_instance();
+            $this->load =& $CI->load;
+            $this->db =& $CI->db;
+            if (isset($CI->session)) {
+                $this->session =& $CI->session;
+            }
+            if (isset($CI->input)) {
+                $this->input =& $CI->input;
+            }
+        } else {
+            parent::__construct();
+        }
         $this->ensure_salary_columns();
         //$this->load->library('Email_reader');
     }
