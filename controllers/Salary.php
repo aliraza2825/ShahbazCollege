@@ -1546,9 +1546,10 @@ class Salary  extends CI_Controller{
             ->get_where('payroll_statutory_rules', 'status = 1')
             ->result_array();
 
+        $exp_ids = array();
         foreach ($salary as $key => $row) {
             $contributions = $this->db
-                ->select('rule_id, employer_amount, id')
+                ->select('id, rule_id, employer_amount, expense_id, payroll_id')
                 ->where('payroll_id', $row['id'])
                 ->get('payroll_statutory_contributions')
                 ->result_array();
@@ -1561,6 +1562,9 @@ class Salary  extends CI_Controller{
                         $salary[$key][$col] = (float) $c['employer_amount'];
                     }
                 }
+            }
+            if (!empty($row['expense_id'])) {
+                $exp_ids[] = (int) $row['expense_id'];
             }
         }
 
@@ -1576,6 +1580,17 @@ class Salary  extends CI_Controller{
                 ->result_array();
         }
 
+        $payroll_expenses = array();
+        $exp_ids = array_values(array_unique(array_filter($exp_ids)));
+        if (!empty($exp_ids)) {
+            $payroll_expenses = $this->db
+                ->select('expenses.*, campuses.campus_name')
+                ->join('campuses', 'campuses.campus_id = expenses.campus_id', 'left')
+                ->where_in('expenses.expense_id', $exp_ids)
+                ->get('expenses')
+                ->result_array();
+        }
+
         return array(
             'salary' => $salary,
             'month' => $month,
@@ -1584,6 +1599,7 @@ class Salary  extends CI_Controller{
             'iscampus' => $iscampus,
             'to_date' => $to_date,
             'disbursed' => $disbursed,
+            'payroll_expenses' => $payroll_expenses,
             'stat_rules' => $stat_rules,
             'minimum_adjustment_report' => (bool) $minimum_adjustment_report,
         );
@@ -1661,6 +1677,121 @@ class Salary  extends CI_Controller{
         $this->db->where_in('id', $idList);
         $this->db->delete('payroll_statutory_contributions');
         return array('success' => true);
+    }
+
+    public function add_contribution_expense_from_body($body, $files = array(), $actor_user_id = null, $actor_name = '')
+    {
+        if ($actor_user_id) {
+            $this->session->set_userdata('user_id', $actor_user_id);
+        }
+        if ($actor_name !== '') {
+            $this->session->set_userdata('name', $actor_name);
+        }
+
+        $contribution_ids = isset($body['contribution_ids']) ? $body['contribution_ids'] : '';
+        $payroll_ids = isset($body['payroll_ids']) ? $body['payroll_ids'] : '';
+        $modal_rule_ids = isset($body['rule_ids']) ? $body['rule_ids'] : '';
+        $comment = isset($body['purpose']) ? $body['purpose'] : '';
+        $receivable_amount = isset($body['amount']) ? (float) $body['amount'] : 0;
+        $rule_id = explode(',', (string) $modal_rule_ids);
+        $payroll_id = explode(',', (string) $payroll_ids);
+
+        if ($contribution_ids === '' || $payroll_ids === '' || $modal_rule_ids === '') {
+            return array('success' => false, 'message' => 'Contribution selection required');
+        }
+        if ($receivable_amount <= 0) {
+            return array('success' => false, 'message' => 'Invalid amount');
+        }
+
+        $payroll = $this->db->get_where('payroll', 'id = ' . (int) $payroll_id[0])->row_array();
+        if (!$payroll) {
+            return array('success' => false, 'message' => 'Payroll not found');
+        }
+        $exp_cat = $this->db->get_where('payroll_statutory_rules', 'id = ' . (int) $rule_id[0])->row_array();
+        if (!$exp_cat) {
+            return array('success' => false, 'message' => 'Statutory rule not found');
+        }
+        $expense_category = json_decode($exp_cat['expense_category']);
+
+        $image = '';
+        if (!empty($files['image']['name']) && is_uploaded_file($files['image']['tmp_name'])) {
+            $this->load->helper('form');
+            $config = array(
+                'upload_path' => 'uploads/',
+                'allowed_types' => 'gif|jpg|jpeg|png',
+            );
+            $this->load->library('upload', $config);
+            $this->upload->initialize($config);
+            if ($this->upload->do_upload('image')) {
+                $upload_data = $this->upload->data();
+                if (!empty($upload_data['file_name'])) {
+                    $image = $upload_data['file_name'];
+                }
+            }
+        }
+
+        $pettycash = function_exists('my_pettycash') ? my_pettycash() : 0;
+        if ($pettycash >= $receivable_amount) {
+            $this->db->set('title', $exp_cat['rule_name'] . 'Expense for ' . $payroll['payroll_month'] . '-' . $payroll['payroll_year']);
+            $this->db->set('date', date('Y-m-d'));
+            $this->db->set('amount', $receivable_amount);
+            $this->db->set('purpose', $comment !== '' ? $comment : ($exp_cat['rule_name'] . ' Paid for Employees'));
+            $this->db->set('actual_date', date('Y-m-d H:i:s'));
+            $this->db->set('image', $image);
+            $this->db->set('expense_category_id', $expense_category[count($expense_category) - 1]);
+            $this->db->set('approved_status', '1');
+            $this->db->set('paid_type', 'cash');
+            $this->db->set('add_by_id', $this->session->userdata('user_id'));
+            $this->db->set('add_by', $this->session->userdata('name'));
+            $this->db->insert('expenses');
+            $insert_id = $this->db->insert_id();
+
+            $this->db->set('remaining_amount', 'remaining_amount -' . $receivable_amount, false);
+            $this->db->where('assign_to', $this->session->userdata('user_id'));
+            $this->db->update('petty_cash_college_wise');
+
+            $this->db->set('expense_id', $insert_id);
+            $this->db->where_in('id', explode(',', $contribution_ids));
+            $this->db->update('payroll_statutory_contributions');
+
+            return array('success' => true, 'message' => 'Contribution expense posted', 'expense_id' => (int) $insert_id);
+        }
+
+        return array(
+            'success' => false,
+            'message' => 'Disburse Amount is : ' . $receivable_amount . ' Your Petty Cash is : ' . $pettycash,
+        );
+    }
+
+    public function delete_expense_from_body($exp_id)
+    {
+        $exp_id = (int) $exp_id;
+        if (!$exp_id) {
+            return array('success' => false, 'message' => 'Expense id required');
+        }
+
+        $payrollRows = $this->db
+            ->select('id, user_id, payroll_month, payroll_year, campus_id')
+            ->where('expense_id', $exp_id)
+            ->get('payroll')
+            ->result_array();
+
+        if (!empty($payrollRows)) {
+            $this->post_minimum_salary_adjustment_for_payroll_rows($payrollRows, $payrollRows[0]['campus_id'], true);
+        }
+
+        $this->db->set('disburse_through', 'pending');
+        $this->db->set('expense_id', null);
+        $this->db->where('expense_id', $exp_id);
+        $this->db->update('payroll');
+
+        $this->db->where('expense_id', $exp_id);
+        $this->db->delete('expenses');
+
+        $this->db->where('salary_expense_ids', $exp_id);
+        $this->db->update('bank_reconciliation_statement', array('salary_expense_ids' => null));
+
+        return array('success' => true, 'message' => 'Expense deleted');
     }
 
     public function delete_salary($user_id,$month,$year){

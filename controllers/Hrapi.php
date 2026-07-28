@@ -2711,6 +2711,30 @@ class Hrapi extends CI_Controller {
 		$this->_json(array('success' => true));
 	}
 
+	public function salary_add_contribution_expense()
+	{
+		$body = $this->_body();
+		list($uid, $name) = $this->_actor_from_session();
+		$result = $this->_payroll_service()->add_contribution_expense_from_body($body, $_FILES, $uid, $name);
+		if (empty($result['success'])) {
+			$this->_json(array('success' => false, 'message' => isset($result['message']) ? $result['message'] : 'Failed'), 422);
+		}
+		$this->_json($result);
+	}
+
+	public function salary_delete_expense($exp_id = 0)
+	{
+		$exp_id = (int) $exp_id;
+		if (!$exp_id) {
+			$this->_json(array('success' => false, 'message' => 'expense id required'), 422);
+		}
+		$result = $this->_payroll_service()->delete_expense_from_body($exp_id);
+		if (empty($result['success'])) {
+			$this->_json(array('success' => false, 'message' => isset($result['message']) ? $result['message'] : 'Failed'), 422);
+		}
+		$this->_json($result);
+	}
+
 	/** Mirrors Salary::delete_salary($user_id,$month,$year). */
 	public function salary_delete($user_id = 0, $month = '', $year = '')
 	{
