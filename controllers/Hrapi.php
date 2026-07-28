@@ -130,6 +130,7 @@ class Hrapi extends CI_Controller {
 			array('key' => 'loans', 'label' => 'Loans', 'enabled' => true),
 			array('key' => 'staff_type', 'label' => 'Staff Type', 'enabled' => true),
 			array('key' => 'staff_shifts', 'label' => 'Staff Shifts', 'enabled' => true),
+			array('key' => 'student_shifts', 'label' => 'Student Shifts', 'enabled' => true),
 			array('key' => 'allowances', 'label' => 'Allownces', 'enabled' => true),
 			array('key' => 'statutory', 'label' => 'Statutory Rules', 'enabled' => true),
 			array('key' => 'income_tax', 'label' => 'Income Tax', 'enabled' => true),
@@ -252,8 +253,294 @@ class Hrapi extends CI_Controller {
 		if (!$this->db->table_exists('study_type')) {
 			$this->_json(array('success' => true, 'data' => array()));
 		}
-		$rows = $this->db->order_by('name', 'ASC')->get('study_type')->result_array();
+		$rows = $this->db
+			->select('study_type.*, courses.course_name')
+			->from('study_type')
+			->join('courses', 'courses.course_id = study_type.course_id', 'left')
+			->order_by('courses.course_name', 'ASC')
+			->order_by('study_type.name', 'ASC')
+			->get()
+			->result_array();
+		$data = array();
+		foreach ($rows as $row) {
+			$label = $row['name'];
+			if (!empty($row['course_name'])) {
+				$label .= ' — ' . $row['course_name'];
+			}
+			$data[] = array(
+				'id' => (int)$row['id'],
+				'name' => $row['name'],
+				'course_name' => isset($row['course_name']) ? $row['course_name'] : '',
+				'label' => $label,
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
+	/** Study types for attendance filter — optional campus scope via shifts table. */
+	public function attendance_study_types_lookup()
+	{
+		if (!$this->db->table_exists('study_type')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$campus_id = $this->input->get('campus_id');
+
+		$this->db->select('study_type.id, study_type.name, courses.course_name');
+		$this->db->from('study_type');
+		$this->db->join('courses', 'courses.course_id = study_type.course_id', 'left');
+
+		if ($campus_id !== null && $campus_id !== '') {
+			$cid = (int)$campus_id;
+			$this->db->join('shifts', 'shifts.study_type_id = study_type.id', 'inner');
+			$this->db->group_start();
+			$this->db->where('shifts.campus_id', $cid);
+			$this->db->or_where('FIND_IN_SET(' . $cid . ', shifts.campus_id) >', 0, false);
+			$this->db->group_end();
+			$this->db->group_by('study_type.id, study_type.name, courses.course_name');
+		}
+
+		$this->db->order_by('courses.course_name', 'ASC');
+		$this->db->order_by('study_type.name', 'ASC');
+		$rows = $this->db->get()->result_array();
+
+		$data = array();
+		foreach ($rows as $row) {
+			$label = $row['name'];
+			if (!empty($row['course_name'])) {
+				$label .= ' — ' . $row['course_name'];
+			}
+			$data[] = array(
+				'id' => (int)$row['id'],
+				'label' => $label,
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
+	/** Student shifts for attendance filter — scoped by campus + study type (ports Timetable::getShifts). */
+	public function attendance_shifts_lookup()
+	{
+		if (!$this->db->table_exists('shifts')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+
+		$campus_id = $this->input->get('campus_id');
+		$study_type_id = $this->input->get('study_type_id');
+		$study_type_ids = $this->input->get('study_type_ids');
+
+		$this->db->select('shifts.id, shifts.name, study_type.name as study_type_name, courses.course_name');
+		$this->db->from('shifts');
+		$this->db->join('study_type', 'study_type.id = shifts.study_type_id', 'left');
+		$this->db->join('courses', 'courses.course_id = study_type.course_id', 'left');
+
+		if ($campus_id !== null && $campus_id !== '') {
+			$cid = (int)$campus_id;
+			$this->db->group_start();
+			$this->db->where('shifts.campus_id', $cid);
+			$this->db->or_where('FIND_IN_SET(' . $cid . ', shifts.campus_id) >', 0, false);
+			$this->db->group_end();
+		}
+
+		$typeIds = array();
+		if ($study_type_ids !== null && $study_type_ids !== '') {
+			$typeIds = array_values(array_filter(array_map('intval', explode(',', (string)$study_type_ids))));
+		} elseif ($study_type_id !== null && $study_type_id !== '') {
+			$typeIds = array((int)$study_type_id);
+		}
+		if (count($typeIds)) {
+			$this->db->where_in('shifts.study_type_id', $typeIds);
+		}
+
+		$this->db->order_by('shifts.name', 'ASC');
+		$rows = $this->db->get()->result_array();
+
+		$data = array();
+		foreach ($rows as $row) {
+			$parts = array($row['name']);
+			if (!empty($row['study_type_name'])) $parts[] = $row['study_type_name'];
+			if (!empty($row['course_name'])) $parts[] = $row['course_name'];
+			$data[] = array(
+				'id' => (int)$row['id'],
+				'name' => $row['name'],
+				'label' => implode(' — ', $parts),
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
+	/** Student shift names for attendance report filter (legacy `shifts` table). */
+	public function shifts_lookup()
+	{
+		if (!$this->db->table_exists('shifts')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$rows = $this->db->order_by('name', 'ASC')->get('shifts')->result_array();
 		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	/** Courses for student shift form (legacy timetable/shifts). */
+	public function courses_lookup()
+	{
+		if (!$this->db->table_exists('courses')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$rows = $this->db->order_by('course_name', 'ASC')->get('courses')->result_array();
+		$data = array();
+		foreach ($rows as $r) {
+			$data[] = array(
+				'id' => (int)$r['course_id'],
+				'label' => $r['course_name'],
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
+	/** Study types filtered by course (legacy Timetable::getCourseStudyTypes). */
+	public function study_types_by_course()
+	{
+		$course_id = (int)$this->input->get('course_id');
+		if (!$this->db->table_exists('study_type')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$this->db->select('id, name, course_id');
+		$this->db->from('study_type');
+		if ($course_id > 0) {
+			$this->db->where('course_id', $course_id);
+		}
+		$this->db->order_by('name', 'ASC');
+		$rows = $this->db->get()->result_array();
+		$data = array();
+		foreach ($rows as $r) {
+			$data[] = array(
+				'id' => (int)$r['id'],
+				'label' => $r['name'],
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
+	/** Student shifts list (legacy timetable/shifts — `shifts` table). */
+	public function student_shifts()
+	{
+		if (!$this->db->table_exists('shifts')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+
+		$this->db->select('shifts.*, users.first_name, users.last_name, study_type.name as study_type_name, courses.course_id as shift_course, courses.course_name');
+		$this->db->from('shifts');
+		$this->db->join('users', 'users.user_id = shifts.created_by', 'left');
+		$this->db->join('study_type', 'study_type.id = shifts.study_type_id', 'left');
+		$this->db->join('courses', 'study_type.course_id = courses.course_id', 'left');
+		$this->db->order_by('shifts.name', 'ASC');
+		$rows = $this->db->get()->result_array();
+
+		$campusMap = array();
+		foreach ($this->db->get('campuses')->result_array() as $c) {
+			$campusMap[(int)$c['campus_id']] = $c['campus_name'];
+		}
+
+		$data = array();
+		foreach ($rows as $r) {
+			$campusNames = array();
+			$campusIds = array();
+			foreach (array_filter(explode(',', (string)$r['campus_id'])) as $cid) {
+				$cid = (int)$cid;
+				if ($cid <= 0) continue;
+				$campusIds[] = $cid;
+				if (isset($campusMap[$cid])) $campusNames[] = $campusMap[$cid];
+			}
+			$data[] = array(
+				'id' => (int)$r['id'],
+				'name' => $r['name'],
+				'start_time' => $r['start_time'],
+				'end_time' => $r['end_time'],
+				'study_type_id' => (int)$r['study_type_id'],
+				'study_type_name' => isset($r['study_type_name']) ? $r['study_type_name'] : '',
+				'shift_course' => isset($r['shift_course']) ? (int)$r['shift_course'] : 0,
+				'course_name' => isset($r['course_name']) ? $r['course_name'] : '',
+				'campus_id' => $r['campus_id'],
+				'campus_ids' => $campusIds,
+				'campus_names' => $campusNames,
+				'created_by_name' => trim($r['first_name'] . ' ' . $r['last_name']),
+				'created_at' => isset($r['created_at']) ? $r['created_at'] : '',
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
+	/** Student shift CRUD (legacy timetable/insert_shift, update_shift, delete_shift). */
+	public function student_shift($id = 0)
+	{
+		$id = (int)$id;
+		$method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
+
+		if (!$this->db->table_exists('shifts')) {
+			$this->_json(array('success' => false, 'message' => 'shifts table missing'), 500);
+		}
+
+		if ($method === 'GET') {
+			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
+			$this->db->select('shifts.*, study_type.course_id as shift_course');
+			$this->db->from('shifts');
+			$this->db->join('study_type', 'study_type.id = shifts.study_type_id', 'left');
+			$this->db->where('shifts.id', $id);
+			$row = $this->db->get()->row_array();
+			if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+			$campusIds = array_values(array_filter(array_map('intval', explode(',', (string)$row['campus_id']))));
+			$row['campus_ids'] = $campusIds;
+			$row['shift_course'] = isset($row['shift_course']) ? (int)$row['shift_course'] : 0;
+			$this->_json(array('success' => true, 'data' => $row));
+		}
+
+		if ($method === 'POST') {
+			$body = $this->_body();
+			$name = isset($body['name']) ? trim((string)$body['name']) : '';
+			$startTime = isset($body['start_time']) ? trim((string)$body['start_time']) : '';
+			$endTime = isset($body['end_time']) ? trim((string)$body['end_time']) : '';
+			$studyTypeId = isset($body['study_type_id']) ? (int)$body['study_type_id'] : 0;
+			$campusIds = isset($body['campus_ids']) ? (array)$body['campus_ids'] : array();
+
+			if ($name === '' || $startTime === '' || $endTime === '' || $studyTypeId <= 0) {
+				$this->_json(array('success' => false, 'message' => 'name, start_time, end_time and study_type_id required'), 422);
+			}
+			if (!count($campusIds)) {
+				$this->_json(array('success' => false, 'message' => 'At least one campus required'), 422);
+			}
+
+			$campusCsv = implode(',', array_values(array_filter(array_map('intval', $campusIds))));
+
+			if ($id === 0) {
+				$this->db->set('name', $name);
+				$this->db->set('start_time', $startTime);
+				$this->db->set('end_time', $endTime);
+				$this->db->set('campus_id', $campusCsv);
+				$this->db->set('study_type_id', $studyTypeId);
+				$this->db->set('created_by', (int)$this->current_user['user_id']);
+				$this->db->insert('shifts');
+				$id = (int)$this->db->insert_id();
+			} else {
+				$exists = $this->db->get_where('shifts', array('id' => $id))->row_array();
+				if (!$exists) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+				$this->db->set('name', $name);
+				$this->db->set('start_time', $startTime);
+				$this->db->set('end_time', $endTime);
+				$this->db->set('campus_id', $campusCsv);
+				$this->db->set('study_type_id', $studyTypeId);
+				$this->db->where('id', $id);
+				$this->db->update('shifts');
+			}
+
+			$this->_json(array('success' => true, 'id' => $id));
+		}
+
+		if ($method === 'DELETE') {
+			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
+			$this->db->where('id', $id);
+			$this->db->delete('shifts');
+			$this->_json(array('success' => true));
+		}
+
+		$this->_json(array('success' => false, 'message' => 'Method not allowed'), 405);
 	}
 
 	public function allowances_lookup()
@@ -478,6 +765,8 @@ class Hrapi extends CI_Controller {
 
 		foreach ($rows as &$r) {
 			$r['timing_count'] = isset($timingMap[$r['staff_shift_id']]) ? $timingMap[$r['staff_shift_id']] : 0;
+			$r['combo_label'] = staff_shift_label($r);
+			$r['timing_configured'] = $r['timing_count'] > 0;
 		}
 		unset($r);
 
@@ -639,7 +928,48 @@ class Hrapi extends CI_Controller {
 		$this->db->where('date <=', $to);
 		$rows = $this->db->get('holidays')->result_array();
 
-		$this->_json(array('success' => true, 'from' => $from, 'to' => $to, 'data' => $rows));
+		$campusMap = array();
+		foreach ($this->db->get('campuses')->result_array() as $c) {
+			$campusMap[(int)$c['campus_id']] = $c['campus_name'];
+		}
+		$staffTypeMap = array();
+		foreach ($this->db->get('staff_type')->result_array() as $st) {
+			$staffTypeMap[(int)$st['staff_type_id']] = $st['staff_type_name'];
+		}
+
+		$data = array();
+		foreach ($rows as $row) {
+			$campusNames = array();
+			foreach (array_filter(explode(',', (string)$row['campus_ids'])) as $cid) {
+				if (isset($campusMap[(int)$cid])) $campusNames[] = $campusMap[(int)$cid];
+			}
+			$staffTypeNames = array();
+			foreach (array_filter(explode(',', (string)$row['staff_type_ids'])) as $sid) {
+				if (isset($staffTypeMap[(int)$sid])) $staffTypeNames[] = $staffTypeMap[(int)$sid];
+			}
+			$shiftLabels = array();
+			$shiftIds = array_filter(explode(',', (string)$row['shift_ids']));
+			if (count($shiftIds)) {
+				$this->db->select('shifts.name, study_type.name as study_type_name, courses.course_name');
+				$this->db->from('shifts');
+				$this->db->join('study_type', 'study_type.id = shifts.study_type_id', 'left');
+				$this->db->join('courses', 'courses.course_id = study_type.course_id', 'left');
+				$this->db->where_in('shifts.id', $shiftIds);
+				foreach ($this->db->get()->result_array() as $sh) {
+					$parts = array($sh['name']);
+					if (!empty($sh['study_type_name'])) $parts[] = $sh['study_type_name'];
+					if (!empty($sh['course_name'])) $parts[] = $sh['course_name'];
+					$shiftLabels[] = implode(' - ', $parts);
+				}
+			}
+			$row['campus_names'] = $campusNames;
+			$row['staff_type_names'] = $staffTypeNames;
+			$row['shift_labels'] = $shiftLabels;
+			$row['date_label'] = date('F d, Y', strtotime($row['date']));
+			$data[] = $row;
+		}
+
+		$this->_json(array('success' => true, 'from' => $from, 'to' => $to, 'data' => $data));
 	}
 
 	/** Port of Holiday::insertHoliday() — inserts one row per date. */
@@ -658,7 +988,7 @@ class Hrapi extends CI_Controller {
 		if (isset($body['dates']) && is_array($body['dates'])) $dates = $body['dates'];
 		elseif (isset($body['date']) && is_array($body['date'])) $dates = $body['date'];
 
-		$reason = isset($body['reason']) ? $body['reason'] : '';
+		$reason = isset($body['reason_detail']) ? $body['reason_detail'] : (isset($body['reason']) ? $body['reason'] : '');
 
 		if (!count($dates)) $this->_json(array('success' => false, 'message' => 'dates required'), 422);
 
@@ -692,6 +1022,83 @@ class Hrapi extends CI_Controller {
 		$this->db->where('holiday_id', $id);
 		$this->db->update('holidays');
 		$this->_json(array('success' => true));
+	}
+
+	public function holiday_find_staff()
+	{
+		$body = $this->_body();
+		$campus_ids = isset($body['campus_ids']) ? (array)$body['campus_ids'] : array();
+		$staff_type_ids = isset($body['staff_type_ids']) ? (array)$body['staff_type_ids'] : array();
+		if (!count($campus_ids) || !count($staff_type_ids)) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+
+		$users = $this->db->query(
+			'SELECT user_id, first_name, last_name FROM users WHERE status=1 AND campus_id IN (' .
+			implode(',', array_map('intval', $campus_ids)) . ') AND staff_type_id IN (' .
+			implode(',', array_map('intval', $staff_type_ids)) . ') ORDER BY first_name ASC'
+		)->result_array();
+
+		$data = array();
+		foreach ($users as $u) {
+			$data[] = array(
+				'user_id' => (int)$u['user_id'],
+				'label' => trim($u['first_name'] . ' ' . $u['last_name']),
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
+	public function holiday_find_shifts()
+	{
+		$body = $this->_body();
+		$campus_ids = isset($body['campus_ids']) ? (array)$body['campus_ids'] : array();
+		if (!count($campus_ids)) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+
+		$shifts = $this->db->query(
+			'SELECT shifts.id, shifts.name, study_type.name as study_type_name, courses.course_name
+			FROM shifts
+			LEFT JOIN study_type ON study_type.id = shifts.study_type_id
+			LEFT JOIN courses ON courses.course_id = study_type.course_id
+			WHERE shifts.campus_id IN (' . implode(',', array_map('intval', $campus_ids)) . ')
+			ORDER BY shifts.name ASC'
+		)->result_array();
+
+		$data = array();
+		foreach ($shifts as $shift) {
+			$parts = array($shift['name']);
+			if (!empty($shift['study_type_name'])) $parts[] = $shift['study_type_name'];
+			if (!empty($shift['course_name'])) $parts[] = $shift['course_name'];
+			$data[] = array(
+				'id' => (int)$shift['id'],
+				'label' => implode(' - ', $parts),
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
+	public function holiday_find_shift_students()
+	{
+		$body = $this->_body();
+		$shift_ids = isset($body['shift_ids']) ? (array)$body['shift_ids'] : array();
+		if (!count($shift_ids)) {
+			$this->_json(array('success' => true, 'student_ids' => '', 'count' => 0));
+		}
+
+		$students = $this->db->query(
+			'SELECT student_id FROM students WHERE status=1 AND shift IN (' .
+			implode(',', array_map('intval', $shift_ids)) . ')'
+		)->result_array();
+
+		$ids = array();
+		foreach ($students as $s) $ids[] = (int)$s['student_id'];
+		$this->_json(array(
+			'success' => true,
+			'student_ids' => implode(',', $ids),
+			'count' => count($ids),
+		));
 	}
 
 	// ------------------------------------------------------------------
@@ -891,11 +1298,78 @@ class Hrapi extends CI_Controller {
 	}
 
 	// ------------------------------------------------------------------
-	// Attendance report — simplified punch list for a date range
+	// Attendance — ports Attendence.php (grid report, people, manual add)
 	// ------------------------------------------------------------------
+
+	public function attendance_sessions()
+	{
+		$campus_id = $this->input->get('campus_id');
+		if ($campus_id === null || $campus_id === '') {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$this->db->distinct();
+		$this->db->select('session');
+		$this->db->where('campus_id', (int)$campus_id);
+		$this->db->order_by('session', 'ASC');
+		$sessions = array();
+		foreach ($this->db->get('classes')->result_array() as $r) {
+			if ($r['session'] !== '' && $r['session'] !== null) {
+				$sessions[] = $r['session'];
+			}
+		}
+		$this->_json(array('success' => true, 'data' => $sessions));
+	}
+
+	public function attendance_people()
+	{
+		$type = $this->input->get('type');
+		$campus_id = $this->input->get('campus_id');
+		if ($type !== 'student') $type = 'staff';
+		$data = array();
+
+		if ($type === 'staff') {
+			$this->db->select('users.first_name, users.last_name, machine_data.machine_id');
+			$this->db->from('users');
+			$this->db->join('campuses', 'campuses.campus_id=users.campus_id', 'inner');
+			$this->db->join('machine_data', 'machine_data.teacher_student_id=users.user_id', 'inner');
+			$this->db->where(array('users.status' => '1', 'machine_data.type' => 'teacher'));
+			if ($campus_id !== null && $campus_id !== '') {
+				$this->db->where('campuses.campus_id', (int)$campus_id);
+			}
+			foreach ($this->db->get()->result_array() as $r) {
+				$data[] = array(
+					'machine_id' => (int)$r['machine_id'],
+					'label' => trim($r['first_name'] . ' ' . $r['last_name']),
+				);
+			}
+		} else {
+			$this->db->select('students.first_name, students.last_name, students.roll_no, machine_data.machine_id');
+			$this->db->from('students');
+			$this->db->join('classes', 'classes.class_id=students.class_id', 'inner');
+			$this->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'inner');
+			$this->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id', 'inner');
+			$this->db->where(array('students.status' => '1', 'machine_data.type' => 'student'));
+			if ($campus_id !== null && $campus_id !== '') {
+				$this->db->where('students.study_campus', (int)$campus_id);
+			}
+			foreach ($this->db->get()->result_array() as $r) {
+				$data[] = array(
+					'machine_id' => (int)$r['machine_id'],
+					'label' => trim($r['first_name'] . ' ' . $r['last_name']) . ' (' . $r['roll_no'] . ')',
+				);
+			}
+		}
+
+		$this->_json(array('success' => true, 'data' => $data));
+	}
 
 	public function attendance_report()
 	{
+		if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+			$this->_attendance_report_grid($this->_body());
+			return;
+		}
+
 		$from = $this->input->get('from');
 		$to = $this->input->get('to');
 		$campus_id = $this->input->get('campus_id');
@@ -942,6 +1416,346 @@ class Hrapi extends CI_Controller {
 		}
 
 		$this->_json(array('success' => true, 'from' => $from, 'to' => $to, 'type' => $type, 'data' => $data));
+	}
+
+	public function attendance_create()
+	{
+		$body = $this->_body();
+		$datetime = isset($body['datetime']) ? trim((string)$body['datetime']) : '';
+		$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+		$machine_user_ids = isset($body['machine_user_ids']) ? $body['machine_user_ids'] : array();
+		if (is_string($machine_user_ids) && $machine_user_ids !== '') {
+			$machine_user_ids = array_filter(explode(',', $machine_user_ids));
+		}
+		if ($datetime === '' || !$campus_id || !count($machine_user_ids)) {
+			$this->_json(array('success' => false, 'message' => 'datetime, campus_id and machine_user_ids required'), 422);
+		}
+
+		$campus = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
+		if (!$campus) $this->_json(array('success' => false, 'message' => 'Campus not found'), 404);
+		$campus_code = isset($campus['campus_code']) ? $campus['campus_code'] : '';
+
+		$ts = strtotime(str_replace('T', ' ', $datetime));
+		if ($ts === false) {
+			$this->_json(array('success' => false, 'message' => 'Invalid datetime'), 422);
+		}
+		$attendence_time = date('Y-m-d H:i:s', $ts);
+
+		$created = 0;
+		foreach ($machine_user_ids as $machine_user_id) {
+			$machine_user_id = (int)$machine_user_id;
+			if (!$machine_user_id) continue;
+			$this->db->set('time', $attendence_time);
+			$this->db->set('machine_user_id', $machine_user_id);
+			$this->db->set('campus_code', $campus_code);
+			$this->db->set('created_by', $this->_current_user_name());
+			$this->db->insert('attendence');
+			$created++;
+		}
+
+		$this->_json(array('success' => true, 'message' => 'Attendance added', 'created' => $created));
+	}
+
+	public function attendance_delete()
+	{
+		$body = $this->_body();
+		$machine_user_id = isset($body['machine_user_id']) ? (int)$body['machine_user_id'] : 0;
+		$date = isset($body['date']) ? $body['date'] : '';
+		if (!$machine_user_id || $date === '') {
+			$this->_json(array('success' => false, 'message' => 'machine_user_id and date required'), 422);
+		}
+		if (!$this->_attendance_can_manage()) {
+			$this->_json(array('success' => false, 'message' => 'Not allowed'), 403);
+		}
+		$this->db->where(array(
+			'machine_user_id' => $machine_user_id,
+			'time >=' => $date . ' 00:00:00',
+			'time <=' => $date . ' 23:59:59',
+		));
+		$this->db->delete('attendence');
+		$this->_json(array('success' => true, 'message' => 'Attendance deleted'));
+	}
+
+	public function attendance_halfday()
+	{
+		$body = $this->_body();
+		$machine_user_id = isset($body['machine_user_id']) ? (int)$body['machine_user_id'] : 0;
+		$date = isset($body['date']) ? $body['date'] : '';
+		if (!$machine_user_id || $date === '') {
+			$this->_json(array('success' => false, 'message' => 'machine_user_id and date required'), 422);
+		}
+		if (!$this->_attendance_can_manage()) {
+			$this->_json(array('success' => false, 'message' => 'Not allowed'), 403);
+		}
+		$this->db->set('halfday', 1);
+		$this->db->where(array(
+			'machine_user_id' => $machine_user_id,
+			'time >=' => $date . ' 00:00:00',
+			'time <=' => $date . ' 23:59:59',
+		));
+		$this->db->update('attendence');
+		$this->_json(array('success' => true, 'message' => 'Marked half day'));
+	}
+
+	private function _attendance_can_manage()
+	{
+		$role = isset($this->current_user['role']) ? $this->current_user['role'] : '';
+		$user_id = isset($this->current_user['user_id']) ? (int)$this->current_user['user_id'] : 0;
+		return $role === 'Admin' || $user_id === 77;
+	}
+
+	private function _create_date_range($from, $to)
+	{
+		$ary = array();
+		$fromTs = strtotime($from);
+		$toTs = strtotime($to);
+		if ($fromTs === false || $toTs === false || $toTs < $fromTs) return $ary;
+		$cursor = $fromTs;
+		while ($cursor <= $toTs) {
+			$ary[] = date('Y-m-d', $cursor);
+			$cursor += 86400;
+		}
+		return $ary;
+	}
+
+	private function _attendance_string_list($value)
+	{
+		if (is_array($value)) return array_values(array_filter(array_map('strval', $value)));
+		if (is_string($value) && $value !== '') return array_values(array_filter(explode(',', $value)));
+		return array();
+	}
+
+	private function _attendance_int_list($value)
+	{
+		if (is_array($value)) return array_values(array_filter(array_map('intval', $value)));
+		if (is_string($value) && $value !== '') return array_values(array_filter(array_map('intval', explode(',', $value))));
+		return array();
+	}
+
+	private function _attendance_resolve_shift_ids($value)
+	{
+		$ids = $this->_attendance_int_list($value);
+		if (count($ids)) return $ids;
+		$names = $this->_attendance_string_list($value);
+		if (!count($names) || !$this->db->table_exists('shifts')) return array();
+		$this->db->where_in('name', $names);
+		$rows = $this->db->get('shifts')->result_array();
+		$out = array();
+		foreach ($rows as $r) $out[] = (int)$r['id'];
+		return array_values(array_unique($out));
+	}
+
+	private function _attendance_resolve_study_type_ids($value)
+	{
+		$ids = $this->_attendance_int_list($value);
+		if (count($ids)) return $ids;
+		$names = $this->_attendance_string_list($value);
+		if (!count($names) || !$this->db->table_exists('study_type')) return array();
+		$this->db->where_in('name', $names);
+		$rows = $this->db->get('study_type')->result_array();
+		$out = array();
+		foreach ($rows as $r) $out[] = (int)$r['id'];
+		return array_values(array_unique($out));
+	}
+
+	private function _attendance_resolve_machine_ids($type, $campus_id, $class_session, $shift_ids, $study_type_ids)
+	{
+		$ids = array();
+		if ($type === 'staff') {
+			$this->db->select('machine_data.machine_id');
+			$this->db->from('machine_data');
+			$this->db->join('users', 'users.user_id=machine_data.teacher_student_id and machine_data.type = "teacher"', 'inner');
+			$this->db->join('campuses', 'campuses.campus_id=users.campus_id', 'inner');
+			$this->db->where(array('users.status' => 1, 'machine_data.type' => 'teacher'));
+			if ($campus_id !== null && $campus_id !== '') {
+				$this->db->where('users.campus_id', (int)$campus_id);
+			}
+			foreach ($this->db->get()->result_array() as $r) {
+				$ids[] = (int)$r['machine_id'];
+			}
+		} else {
+			$this->db->select('machine_data.machine_id');
+			$this->db->from('machine_data');
+			$this->db->join('students', 'students.student_id=machine_data.teacher_student_id', 'inner');
+			$this->db->join('classes', 'classes.class_id=students.class_id', 'inner');
+			$this->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'inner');
+			$this->db->where(array('machine_data.type' => 'student', 'students.status' => 1));
+			if ($campus_id !== null && $campus_id !== '') {
+				$this->db->where('campuses.campus_id', (int)$campus_id);
+			}
+			if ($class_session !== null && $class_session !== '') {
+				$this->db->where('classes.session', $class_session);
+			}
+			if (count($shift_ids)) {
+				$this->db->where_in('students.shift', $shift_ids);
+			}
+			if (count($study_type_ids)) {
+				$this->db->where_in('students.study_type', $study_type_ids);
+			}
+			foreach ($this->db->get()->result_array() as $r) {
+				$ids[] = (int)$r['machine_id'];
+			}
+		}
+		return array_values(array_unique($ids));
+	}
+
+	private function _attendance_person_info($machine_user_id, $type)
+	{
+		$machine_user_id = (int)$machine_user_id;
+		if ($type === 'staff') {
+			$this->db->select('users.*, campuses.campus_name, machine_data.machine_id');
+			$this->db->from('machine_data');
+			$this->db->join('users', 'users.user_id=machine_data.teacher_student_id', 'inner');
+			$this->db->join('campuses', 'campuses.campus_id=users.campus_id', 'inner');
+			$this->db->where(array('machine_data.machine_id' => $machine_user_id, 'machine_data.type' => 'teacher'));
+			$row = $this->db->get()->row_array();
+			if (!$row) return null;
+			return array(
+				'machine_user_id' => $machine_user_id,
+				'name' => trim($row['first_name'] . ' ' . $row['last_name']),
+				'campus_name' => $row['campus_name'],
+			);
+		}
+
+		$this->db->select('students.*, campuses.campus_name, classes.session, machine_data.machine_id');
+		$this->db->from('machine_data');
+		$this->db->join('students', 'students.student_id=machine_data.teacher_student_id', 'inner');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'inner');
+		$this->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'inner');
+		$this->db->where(array('machine_data.type' => 'student', 'machine_data.machine_id' => $machine_user_id));
+		$row = $this->db->get()->row_array();
+		if (!$row) return null;
+
+		$study_campus_name = '';
+		if (!empty($row['study_campus'])) {
+			$c = $this->db->get_where('campuses', array('campus_id' => $row['study_campus']))->row_array();
+			if ($c) $study_campus_name = $c['campus_name'];
+		}
+
+		return array(
+			'machine_user_id' => $machine_user_id,
+			'name' => trim($row['first_name'] . ' ' . $row['last_name']),
+			'campus_name' => $row['campus_name'],
+			'roll_no' => isset($row['roll_no']) ? $row['roll_no'] : '',
+			'study_type' => isset($row['study_type']) ? $row['study_type'] : '',
+			'shift' => isset($row['shift']) ? $row['shift'] : '',
+			'mobile' => isset($row['mobile']) ? $row['mobile'] : '',
+			'emergency_no' => isset($row['emergency_no']) ? $row['emergency_no'] : '',
+			'study_campus_name' => $study_campus_name,
+			'class_name' => isset($row['section']) ? $row['section'] : '',
+			'session' => isset($row['session']) ? $row['session'] : '',
+		);
+	}
+
+	private function _attendance_day_row($machine_user_id, $date, $type, $person)
+	{
+		$row = array(
+			'machine_user_id' => (int)$machine_user_id,
+			'date' => $date,
+			'date_label' => date('F d, Y', strtotime($date)),
+			'campus_name' => $person['campus_name'],
+			'name' => $person['name'],
+			'is_holiday' => false,
+			'type' => $type,
+		);
+
+		if ($type === 'student') {
+			$row['roll_no'] = $person['roll_no'];
+			$row['study_type'] = $person['study_type'];
+			$row['shift'] = $person['shift'];
+			$row['mobile'] = $person['mobile'];
+			$row['emergency_no'] = $person['emergency_no'];
+			$row['study_campus_name'] = $person['study_campus_name'];
+			$row['class_name'] = $person['class_name'];
+			$row['session'] = $person['session'];
+		}
+
+		$holiday = $this->db->get_where('holidays', array('date' => $date))->result_array();
+		if (count($holiday) > 0) {
+			$row['is_holiday'] = true;
+			if ($type === 'student') {
+				$row['present_absent'] = 'Holiday';
+			} else {
+				$row['check_in'] = 'Holiday';
+				$row['check_out'] = 'Holiday';
+				$row['mark'] = 'holiday';
+			}
+			return $row;
+		}
+
+		$checkin = $this->db->query(
+			'SELECT * FROM attendence WHERE machine_user_id=' . (int)$machine_user_id .
+			' AND time>="' . $this->db->escape_str($date) . ' 00:00:00" AND time<"' . $this->db->escape_str($date) . ' 23:59:59" ORDER BY time ASC LIMIT 1'
+		)->row_array();
+		$checkout = $this->db->query(
+			'SELECT * FROM attendence WHERE machine_user_id=' . (int)$machine_user_id .
+			' AND time>="' . $this->db->escape_str($date) . ' 00:00:00.00" AND time<"' . $this->db->escape_str($date) . ' 23:59:59.999" ORDER BY time DESC LIMIT 1'
+		)->row_array();
+
+		if ($type === 'student') {
+			$row['present_absent'] = $checkin ? 'Present' : 'Absent';
+			return $row;
+		}
+
+		$row['check_in'] = $checkin ? date('h:i:s A', strtotime($checkin['time'])) : 'Absent';
+		$row['check_out'] = $checkout ? date('h:i:s A', strtotime($checkout['time'])) : 'Absent';
+
+		if ($checkin) {
+			$half = $this->db->query(
+				'SELECT * FROM attendence WHERE machine_user_id=' . (int)$machine_user_id .
+				' AND time>="' . $this->db->escape_str($date) . ' 00:00:00.00" AND time<"' . $this->db->escape_str($date) . ' 23:59:59.999" AND halfday=1 ORDER BY time DESC LIMIT 1'
+			)->row_array();
+			$row['mark'] = $half ? 'halfday' : 'fullday';
+		} else {
+			$row['mark'] = 'absent';
+		}
+
+		$row['can_manage'] = $this->_attendance_can_manage() && (bool)$checkin;
+		return $row;
+	}
+
+	private function _attendance_report_grid($body)
+	{
+		$type = (isset($body['type']) && $body['type'] === 'student') ? 'student' : 'staff';
+		$from = isset($body['from']) && $body['from'] !== '' ? $body['from'] : date('Y-m-d');
+		$to = isset($body['to']) && $body['to'] !== '' ? $body['to'] : date('Y-m-d');
+		$campus_id = isset($body['campus_id']) ? $body['campus_id'] : '';
+		$class_session = isset($body['class_session']) ? $body['class_session'] : '';
+
+		$shift_ids = $this->_attendance_int_list(isset($body['shift_ids']) ? $body['shift_ids'] : array());
+		if (!count($shift_ids) && isset($body['shift'])) {
+			$shift_ids = $this->_attendance_resolve_shift_ids($body['shift']);
+		}
+
+		$study_type_ids = $this->_attendance_int_list(isset($body['study_type_ids']) ? $body['study_type_ids'] : array());
+		if (!count($study_type_ids) && isset($body['study_type'])) {
+			$study_type_ids = $this->_attendance_resolve_study_type_ids($body['study_type']);
+		}
+
+		$machine_user_ids = $this->_attendance_int_list(isset($body['machine_user_ids']) ? $body['machine_user_ids'] : array());
+
+		$dates = $this->_create_date_range($from, $to);
+		if (!count($machine_user_ids)) {
+			$machine_user_ids = $this->_attendance_resolve_machine_ids($type, $campus_id, $class_session, $shift_ids, $study_type_ids);
+		}
+
+		$data = array();
+		foreach ($machine_user_ids as $machine_user_id) {
+			$person = $this->_attendance_person_info($machine_user_id, $type);
+			if (!$person) continue;
+			foreach ($dates as $date) {
+				$data[] = $this->_attendance_day_row($machine_user_id, $date, $type, $person);
+			}
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'type' => $type,
+			'from' => $from,
+			'to' => $to,
+			'data' => $data,
+			'count' => count($data),
+		));
 	}
 
 	// ------------------------------------------------------------------
@@ -1017,12 +1831,29 @@ class Hrapi extends CI_Controller {
 
 	public function staff()
 	{
-		$this->db->select('users.*, campuses.campus_name, staff_type.staff_type_name, departments.department_name');
+		$q = trim((string)$this->input->get('q'));
+		$campus_id = $this->input->get('campus_id');
+
+		$this->db->select('users.*, campuses.campus_name, staff_type.staff_type_name, departments.department_name, machine_data.machine_id');
 		$this->db->from('users');
 		$this->db->join('campuses', 'campuses.campus_id=users.campus_id', 'left');
 		$this->db->join('staff_type', 'staff_type.staff_type_id=users.staff_type_id', 'left');
 		$this->db->join('departments', 'departments.department_id=users.department_id', 'left');
+		$this->db->join('machine_data', 'machine_data.teacher_student_id=users.user_id AND machine_data.type="teacher"', 'left');
 		$this->db->where('users.status', '1');
+		if ($campus_id !== null && $campus_id !== '') {
+			$this->db->where('users.campus_id', (int)$campus_id);
+		}
+		if ($q !== '') {
+			$this->db->group_start();
+			$this->db->like('users.first_name', $q);
+			$this->db->or_like('users.last_name', $q);
+			$this->db->or_like('users.cnic', $q);
+			$this->db->or_like('users.email', $q);
+			$this->db->or_like('users.username', $q);
+			$this->db->group_end();
+		}
+		$this->db->group_by('users.user_id');
 		$this->db->order_by('users.first_name', 'ASC');
 		$rows = $this->db->get()->result_array();
 
@@ -1100,8 +1931,18 @@ class Hrapi extends CI_Controller {
 			'gender' => isset($body['gender']) ? $body['gender'] : '',
 			'email' => isset($body['email']) ? $body['email'] : '',
 			'cnic' => isset($body['cnic']) ? $body['cnic'] : '',
+			'maritual_status' => isset($body['maritual_status']) ? $body['maritual_status'] : '',
+			'blood_group' => isset($body['blood_group']) ? $body['blood_group'] : '',
+			'date_of_birth' => isset($body['date_of_birth']) && $body['date_of_birth'] !== '' ? $body['date_of_birth'] : null,
 			'salary' => isset($body['salary']) ? $body['salary'] : 0,
-			'gross_salary' => isset($body['gross_salary']) ? $body['gross_salary'] : 0,
+			'gross_salary' => isset($body['gross_salary']) ? $body['gross_salary'] : (isset($body['salary']) ? $body['salary'] : 0),
+			'salary_adjustment' => isset($body['salary_adjustment']) ? $body['salary_adjustment'] : 0,
+			'apply_statutory_rules' => isset($body['apply_statutory_rules']) ? (int)$body['apply_statutory_rules'] : 1,
+			'designation' => isset($body['designation']) ? $body['designation'] : '',
+			'city' => isset($body['city']) ? $body['city'] : '',
+			'address' => isset($body['address']) ? $body['address'] : '',
+			'emergency_no' => isset($body['emergency_no']) ? $body['emergency_no'] : '',
+			'note' => isset($body['note']) ? $body['note'] : '',
 			'username' => isset($body['username']) ? $body['username'] : '',
 			'role' => isset($body['role']) ? $body['role'] : '',
 			'type' => isset($body['type']) ? $body['type'] : 'regular',
@@ -1120,6 +1961,25 @@ class Hrapi extends CI_Controller {
 			foreach ($fields as $k => $v) $this->db->set($k, $v);
 			$this->db->insert('users');
 			$id = (int)$this->db->insert_id();
+
+			$campus_id = (int)$fields['campus_id'];
+			if ($campus_id > 0) {
+				$campus = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
+				$last = $this->db->query(
+					'SELECT machine_id FROM machine_data WHERE campus_id=' . $campus_id . ' ORDER BY machine_id DESC LIMIT 1'
+				)->row_array();
+				$last_machine_id = 0;
+				if ($last && !empty($last['machine_id']) && !empty($campus['campus_code'])) {
+					$last_machine_id = (int)substr($last['machine_id'], 0, -strlen($campus['campus_code']));
+				}
+				$new_machine_id = ($last_machine_id + 1) . ($campus ? $campus['campus_code'] : '');
+				$this->db->insert('machine_data', array(
+					'teacher_student_id' => $id,
+					'machine_id' => $new_machine_id,
+					'type' => 'teacher',
+					'campus_id' => $campus_id,
+				));
+			}
 		} else {
 			$exists = $this->db->get_where('users', array('user_id' => $id))->row_array();
 			if (!$exists) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
@@ -1153,6 +2013,16 @@ class Hrapi extends CI_Controller {
 			}
 		}
 
+		if (isset($body['phones']) && is_array($body['phones'])) {
+			$this->db->where('user_id', $id);
+			$this->db->delete('users_phones');
+			foreach ($body['phones'] as $phone) {
+				$phone = trim((string)$phone);
+				if ($phone === '') continue;
+				$this->db->insert('users_phones', array('user_id' => $id, 'phone' => $phone));
+			}
+		}
+
 		$this->_json(array('success' => true, 'id' => $id));
 	}
 
@@ -1164,6 +2034,227 @@ class Hrapi extends CI_Controller {
 		$this->db->where('user_id', $id);
 		$this->db->update('users');
 		$this->_json(array('success' => true));
+	}
+
+	/** List uploaded documents for a staff member (legacy teachers/upload_documents). */
+	public function staff_documents($user_id = 0)
+	{
+		$user_id = (int)$user_id;
+		if (!$user_id) $this->_json(array('success' => false, 'message' => 'user_id required'), 422);
+		$user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+		if (!$user) $this->_json(array('success' => false, 'message' => 'Staff not found'), 404);
+		$rows = $this->db
+			->where('teacher_id', $user_id)
+			->order_by('id', 'DESC')
+			->get('teacher_documents')
+			->result_array();
+		$this->_json(array(
+			'success' => true,
+			'staff' => array(
+				'user_id' => (int)$user['user_id'],
+				'first_name' => $user['first_name'],
+				'last_name' => $user['last_name'],
+			),
+			'data' => $rows,
+		));
+	}
+
+	/** Upload staff document (multipart: type, teacher_document). */
+	public function staff_document_upload($user_id = 0)
+	{
+		$user_id = (int)$user_id;
+		if (!$user_id) $this->_json(array('success' => false, 'message' => 'user_id required'), 422);
+		$user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+		if (!$user) $this->_json(array('success' => false, 'message' => 'Staff not found'), 404);
+
+		$type = isset($_POST['type']) ? trim((string)$_POST['type']) : '';
+		if ($type === '') $this->_json(array('success' => false, 'message' => 'Document type required'), 422);
+
+		if (empty($_FILES['teacher_document']['name']) || !is_uploaded_file($_FILES['teacher_document']['tmp_name'])) {
+			$this->_json(array('success' => false, 'message' => 'File required'), 422);
+		}
+
+		$ext = strtolower(pathinfo($_FILES['teacher_document']['name'], PATHINFO_EXTENSION));
+		$allowed = array('gif', 'jpg', 'jpeg', 'png', 'pdf', 'webp');
+		if ($ext !== '' && !in_array($ext, $allowed, true)) {
+			$this->_json(array('success' => false, 'message' => 'Invalid file type'), 422);
+		}
+		if ($_FILES['teacher_document']['size'] > 8 * 1024 * 1024) {
+			$this->_json(array('success' => false, 'message' => 'File too large (max 8MB)'), 422);
+		}
+
+		$dir = FCPATH . 'uploads/';
+		if (!is_dir($dir)) {
+			@mkdir($dir, 0755, true);
+		}
+		$filename = uniqid('staff_doc_', true) . ($ext !== '' ? '.' . $ext : '');
+		if (!move_uploaded_file($_FILES['teacher_document']['tmp_name'], $dir . $filename)) {
+			$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
+		}
+
+		$this->db->insert('teacher_documents', array(
+			'teacher_id' => $user_id,
+			'image' => $filename,
+			'type' => $type,
+		));
+		$id = (int)$this->db->insert_id();
+		$this->_json(array('success' => true, 'id' => $id, 'image' => $filename));
+	}
+
+	/** Delete a staff document by id. */
+	public function staff_document_delete($user_id = 0, $doc_id = 0)
+	{
+		$user_id = (int)$user_id;
+		$doc_id = (int)$doc_id;
+		if (!$user_id || !$doc_id) $this->_json(array('success' => false, 'message' => 'user_id and doc_id required'), 422);
+		$row = $this->db->get_where('teacher_documents', array('id' => $doc_id, 'teacher_id' => $user_id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Document not found'), 404);
+		$this->db->where('id', $doc_id);
+		$this->db->delete('teacher_documents');
+		$this->_json(array('success' => true));
+	}
+
+	/** Single-staff attendance report (legacy teachers/check_attendence). */
+	public function staff_attendance($user_id = 0)
+	{
+		$user_id = (int)$user_id;
+		if (!$user_id) $this->_json(array('success' => false, 'message' => 'user_id required'), 422);
+
+		$user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+		if (!$user) $this->_json(array('success' => false, 'message' => 'Staff not found'), 404);
+
+		$machine = $this->db
+			->get_where('machine_data', array('teacher_student_id' => $user_id, 'type' => 'teacher'))
+			->row_array();
+		if (!$machine) {
+			$this->_json(array('success' => false, 'message' => 'Kindly set machine id of this user.'), 422);
+		}
+
+		$from = $this->input->get('from') ? trim((string)$this->input->get('from')) : date('Y-m-d');
+		$to = $this->input->get('to') ? trim((string)$this->input->get('to')) : date('Y-m-d');
+		$dates = $this->_date_range($from, $to);
+		$machineId = (int)$machine['machine_id'];
+
+		$rows = array();
+		foreach ($dates as $date) {
+			$holiday = $this->db->get_where('holidays', array('date' => $date))->result_array();
+			if (count($holiday) > 0) {
+				$rows[] = array(
+					'date' => $date,
+					'is_holiday' => true,
+					'checkin' => null,
+					'checkout' => null,
+				);
+				continue;
+			}
+
+			$checkinRow = $this->db
+				->where('machine_user_id', $machineId)
+				->where('time >=', $date . ' 00:00:00')
+				->where('time <', $date . ' 23:59:59')
+				->order_by('time', 'ASC')
+				->limit(1)
+				->get('attendence')
+				->row_array();
+
+			$checkoutRow = $this->db
+				->where('machine_user_id', $machineId)
+				->where('time >=', $date . ' 00:00:00')
+				->where('time <', $date . ' 23:59:59.999')
+				->order_by('time', 'DESC')
+				->limit(1)
+				->get('attendence')
+				->row_array();
+
+			$rows[] = array(
+				'date' => $date,
+				'is_holiday' => false,
+				'checkin' => $checkinRow ? date('h:i:s A', strtotime($checkinRow['time'])) : 'Absent',
+				'checkout' => $checkoutRow ? date('h:i:s A', strtotime($checkoutRow['time'])) : 'Absent',
+			);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'from' => $from,
+			'to' => $to,
+			'machine_id' => $machineId,
+			'staff' => array(
+				'user_id' => (int)$user['user_id'],
+				'first_name' => $user['first_name'],
+				'last_name' => $user['last_name'],
+			),
+			'data' => $rows,
+		));
+	}
+
+	/** Save or delete per-day timings for a staff shift (legacy save_staff_timing / delete_staff_timing). */
+	public function staff_shift_timings($shift_id = 0)
+	{
+		$shift_id = (int)$shift_id;
+		if (!$shift_id) $this->_json(array('success' => false, 'message' => 'shift_id required'), 422);
+
+		$shift = $this->db->get_where('staff_shifts', array('staff_shift_id' => $shift_id))->row_array();
+		if (!$shift) $this->_json(array('success' => false, 'message' => 'Shift not found'), 404);
+
+		$method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
+
+		if ($method === 'DELETE') {
+			$this->db->where('staff_shift_id', $shift_id);
+			$this->db->delete('staff_timing');
+			$this->_json(array('success' => true));
+		}
+
+		if ($method === 'POST') {
+			$body = $this->_body();
+			$timings = isset($body['timings']) && is_array($body['timings']) ? $body['timings'] : array();
+			foreach ($timings as $t) {
+				$day = isset($t['day']) ? trim((string)$t['day']) : '';
+				if ($day === '') continue;
+
+				$payload = array(
+					'day' => $day,
+					'checkin_timing' => isset($t['checkin_timing']) ? $t['checkin_timing'] : '00:00:00',
+					'checkout_timing' => isset($t['checkout_timing']) ? $t['checkout_timing'] : '00:00:00',
+					'half_day_on' => isset($t['half_day_on']) ? $t['half_day_on'] : '00:00:00',
+					'full_day_on' => isset($t['full_day_on']) ? $t['full_day_on'] : '00:00:00',
+					'staff_shift_id' => $shift_id,
+					'staff_id' => 0,
+				);
+
+				$existing = $this->db
+					->where('staff_shift_id', $shift_id)
+					->where('day', $day)
+					->get('staff_timing')
+					->row_array();
+
+				if ($existing) {
+					$this->db->where('staff_shift_id', $shift_id);
+					$this->db->where('day', $day);
+					$this->db->update('staff_timing', $payload);
+				} else {
+					$this->db->insert('staff_timing', $payload);
+				}
+			}
+			$this->_json(array('success' => true));
+		}
+
+		$this->_json(array('success' => false, 'message' => 'Method not allowed'), 405);
+	}
+
+	private function _date_range($from, $to)
+	{
+		$out = array();
+		$iFrom = mktime(1, 0, 0, (int)substr($from, 5, 2), (int)substr($from, 8, 2), (int)substr($from, 0, 4));
+		$iTo = mktime(1, 0, 0, (int)substr($to, 5, 2), (int)substr($to, 8, 2), (int)substr($to, 0, 4));
+		if ($iTo >= $iFrom) {
+			$out[] = date('Y-m-d', $iFrom);
+			while ($iFrom < $iTo) {
+				$iFrom += 86400;
+				$out[] = date('Y-m-d', $iFrom);
+			}
+		}
+		return $out;
 	}
 
 	// ------------------------------------------------------------------
