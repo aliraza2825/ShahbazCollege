@@ -2326,6 +2326,33 @@ class Hrapi extends CI_Controller {
 	// Statutory rules (ports Payroll_statutory_rules.php)
 	// ------------------------------------------------------------------
 
+	/** Flat expense categories for statutory rule/slab pickers. */
+	public function expense_categories_lookup()
+	{
+		if (!$this->db->table_exists('expense_category')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$this->db->select('expense_category_id, name, sub_of', false);
+		$this->db->from('expense_category');
+		if ($this->db->field_exists('status', 'expense_category')) {
+			$this->db->group_start();
+			$this->db->where('status', 'active');
+			$this->db->or_where('status', 1);
+			$this->db->or_where('status IS NULL', null, false);
+			$this->db->or_where('status', '');
+			$this->db->group_end();
+		}
+		$this->db->order_by('name', 'ASC');
+		$rows = $this->db->get()->result_array();
+		foreach ($rows as &$r) {
+			$r['expense_category_id'] = (int)$r['expense_category_id'];
+			$sub = isset($r['sub_of']) ? $r['sub_of'] : null;
+			$r['sub_of'] = ($sub === null || $sub === '' || (int)$sub === 0) ? null : (int)$sub;
+		}
+		unset($r);
+		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
 	public function statutory_rules()
 	{
 		$rows = $this->db->order_by('id', 'DESC')->get('payroll_statutory_rules')->result_array();
