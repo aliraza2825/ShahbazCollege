@@ -39,4 +39,9 @@ class Payroll_service {
     {
         return $this->salary->remove_contributions_from_body($body);
     }
+
+    public function fetch_salary_slip_data($user_id, $month, $year)
+    {
+        return $this->salary->fetch_salary_slip_data($user_id, $month, $year);
+    }
 }

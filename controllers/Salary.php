@@ -1348,6 +1348,125 @@ class Salary  extends CI_Controller{
         $this->load->view('salary/salary_view',$data);
     }
 
+    /** JSON-friendly salary slip payload for React POS. */
+    public function fetch_salary_slip_data($user_id, $month, $year)
+    {
+        if (is_numeric($month)) {
+            $month = date('M', mktime(0, 0, 0, (int) $month, 10));
+        }
+
+        $this->db->select('users.*, payroll.*, campuses.campus_name, campuses.logo as campus_logo');
+        $this->db->from('users');
+        $this->db->join('payroll', 'payroll.user_id = users.user_id', 'inner');
+        $this->db->join('campuses', 'campuses.campus_id = users.campus_id', 'left');
+        $this->db->where(array(
+            'users.user_id' => $user_id,
+            'users.status' => 1,
+            'payroll.payroll_month' => $month,
+            'payroll.payroll_year' => $year,
+        ));
+        $row = $this->db->get()->row_array();
+        if (!$row) {
+            return null;
+        }
+
+        $designationNames = array();
+        if (!empty($row['designation_id'])) {
+            $desigIds = array_filter(array_map('intval', explode(',', $row['designation_id'])));
+            if (!empty($desigIds)) {
+                $desigs = $this->db
+                    ->select('designation_name')
+                    ->where_in('designation_id', $desigIds)
+                    ->get('designations')
+                    ->result_array();
+                foreach ($desigs as $d) {
+                    $designationNames[] = $d['designation_name'];
+                }
+            }
+        }
+        $row['designation_name'] = implode(', ', $designationNames);
+
+        $payrollId = (int) $row['id'];
+        $lines = $this->db
+            ->where('payroll_id', $payrollId)
+            ->order_by('id', 'ASC')
+            ->get('payroll_earn_deducs')
+            ->result_array();
+
+        $earnings = array();
+        $deductions = array();
+        $adjustments = array();
+        $totalEarnings = (float) $row['basic_salary'];
+        $totalDeductions = 0;
+
+        foreach ($lines as $line) {
+            $typeId = isset($line['type_id']) ? (string) $line['type_id'] : '';
+            $item = array(
+                'name' => $line['name'],
+                'amount' => (float) $line['amount'],
+            );
+            if ($typeId === '0') {
+                $earnings[] = $item;
+                $totalEarnings += (float) $line['amount'];
+            } elseif ($typeId === '1') {
+                $deductions[] = $item;
+                $totalDeductions += (float) $line['amount'];
+            } elseif ($typeId === '2') {
+                $adjustments[] = $item;
+                $totalEarnings += (float) $line['amount'];
+            }
+        }
+
+        $approvedBy = '';
+        if (!empty($row['created_by'])) {
+            $creator = $this->db
+                ->select('first_name, last_name')
+                ->get_where('users', array('user_id' => (int) $row['created_by']))
+                ->row_array();
+            if ($creator) {
+                $approvedBy = trim($creator['first_name'] . ' ' . $creator['last_name']);
+            }
+        }
+
+        return array(
+            'employee' => array(
+                'user_id' => (int) $row['user_id'],
+                'first_name' => $row['first_name'],
+                'last_name' => $row['last_name'],
+                'cnic' => isset($row['cnic']) ? $row['cnic'] : '',
+                'mobile' => isset($row['mobile']) ? $row['mobile'] : '',
+                'gender' => isset($row['gender']) ? $row['gender'] : '',
+                'joining_date' => isset($row['joining_date']) ? $row['joining_date'] : '',
+                'designation_name' => $row['designation_name'],
+                'campus_name' => isset($row['campus_name']) ? $row['campus_name'] : '',
+                'campus_logo' => isset($row['campus_logo']) ? $row['campus_logo'] : '',
+            ),
+            'payroll' => array(
+                'id' => $payrollId,
+                'payroll_month' => $row['payroll_month'],
+                'payroll_year' => $row['payroll_year'],
+                'basic_salary' => (float) $row['basic_salary'],
+                'gross_salary' => (float) $row['gross_salary'],
+                'earned_salary' => (float) $row['earned_salary'],
+                'earnings' => (float) $row['earnings'],
+                'deductions' => (float) $row['deductions'],
+                'tax' => (float) $row['tax'],
+                'no_of_days' => $row['no_of_days'],
+                'no_of_absents' => $row['no_of_absents'],
+                'no_of_lates' => $row['no_of_lates'],
+                'disburse_through' => isset($row['disburse_through']) ? $row['disburse_through'] : 'pending',
+            ),
+            'earnings' => $earnings,
+            'deductions' => $deductions,
+            'adjustments' => $adjustments,
+            'totals' => array(
+                'total_payments' => $totalEarnings,
+                'total_deductions' => $totalDeductions,
+            ),
+            'approved_by' => $approvedBy,
+        );
+    }
+
     public function salary_report(){
 
         $data = $this->fetch_salary_report_data(

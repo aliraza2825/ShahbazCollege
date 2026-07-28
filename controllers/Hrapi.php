@@ -2631,6 +2631,21 @@ class Hrapi extends CI_Controller {
 		}
 	}
 
+	public function salary_view($user_id = 0, $month = '', $year = '')
+	{
+		$user_id = (int) $user_id;
+		$month = $month !== '' ? $month : $this->input->get('month');
+		$year = $year !== '' ? $year : $this->input->get('year');
+		if (!$user_id || $month === '' || $year === '') {
+			$this->_json(array('success' => false, 'message' => 'user_id, month and year required'), 422);
+		}
+		$data = $this->_payroll_service()->fetch_salary_slip_data($user_id, $month, $year);
+		if (!$data) {
+			$this->_json(array('success' => false, 'message' => 'Payroll not found'), 404);
+		}
+		$this->_json(array('success' => true, 'data' => $data));
+	}
+
 	public function store_payroll()
 	{
 		$body = $this->_body();
