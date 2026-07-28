@@ -85,6 +85,47 @@ class Salary  extends CI_Controller{
 
     public function generate_salary($user_id,$campus_id,$month,$year)
     {
+        $data = $this->_prepare_generate_salary_data($user_id, $campus_id, $month, $year);
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('salary/generate_salary', $data);
+        $this->load->view('inc/footer');
+    }
+
+    /** JSON payload for React / Hrapi generate salary wizard. */
+    public function build_generate_salary_payload($user_id, $campus_id, $month, $year)
+    {
+        $data = $this->_prepare_generate_salary_data($user_id, $campus_id, $month, $year);
+        return $this->_serialize_generate_payload($data, $month, $year);
+    }
+
+    private function _serialize_generate_payload($data, $month, $year)
+    {
+        $staff = isset($data['staff']) ? $data['staff'] : null;
+        $out = $data;
+        if (is_object($staff)) {
+            $out['staff'] = (array) $staff;
+        }
+        $out['month'] = $month;
+        $out['year'] = $year;
+        $out['counted_days_default'] = isset($data['counted_days'], $data['leaves'], $data['absent'])
+            ? ((float) $data['counted_days'] - (float) $data['leaves'] - (float) $data['absent'])
+            : 0;
+        $out['allowance_amount'] = 0;
+        if (is_object($staff)) {
+            $out['allowance_amount'] = (float) $staff->gross_salary - (float) $staff->salary;
+        } elseif (is_array($staff)) {
+            $out['allowance_amount'] = (float) @$staff['gross_salary'] - (float) @$staff['salary'];
+        }
+        if (!isset($out['income_tax']) && isset($data['income_tax'])) {
+            $out['income_tax'] = $data['income_tax'];
+        }
+        unset($out['total_paid_students']);
+        return $out;
+    }
+
+    private function _prepare_generate_salary_data($user_id,$campus_id,$month,$year)
+    {
 
         //$data['from_date'] = date("Y-m-01", strtotime("-1 months"));
         //$data['to_date'] = date("Y-m-t", strtotime($data['from_date']));
@@ -564,10 +605,9 @@ class Salary  extends CI_Controller{
             }
         }
 
-        $this->load->view('inc/header');
-        $this->load->view('inc/sidebar');
-        $this->load->view('salary/generate_salary', $data);
-        $this->load->view('inc/footer');
+        $data['month'] = $month;
+        $data['year'] = $year;
+        return $data;
     }
     
     private function statutory_rule_base_salary($rule, $gross_salary, $basic_salary = null, $net_salary = null)
@@ -847,25 +887,82 @@ class Salary  extends CI_Controller{
 
     public function storepayroll()
     {
+        $this->_storepayroll_finish($this->_storepayroll_impl($this->input->post(), false));
+    }
 
-        $user_id   = $this->input->post('user_id');
-        $campus_id = $this->input->post('campus_id');
-        $month     = $this->input->post('month');
-        $year      = $this->input->post('year');
+    /** Save payroll from JSON body (React / Hrapi). */
+    public function storepayroll_from_body($body, $actor_user_id = null, $actor_name = '')
+    {
+        if ($actor_user_id) {
+            $this->session->set_userdata('user_id', $actor_user_id);
+        }
+        if ($actor_name !== '') {
+            $this->session->set_userdata('name', $actor_name);
+        }
+        return $this->_storepayroll_impl(is_array($body) ? $body : array(), true);
+    }
+
+    private function _post_val($in, $key, $default = null)
+    {
+        return (is_array($in) && array_key_exists($key, $in)) ? $in[$key] : $default;
+    }
+
+    private function _storepayroll_finish($result)
+    {
+        if (!is_array($result)) {
+            return;
+        }
+        if (empty($result['success'])) {
+            if (!empty($result['redirect'])) {
+                $this->session->set_flashdata('error', isset($result['message']) ? $result['message'] : 'Payroll not generated.');
+                redirect($result['redirect']);
+            }
+            return;
+        }
+
+        $campus_id = isset($result['campus_id']) ? $result['campus_id'] : '';
+        $month = isset($result['month']) ? $result['month'] : '';
+        $year = isset($result['year']) ? $result['year'] : '';
+        $data = array('month' => $month, 'year' => $year);
+
+        if ($campus_id != '') {
+            $this->db->select('us.* , campuses.campus_name,(select earned_salary from payroll where 
+                user_id = us.user_id and payroll_month = "'.$month.'" and payroll_year = "'.$year.'" group by user_id) as count');
+            $this->db->from('users us');
+            $this->db->join('campuses','us.campus_id = campuses.campus_id ','inner');
+            $this->db->where(array('us.campus_id'=>$campus_id,'us.status'=>1));
+            $data['staff'] = $this->db->get()->result_array();
+            $data['campus_id'] = $campus_id;
+        }
+
+        $this->session->set_flashdata('message', 'Payroll generated Successfully.');
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('salary/salary_list', $data);
+        $this->load->view('inc/footer');
+    }
+
+    private function _storepayroll_impl($in, $api_mode = false)
+    {
+
+        $user_id   = $this->_post_val($in, 'user_id');
+        $campus_id = $this->_post_val($in, 'campus_id');
+        $month     = $this->_post_val($in, 'month');
+        $year      = $this->_post_val($in, 'year');
     
-        $earnings       = $this->input->post('earningstype') ?: array();
-        $earningsamount = $this->input->post('earningsValue') ?: array();
+        $earnings       = $this->_post_val($in, 'earningstype', array()) ?: array();
+        $earningsamount = $this->_post_val($in, 'earningsValue', array()) ?: array();
     
-        $deduct       = $this->input->post('deductionstype') ?: array();
-        $deductamount = $this->input->post('deductionsValue') ?: array();
-        $loanallIds   = $this->input->post('loanId') ?: array();
+        $deduct       = $this->_post_val($in, 'deductionstype', array()) ?: array();
+        $deductamount = $this->_post_val($in, 'deductionsValue', array()) ?: array();
+        $loanallIds   = $this->_post_val($in, 'loanId', array()) ?: array();
         $applyStatutoryRules = $this->user_applies_statutory_rules($user_id);
     
-        $employerNames   = $this->input->post('employer_contribution_name') ?: array();
-        $employerAmounts = $this->input->post('employer_contribution_amount') ?: array();
-        $employerRuleIds = $this->input->post('employer_contribution_rule_id') ?: array();
-        $employerSlabIds = $this->input->post('employer_contribution_slab_id') ?: array();
-        $employerBaseSalaries = $this->input->post('employer_contribution_base_salary') ?: array();
+        $employerNames   = $this->_post_val($in, 'employer_contribution_name', array()) ?: array();
+        $employerAmounts = $this->_post_val($in, 'employer_contribution_amount', array()) ?: array();
+        $employerRuleIds = $this->_post_val($in, 'employer_contribution_rule_id', array()) ?: array();
+        $employerSlabIds = $this->_post_val($in, 'employer_contribution_slab_id', array()) ?: array();
+        $employerBaseSalaries = $this->_post_val($in, 'employer_contribution_base_salary', array()) ?: array();
 
         if (!$applyStatutoryRules) {
             $statutoryRuleNames = $this->db
@@ -902,12 +999,12 @@ class Salary  extends CI_Controller{
             $employerBaseSalaries = array();
         }
     
-        $basic_salary    = (float) $this->input->post('basic_salary');
-        $gross_salary    = (float) $this->input->post('gross_salary');
-        $earned_salary   = (float) $this->input->post('net_salary');
-        $deductions      = (float) $this->input->post('deduction_salary');
-        $earnings_total  = (float) $this->input->post('earing_salary');
-        $tax_salary      = (float) $this->input->post('tax_salary');
+        $basic_salary    = (float) $this->_post_val($in, 'basic_salary');
+        $gross_salary    = (float) $this->_post_val($in, 'gross_salary');
+        $earned_salary   = (float) $this->_post_val($in, 'net_salary');
+        $deductions      = (float) $this->_post_val($in, 'deduction_salary');
+        $earnings_total  = (float) $this->_post_val($in, 'earing_salary');
+        $tax_salary      = (float) $this->_post_val($in, 'tax_salary');
         if (!$applyStatutoryRules) {
             $deductions = 0;
             foreach ($deductamount as $deductAmount) {
@@ -927,7 +1024,11 @@ class Salary  extends CI_Controller{
             ->row_array();
 
         if ($minimumSalaryAdjustment > 0 && !$salaryPettycash) {
-            $this->session->set_flashdata('error', 'Payroll not generated. Please create petty cash account for this employee first.');
+            $msg = 'Payroll not generated. Please create petty cash account for this employee first.';
+            if ($api_mode) {
+                return array('success' => false, 'message' => $msg);
+            }
+            $this->session->set_flashdata('error', $msg);
             redirect(site_url() . '/salary/generate_salary/' . $user_id . '/' . $campus_id . '/' . $month . '/' . $year);
             return;
         }
@@ -942,7 +1043,7 @@ class Salary  extends CI_Controller{
             $daysInMonth = 30;
         }
 
-        $countedDays = (float) $this->input->post('total_days');
+        $countedDays = (float) $this->_post_val($in, 'total_days');
         if ($countedDays > $daysInMonth) {
             $countedDays = $daysInMonth;
         }
@@ -996,9 +1097,9 @@ class Salary  extends CI_Controller{
             'deductions'     => $deductions,
             'earnings'       => $earnings_total,
             'tax'            => $tax_salary,
-            'no_of_days'     => $this->input->post('total_days'),
-            'no_of_absents'  => $this->input->post('total_absents'),
-            'no_of_lates'    => $this->input->post('total_lates'),
+            'no_of_days'     => $this->_post_val($in, 'total_days'),
+            'no_of_absents'  => $this->_post_val($in, 'total_absents'),
+            'no_of_lates'    => $this->_post_val($in, 'total_lates'),
             'created_by'     => $this->session->userdata('user_id')
         );
     
@@ -1185,30 +1286,31 @@ class Salary  extends CI_Controller{
         $this->db->trans_complete();
     
         if ($this->db->trans_status() === FALSE) {
+            if ($api_mode) {
+                return array('success' => false, 'message' => 'Payroll not generated. Please try again.');
+            }
             $this->session->set_flashdata('error', 'Payroll not generated. Please try again.');
             redirect(site_url() . '/salary');
-            return;
+            return array('success' => false, 'redirect' => site_url() . '/salary');
         }
-    
-        if ($campus_id != '') {
-            $this->db->select('us.* , campuses.campus_name,(select earned_salary from payroll where 
-                user_id = us.user_id and payroll_month = "'.$month.'" and payroll_year = "'.$year.'" group by user_id) as count');
-            $this->db->from('users us');
-            $this->db->join('campuses','us.campus_id = campuses.campus_id ','inner');
-            $this->db->where(array('us.campus_id'=>$campus_id,'us.status'=>1));
-            $data['staff'] = $this->db->get()->result_array();
-            $data['campus_id'] = $campus_id;
+
+        if ($api_mode) {
+            return array(
+                'success' => true,
+                'id' => (int) $insertId,
+                'message' => 'Payroll generated Successfully.',
+                'campus_id' => $campus_id,
+                'month' => $month,
+                'year' => $year,
+            );
         }
-    
-        $data['month'] = $month;
-        $data['year'] = $year;
-    
-        $this->session->set_flashdata('message', 'Payroll generated Successfully.');
-    
-        $this->load->view('inc/header');
-        $this->load->view('inc/sidebar');
-        $this->load->view('salary/salary_list', $data);
-        $this->load->view('inc/footer');
+
+        return array(
+            'success' => true,
+            'campus_id' => $campus_id,
+            'month' => $month,
+            'year' => $year,
+        );
     }
 
     public function salary_view($id, $month, $year)
@@ -1236,54 +1338,13 @@ class Salary  extends CI_Controller{
 
     public function salary_report(){
 
+        $data = $this->fetch_salary_report_data(
+            $this->input->post('campus_id'),
+            $this->input->post('to_date'),
+            false
+        );
         $data['campuses'] = $this->db->get_where('campuses',array('status'=>1))->result_array();
-
-        $course_id = $this->input->post('campus_id');
-        $month = $this->input->post('to_date');
-
-        $month = date("M", strtotime($month));
-        $year = date("Y", strtotime($this->input->post('to_date')));
-
-
-        $this->db->select('payroll.*,(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Loan installment%")) as loan,
-            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Advance installment%")) as advance,
-			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Special%")) as special,
-			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0) as earnings,
-			(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
-            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name in ("Minimum Salary Adjustment", "Salary Adjustment")) as minimum_salary_adjustment,
-			users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name,campuses.campus_id');
-        $this->db->from('payroll');
-        $this->db->join('users','payroll.user_id = users.user_id ','inner');
-        $this->db->join('campuses','users.campus_id = campuses.campus_id ','inner');
-        $this->db->join('user_allowances','user_allowances.user_id = users.user_id ','inner');
-        $this->db->join('designations', 'designations.designation_id=users.designation_id', 'INNER');
-        $this->db->join('departments', 'departments.department_id=users.department_id', 'INNER');
-        $this->db->group_by('users.user_id');
-        $this->db->where("payroll_month = '".$month."'");
-        $this->db->where("payroll_year = '".$year."'");
-        if($course_id != '' && $course_id != null){
-            $this->db->where("users.campus_id = ".$course_id);
-            $data['iscampus']='true';
-        }else{
-            $data['iscampus']='false';
-        }
-
-        $data['salary'] = $this->db->get()->result_array();
-        foreach ($data['salary'] as $key => $salary) {
-            $minimumAdjustment = (float) @$salary['minimum_salary_adjustment'];
-            if ($minimumAdjustment > 0) {
-                $data['salary'][$key]['earned_salary'] = (float) $salary['earned_salary'] - $minimumAdjustment;
-            }
-        }
-        $data['month'] = $month;
-        $data['year'] = $year;
-        $data['my_campus'] = $this->input->post('campus_id');
-
-        $data['disbursed'] = $this->db->get_where("expenses","expenses.campus_id = '$course_id' and expenses.salary_year = '$year' and expenses.salary_month = '$month' and expenses.approved_status = '1'")->result_array();
-        $data['stat_rules'] = $this->db
-            ->order_by('id', 'DESC')
-            ->get_where('payroll_statutory_rules','status = 1')
-            ->result_array();
+        $data['minimum_adjustment_report'] = false;
 
         $this->load->view('inc/header');
         $this->load->view('inc/sidebar');
@@ -1293,13 +1354,28 @@ class Salary  extends CI_Controller{
 
     public function minimum_salary_adjustment_report(){
 
+        $data = $this->fetch_salary_report_data(
+            $this->input->post('campus_id'),
+            $this->input->post('to_date'),
+            true
+        );
         $data['campuses'] = $this->db->get_where('campuses',array('status'=>1))->result_array();
+        $data['minimum_adjustment_report'] = true;
 
-        $course_id = $this->input->post('campus_id');
-        $month = $this->input->post('to_date');
+        $this->load->view('inc/header');
+        $this->load->view('inc/sidebar');
+        $this->load->view('salary/salary_list_report',$data);
+        $this->load->view('inc/footer');
+    }
 
-        $month = date("M", strtotime($month));
-        $year = date("Y", strtotime($this->input->post('to_date')));
+    /** Shared salary / disburse report query for legacy views and Hrapi. */
+    public function fetch_salary_report_data($campus_id, $to_date, $minimum_adjustment_report = false)
+    {
+        if ($to_date === null || $to_date === '') {
+            $to_date = date('Y-m-d');
+        }
+        $month = date('M', strtotime($to_date));
+        $year = date('Y', strtotime($to_date));
 
         $this->db->select('payroll.*,(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Loan installment%")) as loan,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Advance installment%")) as advance,
@@ -1315,31 +1391,145 @@ class Salary  extends CI_Controller{
         $this->db->join('designations', 'designations.designation_id=users.designation_id', 'INNER');
         $this->db->join('departments', 'departments.department_id=users.department_id', 'INNER');
         $this->db->group_by('users.user_id');
-        $this->db->where("payroll_month = '".$month."'");
-        $this->db->where("payroll_year = '".$year."'");
-        if($course_id != '' && $course_id != null){
-            $this->db->where("users.campus_id = ".$course_id);
-            $data['iscampus']='true';
-        }else{
-            $data['iscampus']='false';
+        $this->db->where('payroll_month', $month);
+        $this->db->where('payroll_year', $year);
+        if ($campus_id != '' && $campus_id != null) {
+            $this->db->where('users.campus_id', $campus_id);
+            $iscampus = 'true';
+        } else {
+            $iscampus = 'false';
         }
 
-        $data['salary'] = $this->db->get()->result_array();
-        $data['month'] = $month;
-        $data['year'] = $year;
-        $data['my_campus'] = $this->input->post('campus_id');
-        $data['minimum_adjustment_report'] = true;
+        $salary = $this->db->get()->result_array();
+        if (!$minimum_adjustment_report) {
+            foreach ($salary as $key => $row) {
+                $minimumAdjustment = (float) @$row['minimum_salary_adjustment'];
+                if ($minimumAdjustment > 0) {
+                    $salary[$key]['earned_salary'] = (float) $row['earned_salary'] - $minimumAdjustment;
+                }
+            }
+        }
 
-        $data['disbursed'] = $this->db->get_where("expenses","expenses.campus_id = '$course_id' and expenses.salary_year = '$year' and expenses.salary_month = '$month' and expenses.approved_status = '1'")->result_array();
-        $data['stat_rules'] = $this->db
+        $stat_rules = $this->db
             ->order_by('id', 'DESC')
-            ->get_where('payroll_statutory_rules','status = 1')
+            ->get_where('payroll_statutory_rules', 'status = 1')
             ->result_array();
 
-        $this->load->view('inc/header');
-        $this->load->view('inc/sidebar');
-        $this->load->view('salary/salary_list_report',$data);
-        $this->load->view('inc/footer');
+        foreach ($salary as $key => $row) {
+            $contributions = $this->db
+                ->select('rule_id, employer_amount, id')
+                ->where('payroll_id', $row['id'])
+                ->get('payroll_statutory_contributions')
+                ->result_array();
+            $salary[$key]['contributions'] = $contributions;
+            foreach ($stat_rules as $rule) {
+                $col = 'stat_rule_' . $rule['id'];
+                $salary[$key][$col] = 0;
+                foreach ($contributions as $c) {
+                    if ((int) $c['rule_id'] === (int) $rule['id']) {
+                        $salary[$key][$col] = (float) $c['employer_amount'];
+                    }
+                }
+            }
+        }
+
+        $disbursed = array();
+        if ($campus_id != '' && $campus_id != null) {
+            $disbursed = $this->db
+                ->get_where('expenses', array(
+                    'campus_id' => $campus_id,
+                    'salary_year' => $year,
+                    'salary_month' => $month,
+                    'approved_status' => '1',
+                ))
+                ->result_array();
+        }
+
+        return array(
+            'salary' => $salary,
+            'month' => $month,
+            'year' => $year,
+            'my_campus' => $campus_id,
+            'iscampus' => $iscampus,
+            'to_date' => $to_date,
+            'disbursed' => $disbursed,
+            'stat_rules' => $stat_rules,
+            'minimum_adjustment_report' => (bool) $minimum_adjustment_report,
+        );
+    }
+
+    public function insert_expense_from_body($body, $actor_user_id = null, $actor_name = '')
+    {
+        if ($actor_user_id) {
+            $this->session->set_userdata('user_id', $actor_user_id);
+        }
+        if ($actor_name !== '') {
+            $this->session->set_userdata('name', $actor_name);
+        }
+
+        $payroll_ids = isset($body['payroll_ids']) ? $body['payroll_ids'] : '';
+        $payrollIdList = array_filter(array_map('intval', explode(',', (string) $payroll_ids)));
+        $type = isset($body['type']) ? $body['type'] : 'cash';
+        $month = isset($body['month']) ? $body['month'] : '';
+        $year = isset($body['year']) ? $body['year'] : '';
+        $campus = isset($body['campus']) ? $body['campus'] : '';
+        $receivable_amount = isset($body['disburse_amount']) ? (float) $body['disburse_amount'] : 0;
+        $pettycash = function_exists('my_pettycash') ? my_pettycash() : 0;
+
+        if ($pettycash >= $receivable_amount || $type == 'bank') {
+            $this->db->set('title', 'Salary Disburse for ' . $month . '-' . $year);
+            $this->db->set('date', date('Y-m-d'));
+            $this->db->set('amount', $receivable_amount);
+            $this->db->set('purpose', 'Salary Given to Employees');
+            $this->db->set('actual_date', date('Y-m-d H:i:s'));
+            $this->db->set('image', '');
+            $this->db->set('expense_category_id', '36');
+            $this->db->set('approved_status', '1');
+            $this->db->set('paid_type', $type);
+            $this->db->set('campus_id', $campus);
+            $this->db->set('salary_month', $month);
+            $this->db->set('salary_year', $year);
+            $this->db->set('add_by_id', $this->session->userdata('user_id'));
+            $this->db->set('add_by', $this->session->userdata('name'));
+            $this->db->insert('expenses');
+
+            $insert_id = $this->db->insert_id();
+            $this->db->set('disburse_through', $type);
+            $this->db->set('expense_id', $insert_id);
+            $this->db->where_in('id', $payrollIdList);
+            $this->db->update('payroll');
+
+            if (!empty($payrollIdList)) {
+                $payrollRows = $this->db
+                    ->select('id, user_id, payroll_month, payroll_year')
+                    ->where_in('id', $payrollIdList)
+                    ->get('payroll')
+                    ->result_array();
+                $this->post_minimum_salary_adjustment_for_payroll_rows($payrollRows, $campus);
+            }
+
+            return array('success' => true, 'message' => 'Salary posted', 'expense_id' => (int) $insert_id);
+        }
+
+        return array(
+            'success' => false,
+            'message' => 'Disburse Amount is : ' . $receivable_amount . ' Your Petty Cash is : ' . $pettycash,
+        );
+    }
+
+    public function remove_contributions_from_body($body)
+    {
+        $ids = isset($body['contribution_ids']) ? $body['contribution_ids'] : '';
+        if ($ids === '' || $ids === null) {
+            return array('success' => false, 'message' => 'No contribution selected');
+        }
+        $idList = array_filter(array_map('intval', explode(',', (string) $ids)));
+        if (empty($idList)) {
+            return array('success' => false, 'message' => 'No contribution selected');
+        }
+        $this->db->where_in('id', $idList);
+        $this->db->delete('payroll_statutory_contributions');
+        return array('success' => true);
     }
 
     public function delete_salary($user_id,$month,$year){

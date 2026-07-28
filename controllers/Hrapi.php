@@ -2561,8 +2561,30 @@ class Hrapi extends CI_Controller {
 	}
 
 	// ------------------------------------------------------------------
-	// Salary (ports Salary::salary_list / salary_report / delete_salary)
+	// Salary (ports Salary.php — generate, reports, disburse)
 	// ------------------------------------------------------------------
+
+	private function _payroll_service()
+	{
+		if (!isset($this->payroll_service)) {
+			$this->load->library('Payroll_service');
+			$this->payroll_service = $this->payroll_service;
+		}
+		return $this->payroll_service;
+	}
+
+	private function _actor_from_session()
+	{
+		$uid = isset($this->current_user['user_id']) ? (int) $this->current_user['user_id'] : null;
+		$name = '';
+		if ($uid) {
+			$row = $this->db->select('first_name, last_name')->get_where('users', array('user_id' => $uid))->row_array();
+			if ($row) {
+				$name = trim($row['first_name'] . ' ' . $row['last_name']);
+			}
+		}
+		return array($uid, $name);
+	}
 
 	public function salary_list()
 	{
@@ -2573,7 +2595,7 @@ class Hrapi extends CI_Controller {
 		if ($year === null || $year === '') $year = date('Y', strtotime('-1 months'));
 
 		$this->db->select(
-			'users.user_id, users.first_name, users.last_name, users.salary, users.gross_salary, users.campus_id, campuses.campus_name,'
+			'users.user_id, users.first_name, users.last_name, users.mobile, users.salary, users.gross_salary, users.campus_id, campuses.campus_name,'
 			. '(select earned_salary from payroll where user_id = users.user_id and payroll_month = ' . $this->db->escape($month) . ' and payroll_year = ' . $this->db->escape($year) . ' limit 1) as earned_salary'
 		);
 		$this->db->from('users');
@@ -2585,37 +2607,93 @@ class Hrapi extends CI_Controller {
 
 		foreach ($rows as &$r) {
 			$r['payroll_exists'] = $r['earned_salary'] !== null;
+			$r['count'] = $r['earned_salary'];
 		}
 		unset($r);
 
 		$this->_json(array('success' => true, 'month' => $month, 'year' => $year, 'data' => $rows));
 	}
 
+	public function generate_salary($user_id = 0, $campus_id = 0, $month = '', $year = '')
+	{
+		$user_id = (int) $user_id;
+		$campus_id = (int) $campus_id;
+		$month = $month !== '' ? $month : $this->input->get('month');
+		$year = $year !== '' ? $year : $this->input->get('year');
+		if (!$user_id || !$campus_id || $month === '' || $year === '') {
+			$this->_json(array('success' => false, 'message' => 'user_id, campus_id, month and year required'), 422);
+		}
+		try {
+			$data = $this->_payroll_service()->build_generate_salary_payload($user_id, $campus_id, $month, $year);
+			$this->_json(array('success' => true, 'data' => $data));
+		} catch (Exception $e) {
+			$this->_json(array('success' => false, 'message' => $e->getMessage()), 500);
+		}
+	}
+
+	public function store_payroll()
+	{
+		$body = $this->_body();
+		list($uid, $name) = $this->_actor_from_session();
+		$result = $this->_payroll_service()->storepayroll_from_body($body, $uid, $name);
+		if (empty($result['success'])) {
+			$this->_json(array('success' => false, 'message' => isset($result['message']) ? $result['message'] : 'Save failed'), 422);
+		}
+		$this->_json(array('success' => true, 'id' => isset($result['id']) ? $result['id'] : null, 'message' => $result['message']));
+	}
+
 	public function salary_report()
 	{
 		$campus_id = $this->input->get('campus_id');
 		$to_date = $this->input->get('to_date');
-		if ($to_date === null || $to_date === '') $to_date = date('Y-m-d');
-		$month = date('M', strtotime($to_date));
-		$year = date('Y', strtotime($to_date));
-
-		$this->db->select('payroll.*, users.first_name, users.last_name, users.designation_id, campuses.campus_name, departments.department_name');
-		$this->db->from('payroll');
-		$this->db->join('users', 'payroll.user_id=users.user_id', 'inner');
-		$this->db->join('campuses', 'users.campus_id=campuses.campus_id', 'left');
-		$this->db->join('departments', 'departments.department_id=users.department_id', 'left');
-		$this->db->where('payroll.payroll_month', $month);
-		$this->db->where('payroll.payroll_year', $year);
-		if ($campus_id !== null && $campus_id !== '') $this->db->where('users.campus_id', $campus_id);
-		$rows = $this->db->get()->result_array();
-
-		$designationMap = $this->_designation_name_map();
-		foreach ($rows as &$r) {
-			$r['designation_names'] = $this->_designation_names($r['designation_id'], $designationMap);
+		if ($to_date === null || $to_date === '') {
+			$month = $this->input->get('month');
+			$year = $this->input->get('year');
+			if ($month !== null && $month !== '' && $year !== null && $year !== '') {
+				$to_date = date('Y-m-t', strtotime($year . '-' . $month . '-01'));
+			} else {
+				$to_date = date('Y-m-d');
+			}
 		}
-		unset($r);
+		$data = $this->_payroll_service()->fetch_salary_report_data($campus_id, $to_date, false);
+		$this->_json(array_merge(array('success' => true), $data, array('data' => $data['salary'])));
+	}
 
-		$this->_json(array('success' => true, 'month' => $month, 'year' => $year, 'to_date' => $to_date, 'data' => $rows));
+	public function disburse_salary_report()
+	{
+		$campus_id = $this->input->get('campus_id');
+		$to_date = $this->input->get('to_date');
+		if ($to_date === null || $to_date === '') {
+			$month = $this->input->get('month');
+			$year = $this->input->get('year');
+			if ($month !== null && $month !== '' && $year !== null && $year !== '') {
+				$to_date = date('Y-m-t', strtotime($year . '-' . $month . '-01'));
+			} else {
+				$to_date = date('Y-m-d');
+			}
+		}
+		$data = $this->_payroll_service()->fetch_salary_report_data($campus_id, $to_date, true);
+		$this->_json(array_merge(array('success' => true), $data, array('data' => $data['salary'])));
+	}
+
+	public function salary_disburse()
+	{
+		$body = $this->_body();
+		list($uid, $name) = $this->_actor_from_session();
+		$result = $this->_payroll_service()->insert_expense_from_body($body, $uid, $name);
+		if (empty($result['success'])) {
+			$this->_json(array('success' => false, 'message' => isset($result['message']) ? $result['message'] : 'Disburse failed'), 422);
+		}
+		$this->_json($result);
+	}
+
+	public function salary_remove_contributions()
+	{
+		$result = $this->_payroll_service()->remove_contributions_from_body($this->_body());
+		if (empty($result['success'])) {
+			$this->_json(array('success' => false, 'message' => isset($result['message']) ? $result['message'] : 'Failed'), 422);
+		}
+		$this->_json(array('success' => true));
 	}
 
 	/** Mirrors Salary::delete_salary($user_id,$month,$year). */
