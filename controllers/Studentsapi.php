@@ -1052,6 +1052,17 @@ class Studentsapi extends CI_Controller {
 		return $months;
 	}
 
+	private function _payment_paid_month($payment)
+	{
+		$d = '';
+		if (!empty($payment['paid_date']) && $payment['paid_date'] !== '0000-00-00') {
+			$d = $payment['paid_date'];
+		} elseif (!empty($payment['actual_paid_date']) && $payment['actual_paid_date'] !== '0000-00-00') {
+			$d = $payment['actual_paid_date'];
+		}
+		return $d ? substr($d, 0, 7) : null;
+	}
+
 	private function _enrich_studentdetail($students, $months)
 	{
 		$out = array();
@@ -1071,34 +1082,152 @@ class Studentsapi extends CI_Controller {
 		foreach ($students as $s) {
 			$sid = (int)$s['student_id'];
 			$payments = isset($pay_by[$sid]) ? $pay_by[$sid] : array();
-			$by_month = array();
-			foreach ($payments as $p) {
-				$ym = substr($p['dead_line'], 0, 7);
-				if (!isset($by_month[$ym])) $by_month[$ym] = array();
-				$by_month[$ym][] = $p;
-			}
-			$month_cells = array();
+
+			$due_by_month = array();
+			$paid_by_month = array();
+			$paid_transactions = array();
 			$row_must = 0;
 			$row_paid = 0;
+
+			foreach ($payments as $p) {
+				$due_ym = substr($p['dead_line'], 0, 7);
+				$paid_ym = $this->_payment_paid_month($p);
+				$amt = (float)$p['amount'];
+				$act = (float)$p['actual_amount'];
+				$is_paid = (int)$p['paid'] === 1;
+				$is_merged = !empty($p['merged_challan']);
+				$plan = isset($p['payment_plan']) ? $p['payment_plan'] : (isset($p['payment_comment']) ? $p['payment_comment'] : '');
+				$row_must += $amt;
+
+				$paid_elsewhere = $is_paid && $paid_ym && ($is_merged || $paid_ym !== $due_ym);
+				$display_paid = 0;
+				if ($is_paid && $act > 0 && !$is_merged && $paid_ym === $due_ym) {
+					$display_paid = $act;
+				}
+
+				// Installment month stays empty when fee was paid in another month (merged or late).
+				if (!$paid_elsewhere) {
+					if (!$is_paid) {
+						if (!isset($due_by_month[$due_ym])) $due_by_month[$due_ym] = array();
+						$due_by_month[$due_ym][] = array(
+							'amount' => $amt,
+							'actual_amount' => 0,
+							'unpaid_style' => true,
+							'dead_line' => $p['dead_line'],
+							'payment_plan' => $plan,
+							'cell_kind' => 'due',
+						);
+						if (isset($footer_must[$due_ym])) {
+							$footer_must[$due_ym] += $amt;
+						}
+					} elseif ($display_paid > 0) {
+						if (!isset($due_by_month[$due_ym])) $due_by_month[$due_ym] = array();
+						$due_by_month[$due_ym][] = array(
+							'amount' => $amt,
+							'actual_amount' => $display_paid,
+							'unpaid_style' => false,
+							'dead_line' => $p['dead_line'],
+							'payment_plan' => $plan,
+							'cell_kind' => 'due',
+						);
+						if (isset($footer_must[$due_ym])) {
+							$footer_must[$due_ym] += $amt;
+						}
+						$row_paid += $display_paid;
+						if (isset($footer_paid[$paid_ym])) {
+							$footer_paid[$paid_ym] += $display_paid;
+						}
+					}
+				}
+
+				if ($is_paid && $act > 0 && $paid_ym && ($is_merged || $paid_ym !== $due_ym)) {
+					$merge_key = $is_merged
+						? 'm:' . $p['merged_challan'] . ':' . $paid_ym . ':' . $p['paid_date']
+						: 's:' . $p['id'];
+					if (!isset($paid_transactions[$merge_key])) {
+						$paid_transactions[$merge_key] = array(
+							'actual_amount' => $act,
+							'payable_amount' => 0,
+							'paid_date' => $p['paid_date'],
+							'paid_ym' => $paid_ym,
+							'installments' => array(),
+							'payment_plan' => $plan,
+						);
+					}
+					$paid_transactions[$merge_key]['payable_amount'] += $amt;
+					$paid_transactions[$merge_key]['installments'][] = array(
+						'dead_line' => $p['dead_line'],
+						'due_month' => $due_ym,
+						'amount' => $amt,
+						'payment_plan' => $plan,
+					);
+				}
+			}
+
+			$paid_month_buckets = array();
+			foreach ($paid_transactions as $tx) {
+				$ym = $tx['paid_ym'];
+				if (!isset($paid_month_buckets[$ym])) {
+					$paid_month_buckets[$ym] = array(
+						'amount' => 0,
+						'actual_amount' => 0,
+						'installments' => array(),
+						'paid_dates' => array(),
+					);
+				}
+				$paid_month_buckets[$ym]['amount'] += (float)$tx['payable_amount'];
+				$paid_month_buckets[$ym]['actual_amount'] += (float)$tx['actual_amount'];
+				$paid_month_buckets[$ym]['installments'] = array_merge(
+					$paid_month_buckets[$ym]['installments'],
+					$tx['installments']
+				);
+				if (!empty($tx['paid_date']) && $tx['paid_date'] !== '0000-00-00') {
+					$paid_month_buckets[$ym]['paid_dates'][$tx['paid_date']] = true;
+				}
+			}
+
+			foreach ($paid_month_buckets as $ym => $bucket) {
+				if (!isset($paid_by_month[$ym])) $paid_by_month[$ym] = array();
+				$installment_months = array();
+				foreach ($bucket['installments'] as $inst) {
+					if (!empty($inst['due_month']) && !in_array($inst['due_month'], $installment_months, true)) {
+						$installment_months[] = $inst['due_month'];
+					}
+				}
+				sort($installment_months);
+				$paid_dates = array_keys($bucket['paid_dates']);
+				sort($paid_dates);
+				$paid_by_month[$ym][] = array(
+					'amount' => $bucket['amount'],
+					'actual_amount' => $bucket['actual_amount'],
+					'unpaid_style' => false,
+					'paid_date' => count($paid_dates) ? $paid_dates[0] : '',
+					'paid_dates' => $paid_dates,
+					'installment_months' => $installment_months,
+					'installment_details' => $bucket['installments'],
+					'cell_kind' => 'payment',
+				);
+				$row_paid += (float)$bucket['actual_amount'];
+				if (isset($footer_paid[$ym])) {
+					$footer_paid[$ym] += (float)$bucket['actual_amount'];
+				}
+				if (isset($footer_must[$ym])) {
+					$footer_must[$ym] += (float)$bucket['amount'];
+				}
+			}
+
+			$month_cells = array();
 			foreach ($months as $ym) {
 				$cells = array();
-				foreach (isset($by_month[$ym]) ? $by_month[$ym] : array() as $p) {
-					$amt = (float)$p['amount'];
-					$act = (float)$p['actual_amount'];
-					$row_must += $amt;
-					$row_paid += $act;
-					$footer_must[$ym] += $amt;
-					$footer_paid[$ym] += $act;
-					$cells[] = array(
-						'amount' => $amt,
-						'actual_amount' => $act,
-						'unpaid_style' => $act == 0,
-						'dead_line' => $p['dead_line'],
-						'payment_plan' => $p['payment_plan'],
-					);
+				if (isset($due_by_month[$ym])) {
+					$cells = array_merge($cells, $due_by_month[$ym]);
+				}
+				if (isset($paid_by_month[$ym])) {
+					$cells = array_merge($cells, $paid_by_month[$ym]);
 				}
 				$month_cells[$ym] = $cells;
 			}
+
 			$s['months'] = $month_cells;
 			$s['must_paid'] = $row_must;
 			$s['paid_total'] = $row_paid;
