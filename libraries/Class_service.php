@@ -316,4 +316,179 @@ class Class_service {
 
         return array('success' => true, 'message' => 'Class deleted successfully.');
     }
+
+    /** Legacy classes/students — active students in class (requires machine_data row). */
+    public function students_for_class($class_id, $user)
+    {
+        $class = $this->get($class_id, $user);
+        if (!$class) {
+            return null;
+        }
+
+        $this->ci->db->select(
+            'students.student_id, students.roll_no, students.first_name, students.last_name, students.cnic, students.mobile, students.emergency_no, students.registration_date, classes.name as class_name, campuses.campus_name, courses.course_name, machine_data.machine_id',
+            false
+        );
+        $this->ci->db->from('students');
+        $this->ci->db->join('classes', 'classes.class_id=students.class_id', 'inner');
+        $this->ci->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'inner');
+        $this->ci->db->join('courses', 'courses.course_id=students.course_id', 'inner');
+        $this->ci->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id AND machine_data.type="student"', 'inner');
+        $this->ci->db->where(array('students.status' => '1', 'students.class_id' => (int) $class_id));
+        $this->ci->db->order_by('CAST(students.roll_no AS UNSIGNED)', 'ASC', false);
+        $this->ci->db->order_by('students.roll_no', 'ASC');
+        $students = $this->ci->db->get()->result_array();
+
+        return array('class' => $class, 'students' => $students);
+    }
+
+    /**
+     * Legacy classes/attendence — date grid with Present/Absent per student per day.
+     * @return array|null
+     */
+    public function attendance_for_class($class_id, $user, $start_date, $end_date)
+    {
+        $pack = $this->students_for_class($class_id, $user);
+        if (!$pack) {
+            return null;
+        }
+
+        $start_date = trim((string) $start_date);
+        $end_date = trim((string) $end_date);
+        if ($start_date === '') {
+            $start_date = date('Y-m-d', strtotime('-1 week'));
+        }
+        if ($end_date === '') {
+            $end_date = date('Y-m-d');
+        }
+        if ($start_date > $end_date) {
+            $tmp = $start_date;
+            $start_date = $end_date;
+            $end_date = $tmp;
+        }
+
+        $dates = array();
+        try {
+            $period = new DatePeriod(
+                new DateTime($start_date),
+                new DateInterval('P1D'),
+                (new DateTime($end_date))->modify('+1 day')
+            );
+            foreach ($period as $dt) {
+                $dates[] = $dt->format('Y-m-d');
+            }
+        } catch (Exception $e) {
+            $dates = array();
+        }
+        if (count($dates) > 62) {
+            $dates = array_slice($dates, 0, 62);
+            $end_date = $dates[count($dates) - 1];
+        }
+
+        $students = $pack['students'];
+        $student_ids = array_map(function ($s) { return (int) $s['student_id']; }, $students);
+        $machine_ids = array_values(array_unique(array_filter(array_map(function ($s) {
+            return isset($s['machine_id']) ? (int) $s['machine_id'] : 0;
+        }, $students))));
+
+        $photos = $this->_photo_urls_by_student($student_ids);
+        $attendance_by_machine = $this->_attendance_first_by_machine_day($machine_ids, $start_date, $end_date);
+
+        $rows = array();
+        foreach ($students as $s) {
+            $sid = (int) $s['student_id'];
+            $mid = isset($s['machine_id']) ? (int) $s['machine_id'] : 0;
+            $reg = isset($s['registration_date']) ? substr($s['registration_date'], 0, 10) : '';
+            $days = array();
+            foreach ($dates as $d) {
+                if ($reg === '' || $reg >= $d) {
+                    $days[$d] = array('status' => 'na');
+                    continue;
+                }
+                $hit = ($mid > 0 && isset($attendance_by_machine[$mid][$d])) ? $attendance_by_machine[$mid][$d] : null;
+                if ($hit) {
+                    $days[$d] = array(
+                        'status' => 'present',
+                        'time' => $hit['time'],
+                        'campus_name' => isset($hit['campus_name']) ? $hit['campus_name'] : '',
+                    );
+                } else {
+                    $days[$d] = array('status' => 'absent');
+                }
+            }
+            $rows[] = array(
+                'student_id' => $sid,
+                'roll_no' => $s['roll_no'],
+                'first_name' => $s['first_name'],
+                'last_name' => $s['last_name'],
+                'mobile' => $s['mobile'],
+                'emergency_no' => $s['emergency_no'],
+                'registration_date' => $reg,
+                'campus_name' => $s['campus_name'],
+                'course_name' => $s['course_name'],
+                'class_name' => $s['class_name'],
+                'machine_id' => $mid,
+                'photo_url' => isset($photos[$sid]) ? $photos[$sid] : null,
+                'days' => $days,
+            );
+        }
+
+        return array(
+            'class' => $pack['class'],
+            'start_date' => $start_date,
+            'end_date' => $end_date,
+            'dates' => $dates,
+            'students' => $rows,
+        );
+    }
+
+    private function _photo_urls_by_student($student_ids)
+    {
+        $map = array();
+        if (!count($student_ids)) {
+            return $map;
+        }
+        $base = rtrim(base_url(), '/');
+        $rows = $this->ci->db
+            ->select('student_id, image, online_image')
+            ->where_in('student_id', $student_ids)
+            ->where('type', 'Photo')
+            ->get('student_documents')
+            ->result_array();
+        foreach ($rows as $r) {
+            $sid = (int) $r['student_id'];
+            if (!empty($r['online_image'])) {
+                $map[$sid] = $r['online_image'];
+            } elseif (!empty($r['image'])) {
+                $map[$sid] = $base . '/uploads/' . rawurlencode($r['image']);
+            }
+        }
+        return $map;
+    }
+
+    private function _attendance_first_by_machine_day($machine_ids, $start_date, $end_date)
+    {
+        $map = array();
+        if (!count($machine_ids) || !$this->ci->db->table_exists('attendence')) {
+            return $map;
+        }
+
+        $this->ci->db->select('attendence.machine_user_id, attendence.time, attendence.campus_code, campuses.campus_name', false);
+        $this->ci->db->from('attendence');
+        $this->ci->db->join('campuses', 'campuses.campus_code=attendence.campus_code', 'left');
+        $this->ci->db->where_in('attendence.machine_user_id', $machine_ids);
+        $this->ci->db->where('attendence.time >=', $start_date . ' 00:00:00');
+        $this->ci->db->where('attendence.time <=', $end_date . ' 23:59:59');
+        $this->ci->db->order_by('attendence.time', 'ASC');
+        $rows = $this->ci->db->get()->result_array();
+
+        foreach ($rows as $r) {
+            $mid = (int) $r['machine_user_id'];
+            $d = substr($r['time'], 0, 10);
+            if (!isset($map[$mid][$d])) {
+                $map[$mid][$d] = $r;
+            }
+        }
+        return $map;
+    }
 }

@@ -162,4 +162,31 @@ class Classesapi extends CI_Controller {
 		}
 		$this->_json($result);
 	}
+
+	public function class_students($class_id = 0)
+	{
+		$class_id = (int) $class_id;
+		$pack = $this->service->students_for_class($class_id, $this->current_user);
+		if (!$pack) {
+			$this->_json(array('success' => false, 'message' => 'Class not found'), 404);
+		}
+		$this->_json(array(
+			'success' => true,
+			'class' => $pack['class'],
+			'data' => $pack['students'],
+			'count' => count($pack['students']),
+		));
+	}
+
+	public function class_attendance($class_id = 0)
+	{
+		$class_id = (int) $class_id;
+		$start = $this->input->get('start_date');
+		$end = $this->input->get('end_date');
+		$pack = $this->service->attendance_for_class($class_id, $this->current_user, $start, $end);
+		if (!$pack) {
+			$this->_json(array('success' => false, 'message' => 'Class not found'), 404);
+		}
+		$this->_json(array_merge(array('success' => true), $pack));
+	}
 }
