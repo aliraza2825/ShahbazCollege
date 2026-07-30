@@ -2028,9 +2028,6 @@ class Accesses extends CI_Model {
             } else {
                 $final['user_id'] = $user_id;
                 $this->db->insert('access', $final);
-                
-                print_r($final);
-            exit();
             }
         }
     }
