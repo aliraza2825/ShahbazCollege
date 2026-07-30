@@ -304,7 +304,7 @@ class Studentsapi extends CI_Controller {
 	/**
 	 * Main All Students report dispatcher (paginated + batched).
 	 * Body: campus_id, course_id, class_id, type, search_type, council_exam_no, class,
-	 *       page (1-based), page_size (default 25, max 100), q (optional search)
+	 *       page (1-based), page_size (default 25, max 5000), q (optional search)
 	 */
 	public function all_students()
 	{
@@ -320,7 +320,7 @@ class Studentsapi extends CI_Controller {
 		$page = max(1, isset($body['page']) ? (int)$body['page'] : 1);
 		$page_size = isset($body['page_size']) ? (int)$body['page_size'] : 25;
 		if ($page_size < 10) $page_size = 10;
-		if ($page_size > 100) $page_size = 100;
+		if ($page_size > 5000) $page_size = 5000;
 		$offset = ($page - 1) * $page_size;
 
 		$allowed = array(
@@ -397,8 +397,6 @@ class Studentsapi extends CI_Controller {
 		}
 
 		if ($type === 'studentdetail') {
-			// Full detail is heavy — keep page small and only enrich the page
-			$page_size = min($page_size, 50);
 			$offset = ($page - 1) * $page_size;
 			$pack = $this->_fetch_students_paged($campus_id, $course_id, $class_id, $search_type, $council_exam_no, 'active', $q, $offset, $page_size);
 			$range = $this->_detail_date_range($class_id);

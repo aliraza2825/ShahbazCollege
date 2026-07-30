@@ -1005,20 +1005,25 @@ class Incentiveapi extends CI_Controller {
 		$recovery_id = (int)$recovery_id;
 		if (!$recovery_id) $this->_json(array('success' => false, 'message' => 'recovery_id required'), 422);
 
-		$filter = $this->input->get('filter');
-		if ($filter === null) $filter = 0;
+		$filter = (int)$this->input->get('filter');
+		if ($this->input->get('filter') === null) $filter = 0;
 
 		$from_date = $this->input->get('from');
 		$to_date = $this->input->get('to');
 		if ($from_date === null || $from_date === '') $from_date = date('Y-m-01');
 		if ($to_date === null || $to_date === '') $to_date = date('Y-m-t');
 
+		$page = max(1, (int)$this->input->get('page'));
+		$page_size = (int)$this->input->get('page_size');
+		if ($page_size <= 0) $page_size = 25;
+		if ($page_size > 5000) $page_size = 5000;
+		$q = strtolower(trim((string)$this->input->get('q')));
+
 		$recovery_rows = $this->db->get_where('recovery_management', array('recovery_management_id' => $recovery_id))->result_array();
 		if (!count($recovery_rows)) $this->_json(array('success' => false, 'message' => 'Recovery task not found'), 404);
 		$campus_ids = explode(',', $recovery_rows[0]['campus_ids']);
 		$course_ids = explode(',', $recovery_rows[0]['course_id']);
 
-		// GET ALL UNPAID FEE PAYMENTS DETAILS OF STUDENTS
 		$this->db->select("payments.id as fee_id,'0' as isdel, 'UnPaid' as Fstatus,payments.amount, payments.dead_line, payments.extra_amount, students.first_name, students.last_name, students.mobile, classes.name as class_name, students.roll_no, students.emergency_no, students.cnic, campuses.campus_name,classes.class_id,campuses.campus_id,students.student_id,students.total_fee");
 		$this->db->from('payments');
 		$this->db->join('students', 'students.student_id=payments.student_id', 'INNER');
@@ -1031,7 +1036,6 @@ class Incentiveapi extends CI_Controller {
 		$this->db->group_by('students.student_id');
 		$unpaid_payments_students = $this->db->get()->result_array();
 
-		// GET ALL UNPAID FEE PAYMENTS DETAILS OF CONTRACTS
 		$this->db->select("*,payments.id as fee_id,'0' as isdel,'UnPaid' as Fstatus,contractors.name,contracts.contract_id,contracts.contract_name");
 		$this->db->from('payments');
 		$this->db->join('contracts', 'contracts.contract_id=payments.contract_id', 'INNER');
@@ -1044,9 +1048,81 @@ class Incentiveapi extends CI_Controller {
 		$this->db->group_by('contracts.contract_id');
 		$unpaid_payments_contracts = $this->db->get()->result_array();
 
+		$all_fee_ids = array_merge(
+			array_column($unpaid_payments_students, 'fee_id'),
+			array_column($unpaid_payments_contracts, 'fee_id')
+		);
+		$latest_remarks = $this->_batch_latest_fee_remarks($all_fee_ids);
+
 		$counts = array('call' => 0, 'will_pay' => 0, 'will_pay_on' => 0, 'cell_off' => 0, 'struck_of' => 0, 'new' => 0);
-		$this->_bucket_fee_dues_comments($unpaid_payments_students, $counts);
-		$this->_bucket_fee_dues_comments($unpaid_payments_contracts, $counts);
+		$this->_bucket_fee_dues_comments_map($unpaid_payments_students, $counts, $latest_remarks);
+		$this->_bucket_fee_dues_comments_map($unpaid_payments_contracts, $counts, $latest_remarks);
+
+		$combined = array();
+		foreach ($unpaid_payments_students as $due) {
+			if ($q !== '' && !$this->_fee_dues_search_match($due, 'student', $q)) continue;
+			$latest = isset($latest_remarks[$due['fee_id']]) ? $latest_remarks[$due['fee_id']] : null;
+			if ($this->_fee_dues_filter_match($filter, $latest)) {
+				$combined[] = array('kind' => 'student', 'row' => $due, 'latest_remark' => $latest);
+			}
+		}
+		foreach ($unpaid_payments_contracts as $due) {
+			if ($q !== '' && !$this->_fee_dues_search_match($due, 'contract', $q)) continue;
+			$latest = isset($latest_remarks[$due['fee_id']]) ? $latest_remarks[$due['fee_id']] : null;
+			if ($this->_fee_dues_filter_match($filter, $latest)) {
+				$combined[] = array('kind' => 'contract', 'row' => $due, 'latest_remark' => $latest);
+			}
+		}
+
+		$total_filtered = count($combined);
+		$total_pages = max(1, (int)ceil($total_filtered / $page_size));
+		if ($page > $total_pages) $page = $total_pages;
+		$page_slice = array_slice($combined, ($page - 1) * $page_size, $page_size);
+
+		$page_student_ids = array();
+		$page_contract_ids = array();
+		$page_fee_ids = array();
+		foreach ($page_slice as $item) {
+			$page_fee_ids[] = (int)$item['row']['fee_id'];
+			if ($item['kind'] === 'student') {
+				$page_student_ids[] = (int)$item['row']['student_id'];
+			} else {
+				$page_contract_ids[] = (int)$item['row']['contract_id'];
+			}
+		}
+
+		$student_payments_map = $this->_batch_student_payments_for_dues($page_student_ids);
+		$contract_payments_map = $this->_batch_contract_payments($page_contract_ids);
+		$remarks_map = $this->_batch_remarks_by_fee($page_fee_ids);
+
+		$students_out = array();
+		$contracts_out = array();
+		foreach ($page_slice as $item) {
+			$due = $item['row'];
+			$kind = $item['kind'];
+			$fee_id = (int)$due['fee_id'];
+			if ($kind === 'student') {
+				$sid = (int)$due['student_id'];
+				$payments = isset($student_payments_map[$sid]) ? $student_payments_map[$sid] : array();
+				$fee_info = $this->_compute_fee_dues_info($payments, false, $due['total_fee']);
+				$students_out[] = array_merge($due, array(
+					'kind' => 'student',
+					'fee_info' => $fee_info,
+					'remarks' => isset($remarks_map[$fee_id]) ? $remarks_map[$fee_id] : array(),
+					'latest_remark' => $item['latest_remark'],
+				));
+			} else {
+				$cid = (int)$due['contract_id'];
+				$payments = isset($contract_payments_map[$cid]) ? $contract_payments_map[$cid] : array();
+				$fee_info = $this->_compute_fee_dues_info($payments, true, isset($due['total_fee']) ? $due['total_fee'] : 0);
+				$contracts_out[] = array_merge($due, array(
+					'kind' => 'contract',
+					'fee_info' => $fee_info,
+					'remarks' => isset($remarks_map[$fee_id]) ? $remarks_map[$fee_id] : array(),
+					'latest_remark' => $item['latest_remark'],
+				));
+			}
+		}
 
 		$this->_json(array(
 			'success' => true,
@@ -1054,44 +1130,366 @@ class Incentiveapi extends CI_Controller {
 			'to_date' => $to_date,
 			'filter' => $filter,
 			'recovery_id' => $recovery_id,
-			'students' => $unpaid_payments_students,
-			'contracts' => $unpaid_payments_contracts,
+			'students' => $students_out,
+			'contracts' => $contracts_out,
 			'fee_dues_students_count' => count($unpaid_payments_students),
 			'fee_dues_contractors_count' => count($unpaid_payments_contracts),
+			'total_fee_entries' => count($unpaid_payments_students) + count($unpaid_payments_contracts),
 			'counts' => $counts,
+			'pagination' => array(
+				'page' => $page,
+				'page_size' => $page_size,
+				'total' => $total_filtered,
+				'total_pages' => $total_pages,
+			),
 		));
 	}
 
-	/** Port of the comment-bucketing loop in Recovery_management::fee_dues_comments(). */
-	private function _bucket_fee_dues_comments($rows, &$counts)
+	public function recovery_dues_comment()
 	{
-		foreach ($rows as $due) {
-			$rem = $this->db->order_by('fees_remarks.fee_remarks_id', 'desc')->limit(1)->get_where('fees_remarks', array('fee_id' => $due['fee_id']))->result_array();
+		if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+			$this->_json(array('success' => false, 'message' => 'POST required'), 405);
+		}
 
-			$filterd1 = 'Call Not Attended';
-			$filterd2 = 'Will Pay On';
-			$filterd3 = 'Cell Off';
-			$filterd4 = 'Struck of now';
-			$filterd5 = date('Y-m-d');
+		$body = $this->_body();
+		$fee_id = (int)(isset($body['fee_id']) ? $body['fee_id'] : 0);
+		$comment = trim((string)(isset($body['comment']) ? $body['comment'] : ''));
+		$selected_date = trim((string)(isset($body['selected_date']) ? $body['selected_date'] : ''));
+		$description = trim((string)(isset($body['description']) ? $body['description'] : ''));
 
-			if (count($rem) > 0) {
-				if (strpos($rem[0]['comment'], $filterd1) !== false) {
-					$counts['call']++;
-				} elseif (strpos($rem[0]['comment'], $filterd2) !== false && $rem[0]['paid_on_date'] > $filterd5) {
-					$counts['will_pay']++;
-				} elseif (strpos($rem[0]['comment'], $filterd3) !== false) {
-					$counts['cell_off']++;
-				} elseif (strpos($rem[0]['comment'], $filterd4) !== false) {
-					$counts['struck_of']++;
-				} elseif (strpos($rem[0]['comment'], $filterd2) !== false && $rem[0]['paid_on_date'] < $filterd5) {
-					$counts['will_pay_on']++;
-				} else {
-					$counts['new']++;
-				}
+		if (!$fee_id || $comment === '') {
+			$this->_json(array('success' => false, 'message' => 'fee_id and comment required'), 422);
+		}
+
+		if ($comment === 'Will Pay On' && $selected_date === '') {
+			$this->_json(array('success' => false, 'message' => 'Next due date is required for Will Pay On'), 422);
+		}
+
+		$paid_on_date = $selected_date !== '' ? $selected_date : date('Y-m-d');
+
+		$original_fee_entry = $this->db->get_where('payments', array('id' => $fee_id))->row_array();
+		if (!$original_fee_entry) {
+			$this->_json(array('success' => false, 'message' => 'Fee entry not found'), 404);
+		}
+
+		$entries = '';
+		if (!empty($original_fee_entry['student_id'])) {
+			$this->db->select('challan_no');
+			$this->db->from('payments');
+			$this->db->where('student_id', (int)$original_fee_entry['student_id']);
+			$this->db->where('paid', 0);
+			$this->db->where('dead_line<', date('Y-m-d'));
+			$payments = $this->db->get()->result_array();
+			foreach ($payments as $astx) {
+				if (!empty($astx['challan_no'])) $entries .= $astx['challan_no'] . ',';
+			}
+		}
+
+		$add_by = isset($this->current_user['name']) ? $this->current_user['name'] : 'POS User';
+		if (empty($add_by)) {
+			$add_by = trim(
+				(isset($this->current_user['first_name']) ? $this->current_user['first_name'] : '') . ' ' .
+				(isset($this->current_user['last_name']) ? $this->current_user['last_name'] : '')
+			);
+		}
+		if (empty($add_by)) $add_by = 'POS User';
+
+		$full_comment = $comment . ' ' . $selected_date . ' ' . $description . '  for Challan no (' . $entries . ') ';
+		$this->db->insert('fees_remarks', array(
+			'fee_id' => $fee_id,
+			'comment' => $full_comment,
+			'paid_on_date' => $paid_on_date,
+			'add_by' => $add_by,
+			'clear_status' => '1',
+			'date' => date('Y-m-d H:i:s'),
+		));
+
+		$remarks = $this->db->get_where('fees_remarks', array('fee_id' => $fee_id))->result_array();
+
+		$this->_json(array(
+			'success' => true,
+			'fee_id' => $fee_id,
+			'remarks' => $remarks,
+		));
+	}
+
+	private function _fee_dues_search_match($due, $kind, $q)
+	{
+		$parts = array(
+			isset($due['first_name']) ? $due['first_name'] : '',
+			isset($due['last_name']) ? $due['last_name'] : '',
+			isset($due['name']) ? $due['name'] : '',
+			isset($due['contract_name']) ? $due['contract_name'] : '',
+			isset($due['roll_no']) ? $due['roll_no'] : '',
+			isset($due['cnic']) ? $due['cnic'] : '',
+			isset($due['mobile']) ? $due['mobile'] : '',
+			isset($due['campus_name']) ? $due['campus_name'] : '',
+			isset($due['class_name']) ? $due['class_name'] : '',
+		);
+		$hay = strtolower(implode(' ', $parts));
+		return strpos($hay, $q) !== false;
+	}
+
+	private function _batch_latest_fee_remarks($fee_ids)
+	{
+		$fee_ids = array_values(array_unique(array_map('intval', $fee_ids)));
+		$fee_ids = array_filter($fee_ids, function ($id) { return $id > 0; });
+		if (!count($fee_ids)) return array();
+
+		$rows = $this->db->query(
+			'SELECT fr.* FROM fees_remarks fr INNER JOIN (
+				SELECT fee_id, MAX(fee_remarks_id) AS max_id
+				FROM fees_remarks WHERE fee_id IN (' . implode(',', $fee_ids) . ')
+				GROUP BY fee_id
+			) t ON fr.fee_remarks_id = t.max_id'
+		)->result_array();
+
+		$map = array();
+		foreach ($rows as $row) {
+			$map[(int)$row['fee_id']] = $row;
+		}
+		return $map;
+	}
+
+	private function _batch_remarks_by_fee($fee_ids)
+	{
+		$fee_ids = array_values(array_unique(array_map('intval', $fee_ids)));
+		$fee_ids = array_filter($fee_ids, function ($id) { return $id > 0; });
+		if (!count($fee_ids)) return array();
+
+		$this->db->where_in('fee_id', $fee_ids);
+		$this->db->order_by('fee_remarks_id', 'ASC');
+		$rows = $this->db->get('fees_remarks')->result_array();
+
+		$map = array();
+		foreach ($rows as $row) {
+			$fid = (int)$row['fee_id'];
+			if (!isset($map[$fid])) $map[$fid] = array();
+			$map[$fid][] = $row;
+		}
+		return $map;
+	}
+
+	private function _group_student_payments_from_rows($rows)
+	{
+		$merged_paid = array();
+		$others = array();
+		foreach ($rows as $p) {
+			$merged = $p['merged_challan'];
+			$actual = (float)$p['actual_amount'];
+			if ($merged !== null && $merged !== '' && $actual > 0) {
+				if (!isset($merged_paid[$merged])) $merged_paid[$merged] = $p;
+			} elseif ($merged === null || $merged === '' || ($merged !== null && $actual <= 0)) {
+				$others[] = $p;
+			}
+		}
+		$merged_vals = array_values($merged_paid);
+		usort($merged_vals, function ($a, $b) { return strcmp($a['dead_line'], $b['dead_line']); });
+		usort($others, function ($a, $b) { return strcmp($a['dead_line'], $b['dead_line']); });
+		return array_merge($merged_vals, $others);
+	}
+
+	private function _batch_student_payments_for_dues($student_ids)
+	{
+		$student_ids = array_values(array_unique(array_map('intval', $student_ids)));
+		$student_ids = array_filter($student_ids, function ($id) { return $id > 0; });
+		if (!count($student_ids)) return array();
+
+		$this->db->select('id, student_id, contract_id, amount, actual_amount, paid, paid_date, dead_line, payment_plan, merged_challan, challan_no');
+		$this->db->from('payments');
+		$this->db->where_in('student_id', $student_ids);
+		$this->db->order_by('student_id', 'ASC');
+		$this->db->order_by('dead_line', 'ASC');
+		$all = $this->db->get()->result_array();
+
+		$by_student = array();
+		foreach ($all as $p) {
+			$sid = (int)$p['student_id'];
+			if (!isset($by_student[$sid])) $by_student[$sid] = array();
+			$by_student[$sid][] = $p;
+		}
+
+		$out = array();
+		foreach ($by_student as $sid => $rows) {
+			$out[$sid] = $this->_group_student_payments_from_rows($rows);
+		}
+		return $out;
+	}
+
+	private function _batch_contract_payments($contract_ids)
+	{
+		$contract_ids = array_values(array_unique(array_map('intval', $contract_ids)));
+		$contract_ids = array_filter($contract_ids, function ($id) { return $id > 0; });
+		if (!count($contract_ids)) return array();
+
+		$this->db->select('id, student_id, contract_id, amount, actual_amount, paid, paid_date, dead_line, payment_plan, merged_challan, challan_no');
+		$this->db->from('payments');
+		$this->db->where_in('contract_id', $contract_ids);
+		$this->db->order_by('contract_id', 'ASC');
+		$this->db->order_by('dead_line', 'ASC');
+		$all = $this->db->get()->result_array();
+
+		$out = array();
+		foreach ($all as $p) {
+			$cid = (int)$p['contract_id'];
+			if (!isset($out[$cid])) $out[$cid] = array();
+			$out[$cid][] = $p;
+		}
+		return $out;
+	}
+
+	private function _fee_dues_filter_label($filter)
+	{
+		if ($filter === 1) return 'Call Not Attended';
+		if ($filter === 2) return 'Will Pay On';
+		if ($filter === 3) return 'Cell Off';
+		if ($filter === 4) return 'Struck of now';
+		if ($filter === 6) return 'Will Pay On today';
+		if ($filter === 5) return 'Fresh';
+		return '';
+	}
+
+	/** Port of dashboard/fee_dues_comments.php row filter logic. */
+	private function _fee_dues_filter_match($filter, $rem)
+	{
+		if ((int)$filter === 0) return true;
+
+		$filterds = $this->_fee_dues_filter_label((int)$filter);
+		$currentdatehere = date('Y-m-d');
+		$comment = is_array($rem) && isset($rem['comment']) ? (string)$rem['comment'] : '';
+		$paid_on = is_array($rem) && isset($rem['paid_on_date']) ? (string)$rem['paid_on_date'] : '';
+
+		if ($filterds === 'Fresh') {
+			if (!is_array($rem) || !isset($rem['comment']) || trim((string)$rem['comment']) === '') {
+				return true;
+			}
+			return strpos($comment, 'Call Not Attended') === false
+				&& strpos($comment, 'Will Pay On') === false
+				&& strpos($comment, 'Cell Off') === false
+				&& strpos($comment, 'Struck of now') === false;
+		}
+
+		if ($filterds === 'Will Pay On today') {
+			return strpos($comment, 'Will Pay On') !== false && $paid_on !== '' && $paid_on < $currentdatehere;
+		}
+
+		if (strpos($comment, $filterds) !== false && $filterds !== 'Will Pay On today' && $filterds === 'Will Pay On') {
+			return $paid_on !== '' && $paid_on > $currentdatehere;
+		}
+
+		if (strpos($comment, $filterds) !== false && $filterds !== 'Will Pay On today' && $filterds !== 'Will Pay On') {
+			return true;
+		}
+
+		return false;
+	}
+
+	private function _increment_fee_dues_bucket(&$counts, $rem)
+	{
+		$filterd1 = 'Call Not Attended';
+		$filterd2 = 'Will Pay On';
+		$filterd3 = 'Cell Off';
+		$filterd4 = 'Struck of now';
+		$filterd5 = date('Y-m-d');
+
+		if (is_array($rem) && isset($rem['comment'])) {
+			$comment = (string)$rem['comment'];
+			if (strpos($comment, $filterd1) !== false) {
+				$counts['call']++;
+			} elseif (strpos($comment, $filterd2) !== false && $rem['paid_on_date'] > $filterd5) {
+				$counts['will_pay']++;
+			} elseif (strpos($comment, $filterd3) !== false) {
+				$counts['cell_off']++;
+			} elseif (strpos($comment, $filterd4) !== false) {
+				$counts['struck_of']++;
+			} elseif (strpos($comment, $filterd2) !== false && $rem['paid_on_date'] < $filterd5) {
+				$counts['will_pay_on']++;
 			} else {
 				$counts['new']++;
 			}
+		} else {
+			$counts['new']++;
 		}
+	}
+
+	private function _bucket_fee_dues_comments_map($rows, &$counts, $latest_remarks)
+	{
+		foreach ($rows as $due) {
+			$fee_id = (int)$due['fee_id'];
+			$rem = isset($latest_remarks[$fee_id]) ? $latest_remarks[$fee_id] : null;
+			$this->_increment_fee_dues_bucket($counts, $rem);
+		}
+	}
+
+	private function _compute_fee_dues_info($payments, $is_contract, $total_fee_field)
+	{
+		$total_fee = 0;
+		$created_council_fee = 0;
+		$submitted_council_fee = 0;
+		$fee_decided_current_time = 0;
+		$total_fee_submitted = 0;
+		$unpaid_installments_current_time = 0;
+		$paid_lines = array();
+		$unpaid_lines = array();
+		$today = date('Y-m-d');
+
+		foreach ($payments as $payment) {
+			if ($payment['payment_plan'] != 'consulation fee') {
+				if ($is_contract) {
+					if ($payment['paid'] == 1) {
+						$total_fee += (float)$payment['actual_amount'];
+					} else {
+						$total_fee += (float)$payment['amount'];
+					}
+				} else {
+					$total_fee += (float)$payment['amount'];
+				}
+			}
+			if ($payment['payment_plan'] == 'consulation fee') {
+				$created_council_fee += (float)$payment['amount'];
+				if ($payment['paid'] == 1) {
+					$submitted_council_fee += (float)$payment['actual_amount'];
+				}
+			}
+			if ($payment['dead_line'] < $today) {
+				$fee_decided_current_time += (float)$payment['amount'];
+				if ($payment['paid'] == 0) {
+					$unpaid_installments_current_time++;
+				}
+			}
+			if ($payment['paid'] == 1 && $payment['payment_plan'] != 'consulation fee') {
+				$total_fee_submitted += (float)$payment['actual_amount'];
+				$paid_lines[] = $payment['actual_amount'] . ' Paid on ' . $payment['paid_date'];
+			}
+			if ($payment['paid'] == 0) {
+				$overdue = $payment['dead_line'] < $today;
+				$unpaid_lines[] = array(
+					'text' => $payment['amount'] . ' Not Paid on ' . $payment['dead_line'],
+					'overdue' => $overdue,
+				);
+			}
+		}
+
+		$remaining = $fee_decided_current_time - $total_fee_submitted;
+		$pct_received = ($total_fee_submitted > 0 && $total_fee > 0)
+			? round(($total_fee_submitted / $total_fee) * 100) : 0;
+		$pct_decision = ($total_fee_submitted > 0 && $fee_decided_current_time > 0)
+			? round(($total_fee_submitted / $fee_decided_current_time) * 100) : 0;
+
+		return array(
+			'total_fee' => $total_fee_field,
+			'total_created_fee' => $total_fee,
+			'total_created_council_fee' => $created_council_fee,
+			'total_submitted_council_fee' => $submitted_council_fee,
+			'fee_decided_current_time' => $fee_decided_current_time,
+			'total_fee_submitted' => $total_fee_submitted,
+			'remaining_fee_payable' => $remaining,
+			'unpaid_installments_current_time' => $unpaid_installments_current_time,
+			'percentage_fee_received' => $pct_received,
+			'percentage_paid_according_to_decision' => $pct_decision,
+			'paid_lines' => $paid_lines,
+			'unpaid_lines' => $unpaid_lines,
+		);
 	}
 
 	public function recovery_fine()
