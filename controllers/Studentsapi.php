@@ -399,11 +399,14 @@ class Studentsapi extends CI_Controller {
 		if ($type === 'studentdetail') {
 			$offset = ($page - 1) * $page_size;
 			$pack = $this->_fetch_students_paged($campus_id, $course_id, $class_id, $search_type, $council_exam_no, 'active', $q, $offset, $page_size);
-			$range = $this->_detail_date_range($class_id);
-			$months = $this->_month_list($range['startdate'], $range['enddate']);
+			$this->load->library('student_detail_report');
+			$range = $class_id > 0
+				? $this->_detail_date_range($class_id)
+				: $this->student_detail_report->date_range_for_students(array_map(function ($s) { return (int)$s['student_id']; }, $pack['rows']));
+			$months = $this->student_detail_report->month_list($range['startdate'], $range['enddate']);
 			// Cap months to avoid huge matrices
 			if (count($months) > 36) $months = array_slice($months, -36);
-			$detail = $this->_enrich_studentdetail($pack['rows'], $months);
+			$detail = $this->student_detail_report->enrich($pack['rows'], $months);
 			$pager['total'] = $pack['total'];
 			$pager['page_size'] = $page_size;
 			$pager['total_pages'] = (int)ceil($pack['total'] / $page_size);

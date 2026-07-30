@@ -755,6 +755,118 @@ class Incentiveapi extends CI_Controller {
 		);
 	}
 
+	/** Student Full Detail Report for recovery Total Students KPI (paid + unpaid student rows). */
+	public function recovery_students_detail($recovery_id = 0, $user_id = 0)
+	{
+		$recovery_id = (int)$recovery_id;
+		$user_id = (int)$user_id;
+		if (!$recovery_id || !$user_id) {
+			$this->_json(array('success' => false, 'message' => 'recovery_id and user_id required'), 422);
+		}
+
+		$from_date = $this->input->get('from');
+		$to_date = $this->input->get('to');
+		if ($from_date === null || $from_date === '') $from_date = date('Y-m-01');
+		if ($to_date === null || $to_date === '') $to_date = date('Y-m-t');
+
+		$page = (int)$this->input->get('page');
+		if ($page < 1) $page = 1;
+		$page_size = (int)$this->input->get('page_size');
+		if ($page_size <= 0) $page_size = 25;
+		if ($page_size > 5000) $page_size = 5000;
+		$q = trim((string)$this->input->get('q'));
+
+		$d = $this->_recovery_check_data($recovery_id, $user_id, $from_date, $to_date);
+		if (!$d) $this->_json(array('success' => false, 'message' => 'Recovery task not found'), 404);
+
+		$student_ids = $this->_recovery_total_student_ids($d);
+		$pack = $this->_fetch_students_by_ids($student_ids, $q, ($page - 1) * $page_size, $page_size);
+
+		$this->load->library('student_detail_report');
+		$range = $this->student_detail_report->date_range_for_students($student_ids);
+		$months = $this->student_detail_report->month_list($range['startdate'], $range['enddate']);
+		if (count($months) > 36) $months = array_slice($months, -36);
+		$detail = $this->student_detail_report->enrich($pack['rows'], $months);
+
+		$kpi = $this->_recovery_kpi($d);
+		$total_pages = max(1, (int)ceil($pack['total'] / $page_size));
+
+		$this->_json(array(
+			'success' => true,
+			'from_date' => $from_date,
+			'to_date' => $to_date,
+			'user' => $d['user'],
+			'recovery' => $d['recovery'],
+			'data' => $detail['rows'],
+			'months' => $months,
+			'footer_must' => $detail['footer_must'],
+			'footer_paid' => $detail['footer_paid'],
+			'startdate' => $range['startdate'],
+			'enddate' => $range['enddate'],
+			'kpi_total_students' => $kpi['total_students'],
+			'student_count' => count($student_ids),
+			'pagination' => array(
+				'page' => $page,
+				'page_size' => $page_size,
+				'total' => $pack['total'],
+				'total_pages' => $total_pages,
+			),
+		));
+	}
+
+	private function _recovery_total_student_ids($d)
+	{
+		$ids = array();
+		foreach ($d['fee_dues_students_count'] as $row) {
+			if (!empty($row['student_id'])) $ids[(int)$row['student_id']] = true;
+		}
+		foreach ($d['paid_count_students'] as $row) {
+			if (!empty($row['student_id'])) $ids[(int)$row['student_id']] = true;
+		}
+		return array_keys($ids);
+	}
+
+	private function _fetch_students_by_ids($student_ids, $q, $offset, $limit)
+	{
+		if (!count($student_ids)) {
+			return array('rows' => array(), 'total' => 0);
+		}
+
+		$this->db->from('students');
+		$this->db->where_in('students.student_id', $student_ids);
+		$this->db->where('students.status', '1');
+		$this->_apply_student_search_q($q);
+		$total = (int)$this->db->count_all_results();
+
+		if ($total < 1) return array('rows' => array(), 'total' => 0);
+
+		$this->db->select('students.*, classes.name as class_name, classes.session as session, campuses.campus_name, courses.course_name', false);
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
+		$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
+		$this->db->where_in('students.student_id', $student_ids);
+		$this->db->where('students.status', '1');
+		$this->_apply_student_search_q($q);
+		$this->db->order_by('CAST(students.roll_no AS UNSIGNED)', 'ASC', false);
+		$this->db->order_by('students.roll_no', 'ASC');
+		$this->db->limit($limit, $offset);
+		return array('rows' => $this->db->get()->result_array(), 'total' => $total);
+	}
+
+	private function _apply_student_search_q($q)
+	{
+		if ($q === '') return;
+		$this->db->group_start();
+		$this->db->like('students.first_name', $q);
+		$this->db->or_like('students.last_name', $q);
+		$this->db->or_like('students.father_name', $q);
+		$this->db->or_like('students.cnic', $q);
+		$this->db->or_like('students.roll_no', $q);
+		$this->db->or_like('students.mobile', $q);
+		$this->db->group_end();
+	}
+
 	public function recovery_entries($recovery_id = 0)
 	{
 		$recovery_id = (int)$recovery_id;
