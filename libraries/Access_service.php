@@ -290,22 +290,47 @@ class Access_service {
 
     public function save_from_body($body)
     {
-        $_POST = array();
-        foreach ($body as $key => $value) {
-            if ($value === null || $value === false || $value === '') {
-                continue;
-            }
-            if ($value === true) {
-                $_POST[$key] = '1';
-            } elseif (is_array($value)) {
-                $_POST[$key] = $value;
-            } else {
-                $_POST[$key] = $value;
+        if (!is_array($body)) {
+            $body = array();
+        }
+
+        // Build a complete payload from schema so unchecked boxes / empty multiselects
+        // are sent explicitly (legacy HTML form behaviour).
+        $prepared = array();
+        $schema = $this->parse_schema();
+        foreach ($schema['sections'] as $section) {
+            foreach ($section['fields'] as $field) {
+                $name = $field['name'];
+                if ($field['type'] === 'checkbox') {
+                    $prepared[$name] = !empty($body[$name]) ? 1 : 0;
+                } elseif ($field['type'] === 'multiselect') {
+                    $prepared[$name] = (isset($body[$name]) && is_array($body[$name]))
+                        ? array_values($body[$name])
+                        : array();
+                }
             }
         }
 
-        if (empty($_POST['user_id']) && empty($_POST['designation_id'])) {
+        if (!empty($body['user_id'])) {
+            $prepared['user_id'] = (int) $body['user_id'];
+        }
+        if (!empty($body['designation_id'])) {
+            $prepared['designation_id'] = (int) $body['designation_id'];
+        }
+
+        if (empty($prepared['user_id']) && empty($prepared['designation_id'])) {
             return array('success' => false, 'message' => 'user_id or designation_id required');
+        }
+
+        $_POST = array();
+        foreach ($prepared as $key => $value) {
+            if (is_array($value)) {
+                $_POST[$key] = $value;
+            } elseif ($value === 0 || $value === '0') {
+                $_POST[$key] = 0;
+            } elseif ($value !== null && $value !== '') {
+                $_POST[$key] = $value;
+            }
         }
 
         $check = $this->ci->accesses->check();
@@ -315,9 +340,10 @@ class Access_service {
             $this->ci->accesses->addAccess();
         }
 
-        $user_id = isset($body['user_id']) ? (int) $body['user_id'] : 0;
-        $onlineIds = isset($body['online_admission_campus_ids']) && is_array($body['online_admission_campus_ids'])
-            ? $body['online_admission_campus_ids'] : array();
+        $user_id = isset($prepared['user_id']) ? (int) $prepared['user_id'] : 0;
+        $onlineIds = isset($prepared['online_admission_campus_ids']) && is_array($prepared['online_admission_campus_ids'])
+            ? $prepared['online_admission_campus_ids']
+            : array();
 
         if ($user_id) {
             $this->ci->db->where('user_id', $user_id)->delete('online_application_access');

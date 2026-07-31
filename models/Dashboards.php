@@ -746,14 +746,103 @@ class Dashboards extends CI_Model {
 		$query = $this->db->get('apply_now')->result_array();
 		return $query;
 	}
+
+	public function getAllApplicationsReport($campus_id = NULL, $date_from = NULL, $date_to = NULL)
+	{
+		if ($this->session->userdata('role') != 'Admin' && empty(getUserOnlineApplicationCampusIds())) {
+			return array();
+		}
+
+		$this->db->select('apply_now.*');
+		$this->db->from('apply_now');
+		$this->applyOnlineApplicationCampusAccess('apply_now');
+
+		if (@$campus_id != NULL) {
+			if ($this->session->userdata('role') == 'Admin') {
+				$this->db->join(
+					'campuses',
+					"campuses.website = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(apply_now.website, 'https://www.', ''), 'http://www.', ''), 'https://', ''), 'http://', ''), '/', ''))",
+					'inner',
+					false
+				);
+			}
+			$this->db->where('campuses.campus_id', $campus_id);
+		}
+
+		if ($date_from) {
+			$this->db->where('DATE(apply_now.date) >=', $date_from);
+		}
+		if ($date_to) {
+			$this->db->where('DATE(apply_now.date) <=', $date_to);
+		}
+
+		$this->db->order_by('apply_now.date', 'DESC');
+		return $this->db->get()->result_array();
+	}
+
+	public function getAllMobileAdmissions($campus_id = NULL, $date_from = NULL, $date_to = NULL)
+	{
+		if ($this->session->userdata('role') != 'Admin' && empty(getUserOnlineApplicationCampusIds())) {
+			return array();
+		}
+
+		$this->applyOnlineApplicationCampusAccess('admission_applications');
+
+		if (@$campus_id != NULL) {
+			$this->db->where('campus_id', $campus_id);
+		}
+
+		if ($date_from) {
+			$this->db->where('DATE(entry_date) >=', $date_from);
+		}
+		if ($date_to) {
+			$this->db->where('DATE(entry_date) <=', $date_to);
+		}
+
+		$this->db->where('status !=', 3);
+		$this->db->order_by('entry_date', 'DESC');
+		return $this->db->get('admission_applications')->result_array();
+	}
 	
 	public function getAllConfirmedAdmisssions()
 	{
+		$normApply = "REPLACE(REPLACE(REPLACE(TRIM(apply_now.cnic), '-', ''), ' ', ''), '.', '')";
+		$normStudent = "REPLACE(REPLACE(REPLACE(TRIM(students.cnic), '-', ''), ' ', ''), '.', '')";
+
 		$this->db->select('apply_now.*');
 		$this->db->from('apply_now');
-		$this->db->join('students', 'students.cnic=apply_now.cnic', 'INNER');
-		$query = $this->db->get()->result_array();
-		return $query;
+		$this->db->join(
+			'students',
+			"({$normApply}) != '' AND ({$normApply}) = ({$normStudent})",
+			'inner',
+			false
+		);
+		$this->db->group_by('apply_now.apply_now_id');
+		$byCnic = $this->db->get()->result_array();
+
+		$this->db->select('apply_now.*');
+		$this->db->from('apply_now');
+		$this->db->join(
+			'students',
+			"((apply_now.cnic IS NULL OR TRIM(apply_now.cnic) = '') AND TRIM(apply_now.mobile) != '' AND (TRIM(students.mobile) = TRIM(apply_now.mobile) OR TRIM(students.emergency_no) = TRIM(apply_now.mobile)))",
+			'inner',
+			false
+		);
+		$this->db->group_by('apply_now.apply_now_id');
+		$byMobile = $this->db->get()->result_array();
+
+		$seen = array();
+		$rows = array();
+		foreach (array_merge($byCnic, $byMobile) as $row) {
+			$id = (int) $row['apply_now_id'];
+			if (isset($seen[$id])) {
+				continue;
+			}
+			$seen[$id] = true;
+			$rows[] = $row;
+		}
+
+		return $rows;
 	}
 	
 	public function getNewStudentEntries($campus_id=NULL)

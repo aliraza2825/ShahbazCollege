@@ -40,6 +40,154 @@ class Posapi extends CI_Controller {
 		}
 	}
 
+	private function _ensure_pos_campus_settings_table()
+	{
+		if (!$this->db->table_exists('pos_campus_settings')) {
+			$this->db->query(
+				"CREATE TABLE IF NOT EXISTS `pos_campus_settings` (
+					`campus_id` INT(11) NOT NULL,
+					`max_discount_percent` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+					`updated_at` DATETIME DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP,
+					PRIMARY KEY (`campus_id`)
+				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+			);
+		}
+	}
+
+	private function _max_discount_percent($campus_id)
+	{
+		$this->_ensure_pos_campus_settings_table();
+		$campus_id = (int)$campus_id;
+		if ($campus_id <= 0) return 0.0;
+		$row = $this->db->get_where('pos_campus_settings', array('campus_id' => $campus_id))->row_array();
+		if (!$row) return 0.0;
+		return max(0, min(100, (float)$row['max_discount_percent']));
+	}
+
+	private function _save_max_discount_percent($campus_id, $percent)
+	{
+		$this->_ensure_pos_campus_settings_table();
+		$campus_id = (int)$campus_id;
+		$percent = max(0, min(100, round((float)$percent, 2)));
+		$exists = $this->db->get_where('pos_campus_settings', array('campus_id' => $campus_id))->row_array();
+		if ($exists) {
+			$this->db->where('campus_id', $campus_id)->update('pos_campus_settings', array(
+				'max_discount_percent' => $percent,
+			));
+		} else {
+			$this->db->insert('pos_campus_settings', array(
+				'campus_id' => $campus_id,
+				'max_discount_percent' => $percent,
+			));
+		}
+		return $percent;
+	}
+
+	private function _product_sale_amount($product_name_id, $campus_id = 0)
+	{
+		$product_name_id = (int)$product_name_id;
+		if (!$product_name_id) return 0.0;
+		$this->db->select('MIN(sale_amount) as sale_amount', false);
+		$this->db->from('products');
+		$this->db->where('product_name_id', $product_name_id);
+		$this->db->where(array(
+			'saleable' => 1,
+			'sold' => 0,
+			'consume' => 0,
+			'status' => 1,
+		));
+		if ((int)$campus_id > 0) {
+			$this->db->where('campus_id', (int)$campus_id);
+		}
+		$row = $this->db->get()->row_array();
+		return $row ? (float)$row['sale_amount'] : 0.0;
+	}
+
+	private function _bundle_retail_total($items, $campus_id = 0)
+	{
+		$sum = 0.0;
+		if (!is_array($items)) return $sum;
+		foreach ($items as $item) {
+			$pid = (int)(isset($item['product_name_id']) ? $item['product_name_id'] : 0);
+			$qty = isset($item['quantity']) ? max(1, (int)$item['quantity']) : 1;
+			$sum += $this->_product_sale_amount($pid, $campus_id) * $qty;
+		}
+		return round($sum, 2);
+	}
+
+	private function _discount_percent_from_prices($retail, $sale_price)
+	{
+		$retail = (float)$retail;
+		$sale_price = (float)$sale_price;
+		if ($retail <= 0) return 0.0;
+		if ($sale_price >= $retail) return 0.0;
+		return round((($retail - $sale_price) / $retail) * 100, 2);
+	}
+
+	private function _validate_bundle_discount($items, $price, $campus_id)
+	{
+		$retail = $this->_bundle_retail_total($items, $campus_id);
+		$price = (float)$price;
+		if ($retail <= 0) return array('ok' => true, 'retail' => $retail);
+		if ($price > $retail + 0.009) {
+			return array(
+				'ok' => false,
+				'message' => 'Bundle price cannot exceed items total (' . number_format($retail, 0) . ')',
+				'retail' => $retail,
+			);
+		}
+		$max = $this->_max_discount_percent($campus_id);
+		$pct = $this->_discount_percent_from_prices($retail, $price);
+		if ($pct > $max + 0.009) {
+			$min_price = round($retail * (1 - ($max / 100)), 2);
+			return array(
+				'ok' => false,
+				'message' => 'Bundle discount ' . number_format($pct, 1) . '% exceeds max ' . number_format($max, 1) . '% (min price ' . number_format($min_price, 0) . ')',
+				'retail' => $retail,
+				'discount_percent' => $pct,
+				'max_discount_percent' => $max,
+			);
+		}
+		return array('ok' => true, 'retail' => $retail, 'discount_percent' => $pct, 'max_discount_percent' => $max);
+	}
+
+	private function _apply_line_discounts(&$quoted, $input_lines, $campus_id)
+	{
+		$max = $this->_max_discount_percent($campus_id);
+		$by_key = array();
+		foreach ($input_lines as $line) {
+			$type = isset($line['type']) ? $line['type'] : 'item';
+			$ref = (int)(isset($line['ref_id']) ? $line['ref_id'] : 0);
+			$key = $type . '-' . $ref;
+			$pct = isset($line['discount_percent']) ? (float)$line['discount_percent'] : 0;
+			$by_key[$key] = max(0, min($max, $pct));
+		}
+
+		$subtotal = 0.0;
+		$discount_total = 0.0;
+		foreach ($quoted['lines'] as &$line) {
+			$key = $line['type'] . '-' . $line['ref_id'];
+			$pct = isset($by_key[$key]) ? $by_key[$key] : 0;
+			$base = (float)$line['line_total'];
+			$off = round($base * ($pct / 100), 2);
+			$line['discount_percent'] = $pct;
+			$line['discount_amount'] = $off;
+			$line['line_total'] = round(max(0, $base - $off), 2);
+			$line['unit_price'] = $line['quantity'] > 0
+				? round($line['line_total'] / (int)$line['quantity'], 2)
+				: $line['unit_price'];
+			$subtotal += $base;
+			$discount_total += $off;
+		}
+		unset($line);
+
+		$quoted['subtotal'] = round($subtotal, 2);
+		$quoted['discount'] = round($discount_total, 2);
+		$quoted['total'] = round($subtotal - $discount_total, 2);
+		$quoted['max_discount_percent'] = $max;
+		return $quoted;
+	}
+
 	private function _cors()
 	{
 		$origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '*';
@@ -362,6 +510,59 @@ class Posapi extends CI_Controller {
 			'success' => true,
 			'user' => $this->_user_payload($this->current_user),
 		));
+	}
+
+	/** Legacy top bar: designations, petty cash, quick-menu permissions */
+	public function header_meta()
+	{
+		$this->_json(array(
+			'success' => true,
+			'data' => $this->_header_meta($this->current_user),
+		));
+	}
+
+	private function _header_meta($user)
+	{
+		$is_admin = $this->_is_admin($user);
+		$access = $this->_pos_access_row($user);
+
+		$designations = array();
+		if (!empty($user['designation_id'])) {
+			$ids = array();
+			foreach (explode(',', (string)$user['designation_id']) as $id) {
+				$id = (int)trim($id);
+				if ($id > 0) $ids[] = $id;
+			}
+			if ($ids) {
+				$this->db->select('designation_name, description');
+				$this->db->from('designations');
+				$this->db->where_in('designation_id', $ids);
+				$designations = $this->db->get()->result_array();
+			}
+		}
+
+		$petty_cash = null;
+		$petty_rows = $this->db->get_where('petty_cash_college_wise', array(
+			'assign_to' => $user['user_id'],
+			'petty_status' => 1,
+		))->result_array();
+		if (count($petty_rows) > 0) {
+			$this->load->helper('custom');
+			$petty_cash = array(
+				'id' => (int)$petty_rows[0]['id'],
+				'amount' => (float)pettycash_statement($petty_rows[0]['id']),
+			);
+		}
+
+		return array(
+			'designations' => $designations,
+			'petty_cash' => $petty_cash,
+			'show_accounts_menu' => $is_admin || ($access && !empty($access['accounts_sidebar'])),
+			'show_expenses_menu' => $is_admin || ($access && !empty($access['expense_sidebar'])),
+			'expense_add' => $is_admin || ($access && !empty($access['expense_add'])),
+			'expense_all' => $is_admin || ($access && !empty($access['expense_all'])),
+			'legacy_root' => rtrim(base_url(), '/') . '/index.php',
+		);
 	}
 
 	public function logout()
@@ -728,7 +929,50 @@ class Posapi extends CI_Controller {
 			'data' => array(
 				'bundles' => $bundles,
 				'items' => $items,
+				'max_discount_percent' => $this->_max_discount_percent($campus_id),
 			)
+		));
+	}
+
+	/**
+	 * Campus POS settings (max discount % for bundles + checkout lines).
+	 * GET/POST campus_settings?campus_id=
+	 */
+	public function campus_settings()
+	{
+		$campus_id = (int)$this->input->get('campus_id');
+		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+			$body = $this->_body();
+			if (isset($body['campus_id'])) {
+				$campus_id = (int)$body['campus_id'];
+			}
+			if ($campus_id <= 0) {
+				$this->_json(array('success' => false, 'message' => 'campus_id required'), 422);
+			}
+			$this->_require_campus_access($campus_id);
+			$perms = $this->_permissions();
+			if (empty($perms['can_manage_bundles']) && empty($perms['is_admin'])) {
+				$this->_json(array('success' => false, 'message' => 'Bundle manage permission required'), 403);
+			}
+			if (!isset($body['max_discount_percent'])) {
+				$this->_json(array('success' => false, 'message' => 'max_discount_percent required'), 422);
+			}
+			$max = $this->_save_max_discount_percent($campus_id, $body['max_discount_percent']);
+			$this->_json(array(
+				'success' => true,
+				'campus_id' => $campus_id,
+				'max_discount_percent' => $max,
+			));
+		}
+
+		if ($campus_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'campus_id required'), 422);
+		}
+		$this->_require_campus_access($campus_id);
+		$this->_json(array(
+			'success' => true,
+			'campus_id' => $campus_id,
+			'max_discount_percent' => $this->_max_discount_percent($campus_id),
 		));
 	}
 
@@ -831,6 +1075,11 @@ class Posapi extends CI_Controller {
 				$this->_json(array('success' => false, 'message' => 'Add at least one item'), 422);
 			}
 
+			$discount_check = $this->_validate_bundle_discount($items, $price, $campus_id);
+			if (empty($discount_check['ok'])) {
+				$this->_json(array('success' => false, 'message' => $discount_check['message']), 422);
+			}
+
 			$this->db->trans_start();
 			$this->db->insert('pos_bundles', array(
 				'category_id' => $category_id,
@@ -906,6 +1155,20 @@ class Posapi extends CI_Controller {
 			if (isset($body['description'])) $data['description'] = $body['description'];
 			if (isset($body['status'])) $data['status'] = (int)$body['status'];
 			if (isset($body['image'])) $data['image'] = $body['image'];
+
+			if (isset($body['items']) && is_array($body['items']) && isset($body['price'])) {
+				$campus_for_check = isset($body['campus_id']) ? (int)$body['campus_id'] : (int)$bundle['campus_id'];
+				$discount_check = $this->_validate_bundle_discount($body['items'], $body['price'], $campus_for_check);
+				if (empty($discount_check['ok'])) {
+					$this->_json(array('success' => false, 'message' => $discount_check['message']), 422);
+				}
+			} elseif (isset($body['price'])) {
+				$current_items = $this->_bundle_items($bundle_id);
+				$discount_check = $this->_validate_bundle_discount($current_items, $body['price'], (int)$bundle['campus_id']);
+				if (empty($discount_check['ok'])) {
+					$this->_json(array('success' => false, 'message' => $discount_check['message']), 422);
+				}
+			}
 
 			$this->db->trans_start();
 			if ($data) {
@@ -1187,6 +1450,159 @@ class Posapi extends CI_Controller {
 	}
 
 	/**
+	 * Legacy header "Any Query" — same match rules as /students/search (anyquery_student).
+	 */
+	public function any_query_search()
+	{
+		$q = trim((string)$this->input->get('q'));
+		if ($q === '' || strlen($q) < 2) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+
+		$user = $this->current_user;
+		$is_admin = $this->_is_admin($user);
+		$access = $this->_pos_access_row($user);
+		$class_ids = array();
+		if (!$is_admin && $access && !empty($access['class_ids'])) {
+			foreach (explode(',', (string)$access['class_ids']) as $id) {
+				$id = (int)trim($id);
+				if ($id > 0) $class_ids[] = $id;
+			}
+		}
+
+		$rows = $this->_any_query_fetch_rows($q, $class_ids, $is_admin);
+		$out = $this->_any_query_enrich_rows($rows);
+
+		$this->_json(array('success' => true, 'data' => $out));
+	}
+
+	/** One SQL round-trip — no photo join (loaded in detail popup). */
+	private function _any_query_fetch_rows($q, $class_ids, $is_admin)
+	{
+		$select = 'students.student_id, students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile, students.status, students.contractor_id, students.reference_user_id, classes.name as class_name, classes.exam_no as student_exam, courses.course_name, machine_data.machine_id, reference_users.name as reference_name, reference_users.phone as reference_phone';
+
+		$this->db->select($select, false);
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id = students.class_id', 'inner');
+		$this->db->join('courses', 'classes.course_id = courses.course_id', 'inner');
+		$this->db->join('machine_data', 'machine_data.teacher_student_id = students.student_id', 'inner');
+		$this->db->join('reference_users', 'reference_users.reference_user_id = students.reference_user_id', 'left');
+		$this->_any_query_apply_match($q);
+		if (!$is_admin && $class_ids) {
+			$this->db->where_in('classes.class_id', $class_ids);
+		}
+		$this->db->order_by('students.roll_no', 'ASC');
+		$this->db->limit(25);
+		return $this->db->get()->result_array();
+	}
+
+	private function _any_query_apply_match($q)
+	{
+		$compact = preg_replace('/[\s\-]/', '', $q);
+		$is_numericish = $compact !== '' && preg_match('/^\d+$/', $compact);
+
+		$this->db->group_start();
+		if ($is_numericish && strlen($compact) >= 3) {
+			// Fast prefix match on indexed-ish columns first (roll / phone / cnic).
+			$this->db->like('students.roll_no', $q, 'after');
+			$this->db->or_like('students.mobile', $compact, 'after');
+			$this->db->or_like('students.cnic', $compact, 'after');
+			$this->db->or_like('students.emergency_no', $compact, 'after');
+		}
+		$this->db->like('students.roll_no', $q);
+		$this->db->or_like('students.cnic', $q);
+		$this->db->or_like('students.mobile', $q);
+		$this->db->or_like('students.emergency_no', $q);
+		$this->db->or_like('students.first_name', $q);
+		$this->db->or_like('students.last_name', $q);
+		$this->db->or_like('students.father_name', $q);
+		$this->db->or_like('reference_users.phone', $q);
+		$this->db->or_like('reference_users.name', $q);
+		$this->db->group_end();
+	}
+
+	/** Batch fee-plan + freeze lookups — avoids N+1 queries per row. */
+	private function _any_query_enrich_rows($rows)
+	{
+		if (!$rows) {
+			return array();
+		}
+
+		$ids = array();
+		$inactive_ids = array();
+		foreach ($rows as $row) {
+			$sid = (int)$row['student_id'];
+			if ($sid <= 0) continue;
+			$ids[] = $sid;
+			if ((int)$row['status'] === 0) {
+				$inactive_ids[] = $sid;
+			}
+		}
+		$ids = array_values(array_unique($ids));
+
+		$payment_ids = array();
+		if ($ids) {
+			$this->db->select('DISTINCT student_id', false);
+			$this->db->from('payments');
+			$this->db->where('contract_id', 0);
+			$this->db->where_in('student_id', $ids);
+			foreach ($this->db->get()->result_array() as $p) {
+				$payment_ids[(int)$p['student_id']] = true;
+			}
+		}
+
+		$frozen_ids = array();
+		if ($inactive_ids) {
+			$this->db->select('student_id');
+			$this->db->from('freeze_student');
+			$this->db->where_in('student_id', $inactive_ids);
+			foreach ($this->db->get()->result_array() as $f) {
+				$frozen_ids[(int)$f['student_id']] = true;
+			}
+		}
+
+		$out = array();
+		foreach ($rows as $row) {
+			$sid = (int)$row['student_id'];
+			if ($sid <= 0) continue;
+
+			$fee_alert = empty($payment_ids[$sid]) && (int)$row['contractor_id'] <= 0;
+
+			$status_label = 'Active';
+			if ((int)$row['status'] === 0) {
+				$status_label = !empty($frozen_ids[$sid]) ? 'Freezed' : 'Deleted';
+			}
+
+			$reference = null;
+			$ref_name = isset($row['reference_name']) ? trim($row['reference_name']) : '';
+			$ref_phone = isset($row['reference_phone']) ? trim($row['reference_phone']) : '';
+			if ($ref_name !== '' || $ref_phone !== '') {
+				$reference = array('name' => $ref_name, 'phone' => $ref_phone);
+			}
+
+			$out[] = array(
+				'student_id' => $sid,
+				'roll_no' => isset($row['roll_no']) ? $row['roll_no'] : '',
+				'first_name' => isset($row['first_name']) ? $row['first_name'] : '',
+				'last_name' => isset($row['last_name']) ? $row['last_name'] : '',
+				'cnic' => isset($row['cnic']) ? $row['cnic'] : '',
+				'mobile' => isset($row['mobile']) ? $row['mobile'] : '',
+				'class_name' => isset($row['class_name']) ? $row['class_name'] : '',
+				'student_exam' => isset($row['student_exam']) ? $row['student_exam'] : '',
+				'course_name' => isset($row['course_name']) ? $row['course_name'] : '',
+				'machine_id' => isset($row['machine_id']) ? $row['machine_id'] : null,
+				'status' => (int)$row['status'],
+				'status_label' => $status_label,
+				'fee_alert' => $fee_alert,
+				'image_url' => null,
+				'reference' => $reference,
+			);
+		}
+
+		return $out;
+	}
+
+	/**
 	 * Student detail popup — same core fields as CI /students/search (anyquery_student)
 	 */
 	public function student_detail($student_id = 0)
@@ -1290,6 +1706,18 @@ class Posapi extends CI_Controller {
 			$status_label = count($freeze) > 0 ? 'Freezed' : 'Deleted';
 		}
 
+		$payment_plan = $this->db->get_where('payments', array(
+			'student_id' => $student_id,
+			'contract_id' => 0,
+		))->num_rows();
+		$fee_alert = ($payment_plan === 0 && (int)$student['contractor_id'] <= 0);
+
+		$council_track = $this->_council_track_rows(
+			$student_id,
+			isset($student['cnic']) ? $student['cnic'] : '',
+			isset($student['course_id']) ? (int)$student['course_id'] : 0
+		);
+
 		$this->_json(array(
 			'success' => true,
 			'data' => array(
@@ -1304,20 +1732,147 @@ class Posapi extends CI_Controller {
 				'class_name' => isset($student['class_name']) ? $student['class_name'] : '',
 				'student_exam' => isset($student['student_exam']) ? $student['student_exam'] : '',
 				'course_name' => isset($student['course_name']) ? $student['course_name'] : '',
+				'course_id' => isset($student['course_id']) ? (int)$student['course_id'] : 0,
 				'section' => isset($student['section']) ? $student['section'] : '',
 				'shift' => $shift_name,
 				'study_type' => $study_type_name,
 				'student_card' => !empty($student['student_card']) ? 1 : 0,
+				'contractor_id' => isset($student['contractor_id']) ? (int)$student['contractor_id'] : 0,
+				'contract_id' => isset($student['contract_id']) ? (int)$student['contract_id'] : 0,
 				'machine_id' => $machine && isset($machine['machine_id']) ? $machine['machine_id'] : null,
 				'registration_date' => isset($student['registration_date']) ? $student['registration_date'] : '',
 				'status' => (int)$student['status'],
 				'status_label' => $status_label,
+				'fee_alert' => $fee_alert,
 				'image_url' => $image_url,
 				'reference' => $reference,
 				'contractor' => $contractor,
 				'documents' => $docs,
+				'council_track' => $council_track,
 			),
 		));
+	}
+
+	/** Council track rows — same data as getStudentResultRemarks() in custom_helper. */
+	private function _council_track_rows($student_id, $cnic, $course_id = 0)
+	{
+		$student_id = (int)$student_id;
+		$cnic = trim((string)$cnic);
+		if ($student_id <= 0 && $cnic === '') {
+			return array();
+		}
+
+		$base = rtrim(base_url(), '/');
+		$bucket = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+		$cloudfront = 'https://d10iw6eujrfvyr.cloudfront.net';
+
+		if ($cnic !== '') {
+			$this->db->select('*');
+			$this->db->from('punjab_council_roll_number');
+			$this->db->where('cnic', $cnic);
+			$roll_results = $this->db->get()->result_array();
+		} else {
+			$roll_results = array();
+		}
+
+		$this->db->select('expenses.*, classes.name as class_name, classes.session, campuses.campus_name as campus_name');
+		$this->db->from('expenses');
+		$this->db->join('classes', 'classes.class_id = expenses.class_id', 'left');
+		$this->db->join('campuses', 'campuses.campus_id = expenses.campus_id', 'left');
+		$this->db->where('expenses.student_id', $student_id);
+		$this->db->where('expenses.council_exam_no IS NOT NULL', null, false);
+		$this->db->where('expenses.council_exam_no !=', '');
+		$expense_results = $this->db->get()->result_array();
+
+		$merged = array();
+		foreach ($roll_results as $row) {
+			$key = $row['class'] . '_' . $row['council_exam_no'];
+			if (!isset($merged[$key])) {
+				$merged[$key] = array(
+					'class' => $row['class'],
+					'council_exam_no' => $row['council_exam_no'],
+					'roll_no' => '',
+					'result_remarks' => '',
+					'result_image' => '',
+					'online_result_image' => '',
+					'expense_date' => '',
+					'expense_amount' => '',
+					'expense_image' => '',
+				);
+			}
+			$merged[$key]['roll_no'] = !empty($row['roll_no']) ? $row['roll_no'] : '';
+			$merged[$key]['result_remarks'] = !empty($row['result_remarks']) ? $row['result_remarks'] : '';
+			$merged[$key]['result_image'] = !empty($row['result_image']) ? $row['result_image'] : '';
+			$merged[$key]['online_result_image'] = !empty($row['online_result_image']) ? $row['online_result_image'] : '';
+		}
+
+		foreach ($expense_results as $row) {
+			$expense_class = !empty($row['class']) ? $row['class'] : '';
+			$key = $expense_class . '_' . $row['council_exam_no'];
+			if (!isset($merged[$key])) {
+				$merged[$key] = array(
+					'class' => $expense_class,
+					'council_exam_no' => $row['council_exam_no'],
+					'roll_no' => '',
+					'result_remarks' => '',
+					'result_image' => '',
+					'online_result_image' => '',
+					'expense_date' => '',
+					'expense_amount' => '',
+					'expense_image' => '',
+				);
+			}
+			$merged[$key]['expense_date'] = !empty($row['date']) ? $row['date'] : '';
+			$merged[$key]['expense_amount'] = !empty($row['amount']) ? $row['amount'] : '';
+			$merged[$key]['expense_image'] = !empty($row['image']) ? $row['image'] : '';
+		}
+
+		uasort($merged, function ($a, $b) {
+			if ($a['council_exam_no'] == $b['council_exam_no']) {
+				if ($a['class'] == $b['class']) return 0;
+				return ($a['class'] < $b['class']) ? -1 : 1;
+			}
+			return ($a['council_exam_no'] < $b['council_exam_no']) ? -1 : 1;
+		});
+
+		$out = array();
+		foreach ($merged as $result) {
+			$class_num = isset($result['class']) ? (int)$result['class'] : 0;
+			if ($class_num === 1) {
+				$class_label = '1st Year';
+			} elseif ($class_num === 2) {
+				$class_label = '2nd Year';
+			} else {
+				$class_label = '-';
+			}
+
+			$result_image_url = null;
+			if (!empty($result['result_image'])) {
+				if (empty($result['online_result_image'])) {
+					$result_image_url = $base . '/' . ltrim($result['result_image'], '/');
+				} else {
+					$result_image_url = str_replace($bucket, $cloudfront, $result['online_result_image']);
+				}
+			}
+
+			$expense_image_url = null;
+			if (!empty($result['expense_image'])) {
+				$expense_image_url = $base . '/' . ltrim($result['expense_image'], '/');
+			}
+
+			$out[] = array(
+				'class_label' => $class_label,
+				'council_exam_no' => isset($result['council_exam_no']) ? $result['council_exam_no'] : '',
+				'expense_date' => !empty($result['expense_date']) ? $result['expense_date'] : '',
+				'expense_amount' => !empty($result['expense_amount']) ? $result['expense_amount'] : '',
+				'roll_no' => !empty($result['roll_no']) ? $result['roll_no'] : '',
+				'result_remarks' => !empty($result['result_remarks']) ? $result['result_remarks'] : 'Pending',
+				'result_image_url' => $result_image_url,
+				'expense_image_url' => $expense_image_url,
+			);
+		}
+
+		return $out;
 	}
 
 	/**
@@ -1436,15 +1991,24 @@ class Posapi extends CI_Controller {
 	public function quote()
 	{
 		$body = $this->_body();
+		$campus_id = (int)(isset($body['campus_id']) ? $body['campus_id'] : 0);
 		$quoted = $this->_quote_internal($body);
+		if ($campus_id > 0) {
+			$quoted = $this->_apply_line_discounts($quoted, isset($body['lines']) ? $body['lines'] : array(), $campus_id);
+		} else {
+			$quoted['discount'] = 0;
+			$quoted['max_discount_percent'] = 0;
+		}
 		$this->_json(array(
 			'success' => true,
 			'data' => array(
 				'lines' => $quoted['lines'],
 				'subtotal' => $quoted['subtotal'],
+				'discount' => isset($quoted['discount']) ? $quoted['discount'] : 0,
 				'tax' => 0,
 				'service' => 0,
 				'total' => $quoted['total'],
+				'max_discount_percent' => isset($quoted['max_discount_percent']) ? $quoted['max_discount_percent'] : 0,
 			)
 		));
 	}
@@ -1500,8 +2064,9 @@ class Posapi extends CI_Controller {
 
 		// Re-quote server-side
 		$_POST = array(); // unused
-		$quote_body = array('student_id' => $student_id, 'lines' => $lines);
+		$quote_body = array('student_id' => $student_id, 'lines' => $lines, 'campus_id' => $campus_id);
 		$quoted = $this->_quote_internal($quote_body);
+		$quoted = $this->_apply_line_discounts($quoted, $lines, $campus_id);
 
 		$campus = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
 		$code = $campus && !empty($campus['roll_no_code']) ? $campus['roll_no_code'] : 'POS';
@@ -1518,7 +2083,7 @@ class Posapi extends CI_Controller {
 				'purchaser_name' => $purchaser_name,
 				'purchaser_phone' => $purchaser_phone,
 				'subtotal' => $quoted['subtotal'],
-				'discount' => 0,
+				'discount' => isset($quoted['discount']) ? $quoted['discount'] : 0,
 				'tax' => 0,
 				'total' => $quoted['total'],
 				'payment_method' => $payment_method,

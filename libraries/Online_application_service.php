@@ -130,15 +130,23 @@ class Online_application_service {
         return $this->ci->db->get('campuses')->result_array();
     }
 
-    private function get_dynamic_form_submissions($status = 0)
-    {
-        $this->ci->db->select('dynamic_form_submissions.*, dynamic_forms.title as form_title, dynamic_forms.slug');
-        $this->ci->db->from('dynamic_form_submissions');
-        $this->ci->db->join('dynamic_forms', 'dynamic_forms.id = dynamic_form_submissions.form_id', 'inner');
-        $this->ci->db->where('dynamic_form_submissions.status', $status);
-        $this->ci->db->order_by('dynamic_form_submissions.id', 'DESC');
-        return $this->ci->db->get()->result_array();
-    }
+	private function get_dynamic_form_submissions($status = 0, $date_from = null, $date_to = null)
+	{
+		$this->ci->db->select('dynamic_form_submissions.*, dynamic_forms.title as form_title, dynamic_forms.slug');
+		$this->ci->db->from('dynamic_form_submissions');
+		$this->ci->db->join('dynamic_forms', 'dynamic_forms.id = dynamic_form_submissions.form_id', 'inner');
+		if ($status !== null) {
+			$this->ci->db->where('dynamic_form_submissions.status', $status);
+		}
+		if ($date_from) {
+			$this->ci->db->where('DATE(dynamic_form_submissions.created_at) >=', $date_from);
+		}
+		if ($date_to) {
+			$this->ci->db->where('DATE(dynamic_form_submissions.created_at) <=', $date_to);
+		}
+		$this->ci->db->order_by('dynamic_form_submissions.id', 'DESC');
+		return $this->ci->db->get()->result_array();
+	}
 
     private function submission_values($submission_id)
     {
@@ -156,9 +164,9 @@ class Online_application_service {
         $cnic_check = array();
         $mobile_check = array();
 
-        if ($admission['cnic'] != '') {
-            $cnic_check = $this->ci->db->get_where('students', array('cnic' => $admission['cnic']))->result_array();
-        } elseif ($admission['cnic'] == '') {
+        if (trim((string) $admission['cnic']) !== '') {
+            $cnic_check = $this->find_students_by_cnic($admission['cnic']);
+        } else {
             $mobile = trim($admission['mobile']);
             if ($mobile != '' && preg_match('/^[0-9+\-\s]+$/', $mobile)) {
                 $this->ci->db->group_start();
@@ -293,22 +301,181 @@ class Online_application_service {
         return $rows;
     }
 
-    public function all_applications()
+    public function all_applications($filters = array())
     {
+        $campus_id = !empty($filters['campus_id']) ? $filters['campus_id'] : null;
+        $date_from = !empty($filters['date_from']) ? $filters['date_from'] : null;
+        $date_to = !empty($filters['date_to']) ? $filters['date_to'] : null;
+
         $rows = array();
-        foreach ($this->ci->dashboards->getAllAdmisssions() as $r) {
-            $rows[] = $this->enrich_apply_now_row($r);
+
+        foreach ($this->ci->dashboards->getAllApplicationsReport($campus_id, $date_from, $date_to) as $r) {
+            $enriched = $this->enrich_apply_now_row($r);
+            if (!$this->can_view_confirmed_row($enriched)) {
+                continue;
+            }
+            $enriched['workflow_status'] = $this->apply_now_workflow_status($r);
+            $rows[] = $enriched;
         }
+
+        foreach ($this->ci->dashboards->getAllMobileAdmissions($campus_id, $date_from, $date_to) as $r) {
+            $enriched = $this->enrich_mobile_row($r);
+            $enriched['workflow_status'] = 'Mobile App';
+            $rows[] = $enriched;
+        }
+
+        foreach ($this->get_dynamic_form_submissions(null, $date_from, $date_to) as $sub) {
+            $sub['source'] = 'dynamic_form';
+            $sub['values'] = $this->submission_values($sub['id']);
+            $sub['workflow_status'] = !empty($sub['status']) ? 'Form Checked' : 'Dynamic Form';
+            $rows[] = $sub;
+        }
+
+        usort($rows, function ($a, $b) {
+            $da = strtotime(isset($a['date']) ? $a['date'] : (isset($a['created_at']) ? $a['created_at'] : '0'));
+            $db = strtotime(isset($b['date']) ? $b['date'] : (isset($b['created_at']) ? $b['created_at'] : '0'));
+            if ($da === $db) {
+                return 0;
+            }
+            return ($da > $db) ? -1 : 1;
+        });
+
         return $rows;
+    }
+
+    private function apply_now_workflow_status($row)
+    {
+        if ((int) $row['status'] === 1 && (int) $row['clear_by_admin'] === 1) {
+            return 'Admin Cleared';
+        }
+        if ((int) $row['status'] === 1) {
+            return 'Checked';
+        }
+        if ((int) $row['pending_status'] === 1) {
+            return 'Pending';
+        }
+        return 'New';
     }
 
     public function confirmed_admissions()
     {
+        $seen = array();
         $rows = array();
-        foreach ($this->ci->dashboards->getAllConfirmedAdmisssions() as $r) {
-            $rows[] = $this->enrich_apply_now_row($r);
+
+        foreach ($this->fetch_confirmed_apply_now_rows() as $r) {
+            $id = (int) $r['apply_now_id'];
+            if (isset($seen[$id])) {
+                continue;
+            }
+            $seen[$id] = true;
+            $enriched = $this->enrich_apply_now_row($r);
+            if (empty($enriched['about_student'])) {
+                continue;
+            }
+            if (!$this->can_view_confirmed_row($enriched)) {
+                continue;
+            }
+            $rows[] = $enriched;
         }
+
         return $rows;
+    }
+
+    private function normalized_cnic_expr($column)
+    {
+        return "REPLACE(REPLACE(REPLACE(TRIM({$column}), '-', ''), ' ', ''), '.', '')";
+    }
+
+    private function find_students_by_cnic($cnic)
+    {
+        $norm = $this->normalize_cnic_value($cnic);
+        if ($norm === '') {
+            return array();
+        }
+        $expr = $this->normalized_cnic_expr('cnic');
+        return $this->ci->db
+            ->where("({$expr}) = " . $this->ci->db->escape($norm), null, false)
+            ->get('students')
+            ->result_array();
+    }
+
+    private function normalize_cnic_value($cnic)
+    {
+        return preg_replace('/[\s\-\.]/', '', trim((string) $cnic));
+    }
+
+    private function fetch_confirmed_apply_now_rows()
+    {
+        $normApply = $this->normalized_cnic_expr('apply_now.cnic');
+        $normStudent = $this->normalized_cnic_expr('students.cnic');
+
+        $this->ci->db->select('apply_now.*');
+        $this->ci->db->from('apply_now');
+        $this->ci->db->join(
+            'students',
+            "({$normApply}) != '' AND ({$normApply}) = ({$normStudent})",
+            'inner',
+            false
+        );
+        $this->ci->db->group_by('apply_now.apply_now_id');
+        $byCnic = $this->ci->db->get()->result_array();
+
+        $this->ci->db->select('apply_now.*');
+        $this->ci->db->from('apply_now');
+        $this->ci->db->join(
+            'students',
+            "((apply_now.cnic IS NULL OR TRIM(apply_now.cnic) = '') AND TRIM(apply_now.mobile) != '' AND (TRIM(students.mobile) = TRIM(apply_now.mobile) OR TRIM(students.emergency_no) = TRIM(apply_now.mobile)))",
+            'inner',
+            false
+        );
+        $this->ci->db->group_by('apply_now.apply_now_id');
+        $byMobile = $this->ci->db->get()->result_array();
+
+        return array_merge($byCnic, $byMobile);
+    }
+
+    private function can_view_confirmed_row($row)
+    {
+        if ($this->ci->session->userdata('role') === 'Admin') {
+            return true;
+        }
+
+        $website = isset($row['website']) ? (string) $row['website'] : '';
+        $city = isset($row['city']) ? (string) $row['city'] : '';
+        $user_id = (int) $this->ci->session->userdata('user_id');
+
+        $campus = $this->ci->db->get_where('campuses', array(
+            'website' => str_replace('/', '', str_replace('https://www.', '', $website)),
+        ))->row_array();
+        if (!$campus) {
+            return false;
+        }
+
+        $campus_id = (int) $campus['campus_id'];
+        $direct = $this->ci->db->get_where('online_application_access', array(
+            'campus_id' => $campus_id,
+            'city' => $city,
+            'user_id' => $user_id,
+        ))->result_array();
+        if (!empty($direct)) {
+            return true;
+        }
+
+        $cityRows = $this->ci->db->get_where('online_application_access', array(
+            'campus_id' => $campus_id,
+            'city' => $city,
+        ))->result_array();
+        if (!empty($cityRows)) {
+            return false;
+        }
+
+        $allCities = $this->ci->db->get_where('online_application_access', array(
+            'campus_id' => $campus_id,
+            'all_cities' => 1,
+            'user_id' => $user_id,
+        ))->result_array();
+
+        return !empty($allCities);
     }
 
     public function add_comment($body, $user)

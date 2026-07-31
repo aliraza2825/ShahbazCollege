@@ -230,9 +230,15 @@ class Campus_service {
             if (!isset($flat[$i + 1])) {
                 break;
             }
+            $uid = (int) $flat[$i];
+            $user = $this->ci->db
+                ->select('first_name, last_name')
+                ->get_where('users', array('user_id' => $uid))
+                ->row_array();
             $partners[] = array(
-                'user_id' => (int) $flat[$i],
+                'user_id' => $uid,
                 'percentage' => $flat[$i + 1],
+                'user_name' => $user ? trim($user['first_name'] . ' ' . $user['last_name']) : '',
             );
         }
         $share_ids = $this->decode_json_array(isset($row['campus_share_ids']) ? $row['campus_share_ids'] : array());
@@ -255,7 +261,6 @@ class Campus_service {
         $campuses = $this->ci->db->order_by('campus_name', 'ASC')->get('campuses')->result_array();
         $users = $this->ci->db
             ->select('user_id, first_name, last_name')
-            ->where('status', 1)
             ->order_by('first_name', 'ASC')
             ->get('users')
             ->result_array();

@@ -168,9 +168,14 @@ class Onlineapplicationsapi extends CI_Controller {
 	public function all_applications()
 	{
 		$this->_assert_all();
+		$filters = array(
+			'campus_id' => $this->input->get('campus_id'),
+			'date_from' => $this->input->get('date_from'),
+			'date_to' => $this->input->get('date_to'),
+		);
 		$this->_json(array(
 			'success' => true,
-			'data' => $this->service->all_applications(),
+			'data' => $this->service->all_applications($filters),
 		));
 	}
 
