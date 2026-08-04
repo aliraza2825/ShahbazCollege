@@ -133,7 +133,7 @@ class Schedule_service {
     {
         $parsed = array();
         $warnings = array();
-        $lecture_map = array();
+        $slots = array();
         $max_lecture = 0;
 
         if (!is_array($items) || !count($items)) {
@@ -148,6 +148,7 @@ class Schedule_service {
 
         foreach ($items as $idx => $item) {
             $label = isset($item['label']) ? $item['label'] : ('Item '.($idx + 1));
+            $kind = isset($item['kind']) ? $item['kind'] : 'topic';
             $built = $this->_build_require_lectures($item);
             if (!$built['valid']) {
                 $warnings[] = $label.': '.$built['message'];
@@ -156,15 +157,23 @@ class Schedule_service {
 
             $numbers = $built['numbers'];
             foreach ($numbers as $num) {
-                if (isset($lecture_map[$num]) && $lecture_map[$num] !== $label) {
-                    $warnings[] = 'Lecture '.$num.' is assigned to both "'.$lecture_map[$num].'" and "'.$label.'".';
+                if (!isset($slots[$num])) {
+                    $slots[$num] = array('topics' => array(), 'practicals' => array());
                 }
-                $lecture_map[$num] = $label;
+                $list_key = ($kind === 'practical') ? 'practicals' : 'topics';
+                if (in_array($label, $slots[$num][$list_key], true)) {
+                    // same item listed twice in range — ok
+                } elseif (count($slots[$num][$list_key]) > 0) {
+                    $warnings[] = 'Lecture '.$num.' has multiple '.($kind === 'practical' ? 'practicals' : 'topics').': "'.$slots[$num][$list_key][0].'" and "'.$label.'".';
+                    $slots[$num][$list_key][] = $label;
+                } else {
+                    $slots[$num][$list_key][] = $label;
+                }
                 if ($num > $max_lecture) $max_lecture = $num;
             }
 
             $parsed[] = array(
-                'kind' => isset($item['kind']) ? $item['kind'] : 'topic',
+                'kind' => $kind,
                 'topic_id' => isset($item['topic_id']) ? (int) $item['topic_id'] : null,
                 'practical_id' => isset($item['practical_id']) ? (int) $item['practical_id'] : null,
                 'label' => $label,
@@ -175,7 +184,7 @@ class Schedule_service {
 
         if ($max_lecture > 0) {
             for ($i = 1; $i <= $max_lecture; $i++) {
-                if (!isset($lecture_map[$i])) {
+                if (!isset($slots[$i]) || (count($slots[$i]['topics']) === 0 && count($slots[$i]['practicals']) === 0)) {
                     $warnings[] = 'Lecture '.$i.' has no topic or practical assigned (gap in sequence).';
                 }
             }
@@ -183,9 +192,13 @@ class Schedule_service {
 
         $timeline = array();
         for ($i = 1; $i <= $max_lecture; $i++) {
+            $slot = isset($slots[$i]) ? $slots[$i] : array('topics' => array(), 'practicals' => array());
+            $parts = array_merge($slot['topics'], $slot['practicals']);
             $timeline[] = array(
                 'lecture' => $i,
-                'label' => isset($lecture_map[$i]) ? $lecture_map[$i] : null,
+                'label' => count($parts) ? implode(' + ', $parts) : null,
+                'topics' => $slot['topics'],
+                'practicals' => $slot['practicals'],
             );
         }
 
@@ -401,7 +414,8 @@ class Schedule_service {
         $rows = $this->ci->db->get()->result_array();
 
         $out = array();
-        foreach ($rows as $row) {
+        $row_count = count($rows);
+        foreach ($rows as $idx => $row) {
             $topics = array();
             $practicals = array();
             if (!empty($row['topic_ids'])) {
@@ -416,14 +430,18 @@ class Schedule_service {
                     $practicals = $this->ci->db->where_in('practical_id', $ids)->get('practicals')->result_array();
                 }
             }
+            $is_quiz = (int) $row['is_quiz'];
+            $is_half = (int) $row['is_half'];
+            $is_full = ($is_quiz === 1 && $is_half === 0 && $idx === $row_count - 1);
             $out[] = array(
                 'id' => (int) $row['id'],
                 'subject_id' => (int) $row['subject_id'],
                 'subject_name' => $row['subject_name'],
                 'day' => $row['day'],
                 'date' => $row['date'],
-                'is_quiz' => (int) $row['is_quiz'],
-                'is_half' => (int) $row['is_half'],
+                'is_quiz' => $is_quiz,
+                'is_half' => $is_half,
+                'is_full' => $is_full ? 1 : 0,
                 'topics' => array_map(function ($t) { return $t['topic_name']; }, $topics),
                 'practicals' => array_map(function ($p) { return $p['practical_name']; }, $practicals),
             );
@@ -559,36 +577,78 @@ class Schedule_service {
         $test_after = (int) $test_after;
         if ($test_after < 1) $test_after = 3;
 
-        $date_slots = $this->_build_lecture_dates($lecture, $start_date, $max_lectures);
+        $quiz_slots = $this->_count_quiz_slots_for_lectures($max_lectures, $test_after);
+        $content_and_quiz_slots = $max_lectures + $quiz_slots;
+        $date_slots = $this->_build_lecture_dates($lecture, $start_date, $content_and_quiz_slots + 1);
         $template_rows = $this->ci->db->get_where('syllabus', array('unique_syllabus_id' => (int) $unique_syllabus_id))->result_array();
+
+        $half_quiz_index = (int) floor($quiz_slots / 2);
+
+        $quiz_topic_ids = array();
+        $quiz_practical_ids = array();
+        $quiz_topic_names = array();
+        $quiz_practical_names = array();
+        $half_quiz_topic_ids = array();
+        $half_quiz_practical_ids = array();
+        $half_quiz_topic_names = array();
+        $half_quiz_practical_names = array();
 
         $rows = array();
         $i = 0;
         $t = 1;
-        foreach ($date_slots as $idx => $slot) {
+        $quiz_counts = 0;
+        foreach (array_slice($date_slots, 0, $content_and_quiz_slots) as $idx => $slot) {
             if ($t > $test_after) {
+                $is_half = ($quiz_counts === $half_quiz_index);
+                if ($is_half) {
+                    $q_topics = $half_quiz_topic_names;
+                    $q_practicals = $half_quiz_practical_names;
+                    $q_topic_ids = implode(',', $half_quiz_topic_ids);
+                    $q_practical_ids = implode(',', $half_quiz_practical_ids);
+                } else {
+                    $q_topics = $quiz_topic_names;
+                    $q_practicals = $quiz_practical_names;
+                    $q_topic_ids = implode(',', $quiz_topic_ids);
+                    $q_practical_ids = implode(',', $quiz_practical_ids);
+                }
+
                 $rows[] = array(
                     'sr' => $idx + 1,
                     'subject_name' => strtoupper($subject['subject_name']),
                     'day' => $slot['day'],
                     'date' => $slot['date'],
                     'is_quiz' => true,
-                    'topics' => array('Quiz'),
-                    'practicals' => array(),
-                    'topic_ids' => '',
-                    'practical_ids' => '',
+                    'is_half' => $is_half,
+                    'is_full' => false,
+                    'topics' => $q_topics,
+                    'practicals' => $q_practicals,
+                    'topic_ids' => $q_topic_ids,
+                    'practical_ids' => $q_practical_ids,
                 );
+
+                $quiz_topic_ids = array();
+                $quiz_practical_ids = array();
+                $quiz_topic_names = array();
+                $quiz_practical_names = array();
+                $quiz_counts++;
                 $t = 1;
                 continue;
             }
 
             $mapped = $this->_map_template_for_lecture($template_rows, $i + 1);
+            $this->_accumulate_quiz_slot($quiz_topic_ids, $quiz_topic_names, $mapped['topic_ids'], $mapped['topic_names']);
+            $this->_accumulate_quiz_slot($quiz_practical_ids, $quiz_practical_names, $mapped['practical_ids'], $mapped['practical_names']);
+            $this->_accumulate_quiz_slot($half_quiz_topic_ids, $half_quiz_topic_names, $mapped['topic_ids'], $mapped['topic_names']);
+            $this->_accumulate_quiz_slot($half_quiz_practical_ids, $half_quiz_practical_names, $mapped['practical_ids'], $mapped['practical_names']);
+
             $rows[] = array(
                 'sr' => $idx + 1,
                 'subject_name' => strtoupper($subject['subject_name']),
                 'day' => $slot['day'],
                 'date' => $slot['date'],
                 'is_quiz' => false,
+                'is_half' => false,
+                'is_full' => false,
                 'topics' => $mapped['topic_names'],
                 'practicals' => $mapped['practical_names'],
                 'topic_ids' => $mapped['topic_ids'],
@@ -598,6 +658,21 @@ class Schedule_service {
             $t++;
         }
 
+        $full_slot = $date_slots[$content_and_quiz_slots];
+        $rows[] = array(
+            'sr' => count($rows) + 1,
+            'subject_name' => strtoupper($subject['subject_name']),
+            'day' => $full_slot['day'],
+            'date' => $full_slot['date'],
+            'is_quiz' => true,
+            'is_half' => false,
+            'is_full' => true,
+            'topics' => $half_quiz_topic_names,
+            'practicals' => $half_quiz_practical_names,
+            'topic_ids' => implode(',', $half_quiz_topic_ids),
+            'practical_ids' => implode(',', $half_quiz_practical_ids),
+        );
+
         return array(
             'success' => true,
             'lecture_id' => (int) $lecture_id,
@@ -605,6 +680,10 @@ class Schedule_service {
             'unique_syllabus_id' => (int) $unique_syllabus_id,
             'start_date' => $start_date,
             'sessions' => $lecture['session'],
+            'content_lectures' => $max_lectures,
+            'quiz_sessions' => $quiz_slots,
+            'full_book_sessions' => 1,
+            'total_sessions' => count($rows),
             'rows' => $rows,
         );
     }
@@ -627,6 +706,11 @@ class Schedule_service {
 
         $fcount = 0;
         foreach ($rows as $row) {
+            if (!empty($row['is_full'])) continue;
+            if (!empty($row['is_quiz'])) {
+                $fcount++;
+                continue;
+            }
             $pr = isset($row['practical_ids']) ? $row['practical_ids'] : '';
             $tp = isset($row['topic_ids']) ? $row['topic_ids'] : '';
             if (($pr === '' || $pr === '0') && $tp === '') $fcount++;
@@ -643,8 +727,14 @@ class Schedule_service {
             $pr = isset($row['practical_ids']) ? $row['practical_ids'] : '';
             $tp = isset($row['topic_ids']) ? $row['topic_ids'] : '';
             $is_quiz = !empty($row['is_quiz']);
+            $is_full = !empty($row['is_full']);
 
-            if ($is_quiz || (($pr === '' || $pr === '0') && $tp === '')) {
+            if ($is_full) {
+                $tops = $tp;
+                $pracs = $pr;
+                $this->ci->db->set('is_quiz', '1');
+                $this->ci->db->set('is_half', '0');
+            } elseif ($is_quiz || (($pr === '' || $pr === '0') && $tp === '')) {
                 if ($quiz_counts == $fcount) {
                     $tops = $half_quiz_topics;
                     $pracs = $half_quiz_practicals;
@@ -750,6 +840,25 @@ class Schedule_service {
         return $slots;
     }
 
+    /** Quiz/test days are extra calendar slots — they do not replace content lectures. */
+    private function _count_quiz_slots_for_lectures($max_lectures, $test_after)
+    {
+        $max_lectures = (int) $max_lectures;
+        $test_after = (int) $test_after;
+        if ($max_lectures <= 0 || $test_after < 1) return 0;
+
+        $quiz_count = 0;
+        $t = 1;
+        for ($n = 0; $n < $max_lectures; $n++) {
+            $t++;
+            if ($t > $test_after) {
+                $quiz_count++;
+                $t = 1;
+            }
+        }
+        return $quiz_count;
+    }
+
     private function _map_template_for_lecture($template_rows, $lecture_no)
     {
         $topic_ids = array();
@@ -778,6 +887,16 @@ class Schedule_service {
             'topic_names' => $topic_names,
             'practical_names' => $practical_names,
         );
+    }
+
+    private function _accumulate_quiz_slot(&$ids, &$names, $ids_csv, $names_arr)
+    {
+        $id_list = array_filter(array_map('intval', explode(',', (string) $ids_csv)));
+        foreach ($id_list as $idx => $id) {
+            if (!$id || in_array($id, $ids, true)) continue;
+            $ids[] = $id;
+            $names[] = isset($names_arr[$idx]) ? $names_arr[$idx] : ('#'.$id);
+        }
     }
 
     private function _build_require_lectures($item)
@@ -1158,8 +1277,9 @@ class Schedule_service {
         $rows = $this->ci->db->get()->result_array();
 
         $built = array();
-        foreach ($rows as $row) {
-            $built[] = $this->_build_lecture_session_row($row);
+        foreach ($rows as $idx => $row) {
+            $is_full = ((int) $row['is_quiz'] === 1 && (int) $row['is_half'] === 0 && $idx === 0);
+            $built[] = $this->_build_lecture_session_row($row, $is_full);
         }
 
         $summary = null;
@@ -1172,21 +1292,24 @@ class Schedule_service {
                 if ($b['is_pending']) $pending++;
                 else $done++;
             }
-            $visible = array();
-            $counter = 0;
-            foreach ($built as $b) {
-                $counter++;
-                if ($counter <= 5 || $b['is_pending']) $visible[] = $b;
-            }
-            usort($visible, function ($a, $b) {
+            usort($built, function ($a, $b) {
                 return strtotime($a['date']) - strtotime($b['date']);
             });
-            $sessions = $visible;
+            $sessions = $built;
+
+            $visible_count = 0;
+            $counter = 0;
+            $desc = array_reverse($built);
+            foreach ($desc as $b) {
+                $counter++;
+                if ($counter <= 5 || $b['is_pending']) $visible_count++;
+            }
+
             $summary = array(
                 'total_till_today' => $total,
                 'pending' => $pending,
                 'done' => $done,
-                'showing' => count($visible),
+                'showing' => $visible_count,
             );
         }
 
@@ -1464,7 +1587,7 @@ class Schedule_service {
         );
     }
 
-    private function _build_lecture_session_row($row)
+    private function _build_lecture_session_row($row, $is_full = false)
     {
         $lecture_id = (int) $row['lecture_id'];
         $date = $row['date'];
@@ -1549,7 +1672,8 @@ class Schedule_service {
             'is_today' => ($date === date('Y-m-d')),
             'is_quiz' => $is_quiz,
             'is_half' => $is_half,
-            'quiz_label' => $is_quiz ? ($is_half ? 'Half Book Test' : 'Quiz') : null,
+            'is_full' => $is_full ? 1 : 0,
+            'quiz_label' => $is_quiz ? ($is_full ? 'Full Book Test' : ($is_half ? 'Half Book Test' : 'Quiz')) : null,
             'topics' => $topics,
             'practicals' => $practicals,
             'attendance_count' => $attendance_count,
