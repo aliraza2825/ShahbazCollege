@@ -100,7 +100,7 @@ class Dashboardapi extends CI_Controller {
 		$page_size = (int) $this->input->get('page_size');
 		if ($page < 1) $page = 1;
 		if ($page_size < 1) $page_size = 25;
-		if ($page_size > 100) $page_size = 100;
+		if ($page_size > 5000) $page_size = 5000;
 		$this->_json(array(
 			'success' => true,
 			'data' => $this->service->fee_status_page($this->current_user, $kind, $campus_id, $page, $page_size),
