@@ -50,16 +50,16 @@ class Dashboard_service {
         return $rows;
     }
 
-    public function fee_status_page($user, $kind, $campus_id, $page, $page_size)
+    public function fee_status_page($user, $kind, $campus_id, $page, $page_size, $filters = array())
     {
         $kind = ($kind === 'contractor') ? 'contractor' : 'student';
         if ($kind === 'contractor') {
-            $total = $this->_count_contractor_fee_groups($campus_id, $user);
-            $ids = $this->_contractor_fee_page_ids($campus_id, $user, $page, $page_size);
+            $total = $this->_count_contractor_fee_groups($campus_id, $user, $filters);
+            $ids = $this->_contractor_fee_page_ids($campus_id, $user, $page, $page_size, $filters);
             $rows = $this->_load_contractor_fee_rows($ids);
         } else {
-            $total = $this->_count_student_fee_groups($campus_id, $user);
-            $ids = $this->_student_fee_page_ids($campus_id, $user, $page, $page_size);
+            $total = $this->_count_student_fee_groups($campus_id, $user, $filters);
+            $ids = $this->_student_fee_page_ids($campus_id, $user, $page, $page_size, $filters);
             $rows = $this->_load_student_fee_rows($ids);
         }
 
@@ -69,6 +69,7 @@ class Dashboard_service {
         return array(
             'kind' => $kind,
             'rows' => $rows,
+            'filters' => $this->_normalize_fee_filters($filters),
             'pagination' => array(
                 'page' => $page,
                 'page_size' => $page_size,
@@ -76,6 +77,54 @@ class Dashboard_service {
                 'total_pages' => $total_pages,
             ),
         );
+    }
+
+    private function _normalize_fee_filters($filters)
+    {
+        $clear_status = isset($filters['clear_status']) ? $filters['clear_status'] : '';
+        if (!in_array($clear_status, array('', 'all', 'clear', 'blocked'), true)) {
+            $clear_status = '';
+        }
+        if ($clear_status === 'all') $clear_status = '';
+
+        $date_field = (isset($filters['date_field']) && $filters['date_field'] === 'submit') ? 'submit' : 'paid';
+
+        return array(
+            'date_from' => isset($filters['date_from']) ? $filters['date_from'] : '',
+            'date_to' => isset($filters['date_to']) ? $filters['date_to'] : '',
+            'date_field' => $date_field,
+            'clear_status' => $clear_status,
+        );
+    }
+
+    private function _fee_filter_sql($filters)
+    {
+        $filters = $this->_normalize_fee_filters($filters);
+        $sql = '';
+
+        $date_col = ($filters['date_field'] === 'submit')
+            ? 'payments.actual_paid_date'
+            : 'payments.paid_date';
+
+        if ($filters['date_from'] !== '') {
+            $sql .= ' AND DATE('.$date_col.') >= DATE('.$this->ci->db->escape($filters['date_from']).')';
+        }
+        if ($filters['date_to'] !== '') {
+            $sql .= ' AND DATE('.$date_col.') <= DATE('.$this->ci->db->escape($filters['date_to']).')';
+        }
+
+        if ($filters['clear_status'] === 'blocked') {
+            $sql .= " AND LOWER(payments.fee_pay_through) = 'pay_pro'";
+        } elseif ($filters['clear_status'] === 'clear') {
+            $sql .= " AND (payments.fee_pay_through IS NULL OR LOWER(payments.fee_pay_through) != 'pay_pro')";
+        }
+
+        return $sql;
+    }
+
+    private function _is_paypro_payment($fee_pay_through)
+    {
+        return strtolower((string) $fee_pay_through) === 'pay_pro';
     }
 
     public function fee_status_detail($payment_id)
@@ -123,7 +172,7 @@ class Dashboard_service {
 
     // --- Student list ---
 
-    private function _student_fee_base_sql($campus_id, $user)
+    private function _student_fee_base_sql($campus_id, $user, $filters = array())
     {
         $sql = "
             FROM payments
@@ -139,6 +188,7 @@ class Dashboard_service {
         if ($campus_id !== null && $campus_id !== '') {
             $sql .= ' AND campuses.campus_id = '.(int) $campus_id;
         }
+        $sql .= $this->_fee_filter_sql($filters);
         return $sql;
     }
 
@@ -147,19 +197,19 @@ class Dashboard_service {
         return " GROUP BY CASE WHEN payments.merged_challan IS NOT NULL THEN payments.merged_challan ELSE payments.challan_no END, payments.paid_challans ";
     }
 
-    private function _count_student_fee_groups($campus_id, $user)
+    private function _count_student_fee_groups($campus_id, $user, $filters = array())
     {
-        $sql = 'SELECT COUNT(*) AS c FROM (SELECT 1 '.$this->_student_fee_base_sql($campus_id, $user).$this->_student_fee_group_by().') t';
+        $sql = 'SELECT COUNT(*) AS c FROM (SELECT 1 '.$this->_student_fee_base_sql($campus_id, $user, $filters).$this->_student_fee_group_by().') t';
         $row = $this->ci->db->query($sql)->row_array();
         return $row ? (int) $row['c'] : 0;
     }
 
-    private function _student_fee_page_ids($campus_id, $user, $page, $page_size)
+    private function _student_fee_page_ids($campus_id, $user, $page, $page_size, $filters = array())
     {
         $offset = ($page - 1) * $page_size;
         $sql = '
             SELECT MIN(payments.id) AS payment_id
-            '.$this->_student_fee_base_sql($campus_id, $user).'
+            '.$this->_student_fee_base_sql($campus_id, $user, $filters).'
             '.$this->_student_fee_group_by().'
             ORDER BY MAX(payments.paid_date) DESC
             LIMIT '.(int) $page_size.' OFFSET '.(int) $offset;
@@ -185,7 +235,7 @@ class Dashboard_service {
         $rows = $this->ci->db->get()->result_array();
         $out = array();
         foreach ($rows as $row) {
-            if (isset($row['fee_pay_through']) && $row['fee_pay_through'] === 'pay_pro') {
+            if ($this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '')) {
                 $can = array('can_clear' => false, 'reason' => 'PayPro payment — open details before clearing');
             } else {
                 $can = array('can_clear' => true, 'reason' => '');
@@ -213,7 +263,7 @@ class Dashboard_service {
 
     // --- Contractor list ---
 
-    private function _contractor_fee_base_sql($campus_id, $user)
+    private function _contractor_fee_base_sql($campus_id, $user, $filters = array())
     {
         $sql = "
             FROM payments
@@ -234,6 +284,7 @@ class Dashboard_service {
                 : array(0);
             $sql .= ' AND campuses.campus_id IN ('.implode(',', $ids).')';
         }
+        $sql .= $this->_fee_filter_sql($filters);
         return $sql;
     }
 
@@ -242,19 +293,19 @@ class Dashboard_service {
         return " GROUP BY CASE WHEN payments.merged_challan IS NOT NULL THEN payments.merged_challan ELSE payments.challan_no END ";
     }
 
-    private function _count_contractor_fee_groups($campus_id, $user)
+    private function _count_contractor_fee_groups($campus_id, $user, $filters = array())
     {
-        $sql = 'SELECT COUNT(*) AS c FROM (SELECT 1 '.$this->_contractor_fee_base_sql($campus_id, $user).$this->_contractor_fee_group_by().') t';
+        $sql = 'SELECT COUNT(*) AS c FROM (SELECT 1 '.$this->_contractor_fee_base_sql($campus_id, $user, $filters).$this->_contractor_fee_group_by().') t';
         $row = $this->ci->db->query($sql)->row_array();
         return $row ? (int) $row['c'] : 0;
     }
 
-    private function _contractor_fee_page_ids($campus_id, $user, $page, $page_size)
+    private function _contractor_fee_page_ids($campus_id, $user, $page, $page_size, $filters = array())
     {
         $offset = ($page - 1) * $page_size;
         $sql = '
             SELECT MIN(payments.id) AS payment_id
-            '.$this->_contractor_fee_base_sql($campus_id, $user).'
+            '.$this->_contractor_fee_base_sql($campus_id, $user, $filters).'
             '.$this->_contractor_fee_group_by().'
             ORDER BY MAX(payments.paid_date) ASC
             LIMIT '.(int) $page_size.' OFFSET '.(int) $offset;
@@ -296,8 +347,10 @@ class Dashboard_service {
                 'paid_date' => $row['paid_date'],
                 'amount' => $row['actual_amount'],
                 'fee_pay_through' => $row['fee_pay_through'],
-                'can_clear' => true,
-                'clear_block_reason' => '',
+                'can_clear' => !$this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : ''),
+                'clear_block_reason' => $this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '')
+                    ? 'PayPro payment — open details before clearing'
+                    : '',
             );
         }
         return $out;
@@ -516,7 +569,7 @@ class Dashboard_service {
         if (!empty($row['fine_application']) && (int) $row['paid'] === 1) {
             $links[] = array('label' => 'See Application', 'url' => base_url().'uploads/'.$row['fine_application']);
         }
-        if (isset($row['fee_pay_through']) && $row['fee_pay_through'] === 'pay_pro' && !empty($row['settlement_id'])) {
+        if ($this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '') && !empty($row['settlement_id'])) {
             $links[] = array('label' => 'PayPro Details', 'url' => site_url('excel_import/entries/'.$row['settlement_id']));
         }
         return $links;
@@ -524,7 +577,7 @@ class Dashboard_service {
 
     private function _can_clear_payment($row)
     {
-        if (isset($row['fee_pay_through']) && $row['fee_pay_through'] === 'pay_pro') {
+        if ($this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '')) {
             $tagged = $this->_paypro_tagged($row);
             if (!$tagged) {
                 return array('can_clear' => false, 'reason' => 'PayPro payment not tagged');
