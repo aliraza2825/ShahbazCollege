@@ -1604,9 +1604,11 @@ function getUserOnlineApplicationCampusIds()
     }
 
     $user_id = (int) $ci->session->userdata('user_id');
-    $access = $ci->db->select('online_admission_campus_ids')
-        ->get_where('access', array('user_id' => $user_id))
-        ->row_array();
+    // Raw query — do not use Active Record here; it wipes an in-progress parent query (Dashboards.php).
+    $access = $ci->db->query(
+        'SELECT online_admission_campus_ids FROM access WHERE user_id = ?',
+        array($user_id)
+    )->row_array();
 
     if (!empty($access['online_admission_campus_ids']) && is_string($access['online_admission_campus_ids'])) {
         $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', $access['online_admission_campus_ids'])))));
