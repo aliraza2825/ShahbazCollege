@@ -16,7 +16,7 @@ class Access_service {
         'product_request_approval_campuses', 'purchase_campuses', 'pos_campuses',
         'council_report_colleges', 'council_report_courses', 'test_engine_subject_ids',
         'assignment_subject_ids', 'fee_dues_campus_ids', 'fee_recovery_class_ids',
-        'cities', 'other_cities_access',
+        'cities', 'other_cities_access', 'online_admission_campus_ids',
     );
 
     private static $FORM_ARRAY_FIELDS = array(
@@ -128,8 +128,11 @@ class Access_service {
             return null;
         }
         $access = $this->ci->db->get_where('access', array('user_id' => $user_id))->row_array();
-        $onlineRows = $this->ci->db->get_where('online_application_access', array('user_id' => $user_id))->result_array();
-        $onlineCampusIds = array_values(array_unique(array_column($onlineRows, 'campus_id')));
+        $onlineCampusIds = array();
+        if (empty($access['online_admission_campus_ids'])) {
+            $onlineRows = $this->ci->db->get_where('online_application_access', array('user_id' => $user_id))->result_array();
+            $onlineCampusIds = array_values(array_unique(array_column($onlineRows, 'campus_id')));
+        }
 
         return array(
             'mode' => 'user',
@@ -181,9 +184,9 @@ class Access_service {
         if (!empty($values['loan_approval'])) {
             $values['loans'] = $values['loan_approval'];
         }
-        if (!empty($onlineCampusIds)) {
+        if (empty($values['online_admission_campus_ids']) && !empty($onlineCampusIds)) {
             $values['online_admission_campus_ids'] = array_map('strval', $onlineCampusIds);
-        } else {
+        } elseif (empty($values['online_admission_campus_ids'])) {
             $values['online_admission_campus_ids'] = array();
         }
         return $values;

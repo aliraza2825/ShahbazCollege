@@ -576,6 +576,13 @@ class Accesses extends CI_Model {
         {
             $fee_dues_campus_ids =  implode(",", $fee_dues_campus_ids);
         }
+
+        //ONLINE ADMISSION CAMPUSES
+        $online_admission_campus_ids = $this->input->post('online_admission_campus_ids');
+        if($online_admission_campus_ids!='')
+        {
+            $online_admission_campus_ids = implode(",", $online_admission_campus_ids);
+        }
         
         //FEE RECOVERY CLASSES ACCESS
         $fee_recovery_class_ids = $this->input->post('fee_recovery_class_ids');
@@ -989,6 +996,7 @@ class Accesses extends CI_Model {
         $this->db->set('session_students_mobile_report', $session_students_mobile_report);
 
         $this->db->set('fee_dues_campus_ids', $fee_dues_campus_ids);
+        $this->db->set('online_admission_campus_ids', $online_admission_campus_ids);
 
         $this->db->set('fee_recovery_class_ids', $fee_recovery_class_ids);
         $this->db->set('cities', $cities);
@@ -1420,6 +1428,12 @@ class Accesses extends CI_Model {
         {
             $fee_dues_campus_ids =  implode(",", $fee_dues_campus_ids);
         }
+        //ONLINE ADMISSION CAMPUSES
+        $online_admission_campus_ids = $this->input->post('online_admission_campus_ids');
+        if($online_admission_campus_ids!='')
+        {
+            $online_admission_campus_ids = implode(",", $online_admission_campus_ids);
+        }
         //FEE RECOVERY CLASSES ACCESS
         $fee_recovery_class_ids = $this->input->post('fee_recovery_class_ids');
         if($fee_recovery_class_ids!='')
@@ -1828,6 +1842,7 @@ class Accesses extends CI_Model {
         $this->db->set('campus_ids', $campus_ids);
 
         $this->db->set('fee_dues_campus_ids', $fee_dues_campus_ids);
+        $this->db->set('online_admission_campus_ids', $online_admission_campus_ids);
 
         $this->db->set('fee_recovery_class_ids', $fee_recovery_class_ids);
 

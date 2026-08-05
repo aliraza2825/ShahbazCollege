@@ -301,7 +301,11 @@ class Access extends CI_Controller {
 			}
 			
 			$data['online_applications'] = $this->db->get_where('online_application_access', array('user_id'=>$this->input->post('campus_user_id')))->result_array();
-			$data['online_admission_campus_ids'] = array_values(array_unique(array_column($data['online_applications'], 'campus_id')));
+			if (!empty($data['access_values'][0]['online_admission_campus_ids'])) {
+				$data['online_admission_campus_ids'] = array_values(array_filter(explode(',', $data['access_values'][0]['online_admission_campus_ids'])));
+			} else {
+				$data['online_admission_campus_ids'] = array_values(array_unique(array_column($data['online_applications'], 'campus_id')));
+			}
 			
 		}
 		
