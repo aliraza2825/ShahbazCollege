@@ -232,10 +232,21 @@ class Access_service {
             } else {
                 $label = null;
             }
-            if (preg_match('/name="([a-z0-9_]+)" value="1"[^>]*\/>\s*([^<]+)</i', $line, $m)) {
+            if (stripos($line, 'type="checkbox"') !== false && preg_match('/name="([a-z0-9_]+)"/i', $line, $m)) {
+                $labelText = $this->humanize_field($m[1]);
+                $closePos = strrpos($line, '/>');
+                if ($closePos !== false) {
+                    $tail = substr($line, $closePos + 2);
+                    if (preg_match('/^\s*(.*?)\s*<\/label>/s', $tail, $lm)) {
+                        $parsed = trim(strip_tags($lm[1]));
+                        if ($parsed !== '') {
+                            $labelText = $parsed;
+                        }
+                    }
+                }
                 $currentFields[] = array(
                     'name' => $m[1],
-                    'label' => trim(strip_tags($m[2])),
+                    'label' => $labelText,
                     'type' => 'checkbox',
                 );
                 continue;
