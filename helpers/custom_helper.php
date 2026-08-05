@@ -1603,9 +1603,17 @@ function getUserOnlineApplicationCampusIds()
         return null;
     }
 
-    // Use raw query so we do NOT reset / merge with an in-progress Active Record build
-    // (calling $ci->db->get() here was wiping FROM/SELECT of the parent query)
-    $user_id = (int)$ci->session->userdata('user_id');
+    $user_id = (int) $ci->session->userdata('user_id');
+    $access = $ci->db->select('online_admission_campus_ids')
+        ->get_where('access', array('user_id' => $user_id))
+        ->row_array();
+
+    if (!empty($access['online_admission_campus_ids']) && is_string($access['online_admission_campus_ids'])) {
+        $ids = array_values(array_unique(array_filter(array_map('intval', explode(',', $access['online_admission_campus_ids'])))));
+        return $ids;
+    }
+
+    // Legacy fallback until all rows are migrated to access.online_admission_campus_ids
     $access_rows = $ci->db->query(
         'SELECT campus_id FROM online_application_access WHERE user_id = ?',
         array($user_id)
@@ -1617,12 +1625,28 @@ function getUserOnlineApplicationCampusIds()
 
     $ids = array();
     foreach ($access_rows as $row) {
-        $id = (int)$row['campus_id'];
+        $id = (int) $row['campus_id'];
         if ($id > 0) {
             $ids[$id] = $id;
         }
     }
     return array_values($ids);
+}
+
+function userCanViewOnlineApplicationCampus($campus_id)
+{
+    $ci =& get_instance();
+
+    if ($ci->session->userdata('role') == 'Admin') {
+        return true;
+    }
+
+    $allowed = getUserOnlineApplicationCampusIds();
+    if ($allowed === null) {
+        return true;
+    }
+
+    return in_array((int) $campus_id, $allowed, true);
 }
 
 function dashboardNewApplications($campus_id)
@@ -1644,32 +1668,15 @@ function dashboardNewApplications($campus_id)
     }
     else
     {
+        $allowed = getUserOnlineApplicationCampusIds();
         $applications = $ci->db->get_where('apply_now',array('status'=>0,'clear_by_admin'=>0,'pending_status'=>NULL))->result_array();
         $total=0;
         foreach($applications as $application)
         {
             $application_campus_id = @$ci->db->get_where('campuses', array('website'=>str_replace('/','',str_replace('https://www.','',$application['website']))))->row()->campus_id;
 
-            $check_access = $ci->db->get_where('online_application_access',array('campus_id'=>$application_campus_id,'city'=>$application['city'],'user_id'=>$ci->session->userdata('user_id')))->result_array();
-
-            if(count($check_access)>0)
-            {
-                if($application_campus_id == $campus_id)
-                {
-                    $total++;
-                }
-            }
-            if(count($check_access)<1)
-            {
-
-                $second_check = $ci->db->get_where('online_application_access',array('campus_id'=>$application_campus_id,'city!='=>$application['city'],'all_cities'=>1,'user_id'=>$ci->session->userdata('user_id')))->result_array();
-                if(count($second_check)>0)
-                {
-                    if($application_campus_id == $campus_id)
-                    {
-                        $total++;
-                    }
-                }
+            if (userCanViewOnlineApplicationCampus($application_campus_id) && $application_campus_id == $campus_id) {
+                $total++;
             }
         }
         return $total;

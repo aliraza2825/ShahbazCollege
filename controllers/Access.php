@@ -300,11 +300,10 @@ class Access extends CI_Controller {
 				}
 			}
 			
-			$data['online_applications'] = $this->db->get_where('online_application_access', array('user_id'=>$this->input->post('campus_user_id')))->result_array();
 			if (!empty($data['access_values'][0]['online_admission_campus_ids'])) {
 				$data['online_admission_campus_ids'] = array_values(array_filter(explode(',', $data['access_values'][0]['online_admission_campus_ids'])));
 			} else {
-				$data['online_admission_campus_ids'] = array_values(array_unique(array_column($data['online_applications'], 'campus_id')));
+				$data['online_admission_campus_ids'] = array();
 			}
 			
 		}
@@ -619,29 +618,6 @@ class Access extends CI_Controller {
 		else
 		{
 			$this->accesses->addAccess();
-		}
-		
-		$online_admission_campus_ids = $this->input->post('online_admission_campus_ids');
-		$user_id = $this->input->post('user_id');
-		
-		if ($user_id) {
-			$this->db->where('user_id', $user_id);
-			$this->db->delete('online_application_access');
-
-			if (is_array($online_admission_campus_ids)) {
-				foreach ($online_admission_campus_ids as $campus_id) {
-					if ($campus_id == '') {
-						continue;
-					}
-
-					$this->db->insert('online_application_access', array(
-						'user_id' => $user_id,
-						'campus_id' => $campus_id,
-						'city' => '',
-						'all_cities' => 1
-					));
-				}
-			}
 		}
 		
 		$this->session->set_flashdata('message', 'Access has been granted successfully');

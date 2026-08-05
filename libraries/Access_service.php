@@ -128,11 +128,6 @@ class Access_service {
             return null;
         }
         $access = $this->ci->db->get_where('access', array('user_id' => $user_id))->row_array();
-        $onlineCampusIds = array();
-        if (empty($access['online_admission_campus_ids'])) {
-            $onlineRows = $this->ci->db->get_where('online_application_access', array('user_id' => $user_id))->result_array();
-            $onlineCampusIds = array_values(array_unique(array_column($onlineRows, 'campus_id')));
-        }
 
         return array(
             'mode' => 'user',
@@ -140,7 +135,7 @@ class Access_service {
                 'user_id' => $user_id,
                 'label' => trim($user['first_name'] . ' ' . $user['last_name']),
             ),
-            'values' => $this->normalize_values($access ? $access : array(), $onlineCampusIds),
+            'values' => $this->normalize_values($access ? $access : array()),
         );
     }
 
@@ -179,11 +174,14 @@ class Access_service {
                 $values[$formKey] = array_values(array_filter(explode(',', $values[$field]), 'strlen'));
             } elseif ($field === 'test_engine_subject_ids') {
                 $values['subject_ids'] = array();
+            } elseif ($field === 'online_admission_campus_ids') {
+                $values['online_admission_campus_ids'] = array();
             }
         }
         if (!empty($values['loan_approval'])) {
             $values['loans'] = $values['loan_approval'];
         }
+        // Legacy fallback: online_application_access table before column migration
         if (empty($values['online_admission_campus_ids']) && !empty($onlineCampusIds)) {
             $values['online_admission_campus_ids'] = array_map('strval', $onlineCampusIds);
         } elseif (empty($values['online_admission_campus_ids'])) {
@@ -352,26 +350,6 @@ class Access_service {
             $this->ci->accesses->updateAccess();
         } else {
             $this->ci->accesses->addAccess();
-        }
-
-        $user_id = isset($prepared['user_id']) ? (int) $prepared['user_id'] : 0;
-        $onlineIds = isset($prepared['online_admission_campus_ids']) && is_array($prepared['online_admission_campus_ids'])
-            ? $prepared['online_admission_campus_ids']
-            : array();
-
-        if ($user_id) {
-            $this->ci->db->where('user_id', $user_id)->delete('online_application_access');
-            foreach ($onlineIds as $campus_id) {
-                if ($campus_id === '' || $campus_id === null) {
-                    continue;
-                }
-                $this->ci->db->insert('online_application_access', array(
-                    'user_id' => $user_id,
-                    'campus_id' => $campus_id,
-                    'city' => '',
-                    'all_cities' => 1,
-                ));
-            }
         }
 
         return array('success' => true, 'message' => 'Access has been granted successfully');

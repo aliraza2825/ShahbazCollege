@@ -441,9 +441,6 @@ class Online_application_service {
         }
 
         $website = isset($row['website']) ? (string) $row['website'] : '';
-        $city = isset($row['city']) ? (string) $row['city'] : '';
-        $user_id = (int) $this->ci->session->userdata('user_id');
-
         $campus = $this->ci->db->get_where('campuses', array(
             'website' => str_replace('/', '', str_replace('https://www.', '', $website)),
         ))->row_array();
@@ -451,31 +448,7 @@ class Online_application_service {
             return false;
         }
 
-        $campus_id = (int) $campus['campus_id'];
-        $direct = $this->ci->db->get_where('online_application_access', array(
-            'campus_id' => $campus_id,
-            'city' => $city,
-            'user_id' => $user_id,
-        ))->result_array();
-        if (!empty($direct)) {
-            return true;
-        }
-
-        $cityRows = $this->ci->db->get_where('online_application_access', array(
-            'campus_id' => $campus_id,
-            'city' => $city,
-        ))->result_array();
-        if (!empty($cityRows)) {
-            return false;
-        }
-
-        $allCities = $this->ci->db->get_where('online_application_access', array(
-            'campus_id' => $campus_id,
-            'all_cities' => 1,
-            'user_id' => $user_id,
-        ))->result_array();
-
-        return !empty($allCities);
+        return userCanViewOnlineApplicationCampus((int) $campus['campus_id']);
     }
 
     public function add_comment($body, $user)
