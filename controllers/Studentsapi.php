@@ -2513,12 +2513,17 @@ class Studentsapi extends CI_Controller {
 				$this->db->insert('struckofdetails_students', array(
 					'student_id' => $student_id,
 					'process_count' => $process_count,
-					'from_no' => $from_no,
-					'to_no' => $to_no,
-					'amount' => $amount,
-					'proof_image' => '',
+					'contact_from_no' => $from_no,
+					'contact_to_no' => $to_no,
+					'reason' => $reason,
+					'detail' => $reason,
+					'created_by' => (int)$this->current_user['user_id'],
 					'status' => $immediate ? '1' : '0',
-					'updated_by' => $immediate ? $this->_actor_name() : '',
+					'proof_image' => '',
+					'post_receipt' => '',
+					'whatsapp_image' => '',
+					'sms_image' => '',
+					'recording' => '',
 				));
 			}
 
