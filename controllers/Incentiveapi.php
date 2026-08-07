@@ -658,6 +658,15 @@ class Incentiveapi extends CI_Controller {
 		);
 	}
 
+	private function _sum_payment_amounts($rows)
+	{
+		$total = 0;
+		foreach ($rows as $row) {
+			$total += isset($row['amount']) ? (float)$row['amount'] : 0;
+		}
+		return $total;
+	}
+
 	/** KPI formulas ported from application/views/recovery_management/check_recovery.php */
 	private function _recovery_kpi($d)
 	{
@@ -678,6 +687,13 @@ class Incentiveapi extends CI_Controller {
 
 		$paid_entries = count($d['paid_payments_students']) + count($d['paid_payments_contracts']);
 		$paid_entries -= count($d['unverified_paid_count_students']);
+
+		$paid_entries_amount = $this->_sum_payment_amounts($d['paid_payments_students'])
+			+ $this->_sum_payment_amounts($d['paid_payments_contracts'])
+			- $this->_sum_payment_amounts($d['unverified_paid_count_students']);
+		$unpaid_entries_amount = $this->_sum_payment_amounts($d['unpaid_payments_students'])
+			+ $this->_sum_payment_amounts($d['unpaid_payments_contracts'])
+			+ $this->_sum_payment_amounts($d['unpaid_payments_students_during_last_month']);
 
 		if ($total_entries > 0) {
 			$submitted_fee_percentage = round(($paid_entries / $total_entries) * 100, 2);
@@ -741,7 +757,9 @@ class Incentiveapi extends CI_Controller {
 			'shifted_entries' => $shifted_entries,
 			'delete_entries' => $delete_entries,
 			'paid_entries' => $paid_entries,
+			'paid_entries_amount' => $paid_entries_amount,
 			'unpaid_entries' => $unpaid_entries,
+			'unpaid_entries_amount' => $unpaid_entries_amount,
 			'unpaid_students' => $unpaid_students,
 			'paid_students' => $paid_students,
 			'unverified_paid_count' => count($d['unverified_paid_count_students']),
