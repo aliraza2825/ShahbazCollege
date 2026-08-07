@@ -495,6 +495,25 @@ class Accountsapi extends CI_Controller {
 		return ($open + $debit + $revAmt) - $credit - $expenseAmt;
 	}
 
+	/** True when assign_to already has a different active petty cash float. */
+	private function _user_has_active_petty_cash($assign_to, $exclude_id = 0)
+	{
+		$assign_to = (int)$assign_to;
+		$exclude_id = (int)$exclude_id;
+		if ($assign_to <= 0) {
+			return false;
+		}
+		$sql = 'SELECT id FROM petty_cash_college_wise WHERE assign_to = ? AND petty_status = 1';
+		$params = array($assign_to);
+		if ($exclude_id > 0) {
+			$sql .= ' AND id != ?';
+			$params[] = $exclude_id;
+		}
+		$sql .= ' LIMIT 1';
+		$row = $this->db->query($sql, $params)->row_array();
+		return !empty($row);
+	}
+
 	/** Legacy pettycash_statement.php detail text for petty_cash_history rows. */
 	private function _petty_history_detail($tran)
 	{
@@ -1617,6 +1636,13 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'campus_id and user_id required'), 422);
 		}
 
+		if ($this->_user_has_active_petty_cash($user_id)) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'This user already has an active petty cash account.',
+			), 422);
+		}
+
 		$now = date('Y-m-d H:i:s');
 		$given = date('Y-m-d') . ' 00:00:00';
 		$this->db->query(
@@ -1703,6 +1729,13 @@ class Accountsapi extends CI_Controller {
 					'remaining_amount' => $live,
 				), 422);
 			}
+		}
+
+		if ($petty_status === 1 && $this->_user_has_active_petty_cash($petty['assign_to'], $id)) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'This user already has an active petty cash account. Deactivate the existing one first.',
+			), 422);
 		}
 
 		$this->db->query(

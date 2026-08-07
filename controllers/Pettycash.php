@@ -74,6 +74,16 @@ class Pettycash extends CI_Controller {
 		$created_by = $this->session->userdata('user_id');
 		$opening_balance = $this->input->post('opening_balance');
 
+		$existing = $this->db->get_where('petty_cash_college_wise', array(
+			'assign_to' => $user,
+			'petty_status' => '1',
+		))->row_array();
+		if ($existing) {
+			$this->session->set_flashdata('error', 'This user already has an active petty cash account.');
+			redirect(site_url() . '/pettycash/index');
+			return;
+		}
+
 		$this->db->set('campus_id',$campus_id);
 		$this->db->set('recovery_from',$recovery_from);
 		$this->db->set('assign_to',$user);
@@ -415,6 +425,18 @@ class Pettycash extends CI_Controller {
 	public function account_active($status,$id)
     {
 
+		$petty = $this->db->get_where('petty_cash_college_wise', array('id' => $id))->row_array();
+		if ((string)$status === '1' && $petty) {
+			$other = $this->db->query(
+				'SELECT id FROM petty_cash_college_wise WHERE assign_to = ? AND petty_status = 1 AND id != ? LIMIT 1',
+				array((int)$petty['assign_to'], (int)$id)
+			)->row_array();
+			if ($other) {
+				$this->session->set_flashdata('error', 'This user already has an active petty cash account. Deactivate the existing one first.');
+				redirect(site_url() . '/pettycash/index');
+				return;
+			}
+		}
 
         $this->db->set('petty_status', $status );
         $this->db->where('id', $id);
