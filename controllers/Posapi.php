@@ -254,18 +254,46 @@ class Posapi extends CI_Controller {
 		return $user ? $user : null;
 	}
 
+	private function _is_admin($user = null)
+	{
+		$user = $user ? $user : $this->current_user;
+		return $user && isset($user['role']) && $user['role'] === 'Admin';
+	}
+
+	/** Login allowed for Admin, any access-table grant, or active staff (legacy login parity). */
+	private function _can_app_login($user)
+	{
+		if ($this->_is_admin($user)) {
+			return true;
+		}
+
+		$acc = $this->_pos_access_row($user);
+		if (!$acc) {
+			return true;
+		}
+
+		$skip = array('access_id', 'user_id', 'designation_id', 'created_at', 'updated_at', 'created_by', 'updated_by');
+		foreach ($acc as $key => $val) {
+			if (in_array($key, $skip, true)) {
+				continue;
+			}
+			if ($val === 1 || $val === '1') {
+				return true;
+			}
+			if (is_string($val) && trim($val) !== '' && trim($val) !== '0') {
+				return true;
+			}
+		}
+
+		return true;
+	}
+
 	private function _pos_access_row($user = null)
 	{
 		$user = $user ? $user : $this->current_user;
 		if (!$user) return null;
 		// CodeIgniter Access module (`access` table) — not React-side table
 		return $this->db->get_where('access', array('user_id' => $user['user_id']))->row_array();
-	}
-
-	private function _is_admin($user = null)
-	{
-		$user = $user ? $user : $this->current_user;
-		return $user && isset($user['role']) && $user['role'] === 'Admin';
 	}
 
 	/**
@@ -476,12 +504,9 @@ class Posapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Invalid username or password'), 401);
 		}
 
-		// Non-admin must have POS Access checkbox in CI Access module
-		if ($user['role'] !== 'Admin') {
-			$acc = $this->db->get_where('access', array('user_id' => $user['user_id']))->row_array();
-			if (!$acc || empty($acc['pos'])) {
-				$this->_json(array('success' => false, 'message' => 'No POS access. Ask admin to enable POS in Access.'), 403);
-			}
+		// Any active staff may log in (legacy parity). POS and other modules stay gated by permissions.
+		if (!$this->_can_app_login($user)) {
+			$this->_json(array('success' => false, 'message' => 'No system access. Ask admin to grant permissions in Access.'), 403);
 		}
 
 		$token = bin2hex(openssl_random_pseudo_bytes(32));

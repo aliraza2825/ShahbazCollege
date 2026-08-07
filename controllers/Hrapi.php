@@ -1919,6 +1919,22 @@ class Hrapi extends CI_Controller {
 			$password = md5($body['password']);
 		}
 
+		$allowed_roles = array('Teacher', 'Principal', 'Accountant', 'Guard', 'Admin');
+		if ($this->_is_admin()) {
+			$role = isset($body['role']) && trim((string)$body['role']) !== '' ? trim((string)$body['role']) : 'Teacher';
+			if (!in_array($role, $allowed_roles, true)) {
+				$role = 'Teacher';
+			}
+		} elseif ($id === 0) {
+			$role = 'Teacher';
+		} else {
+			$existing = $this->db->get_where('users', array('user_id' => $id))->row_array();
+			if (!$existing) {
+				$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+			}
+			$role = isset($existing['role']) ? $existing['role'] : 'Teacher';
+		}
+
 		$fields = array(
 			'campus_id' => isset($body['campus_id']) ? $body['campus_id'] : 0,
 			'staff_type_id' => isset($body['staff_type_id']) ? $body['staff_type_id'] : 0,
@@ -1944,7 +1960,7 @@ class Hrapi extends CI_Controller {
 			'emergency_no' => isset($body['emergency_no']) ? $body['emergency_no'] : '',
 			'note' => isset($body['note']) ? $body['note'] : '',
 			'username' => isset($body['username']) ? $body['username'] : '',
-			'role' => isset($body['role']) ? $body['role'] : '',
+			'role' => $role,
 			'type' => isset($body['type']) ? $body['type'] : 'regular',
 			'mobile' => isset($body['mobile']) ? $body['mobile'] : '',
 			'joining_date' => isset($body['joining_date']) && $body['joining_date'] !== '' ? $body['joining_date'] : date('Y-m-d'),
