@@ -20,7 +20,7 @@ class Posapi extends CI_Controller {
 		}
 
 		$method = $this->router->method;
-		$public = array('login', 'ping');
+		$public = array('login', 'ping', 'forgot_password', 'reset_password_check', 'reset_password');
 		if (!in_array($method, $public)) {
 			$this->current_user = $this->_auth_user();
 			if (!$this->current_user) {
@@ -527,6 +527,105 @@ class Posapi extends CI_Controller {
 			'expires_at' => $expires,
 			'user' => $this->_user_payload($user),
 		));
+	}
+
+	/** Legacy login/forgot_pass — email reset link to SPA /reset-password */
+	public function forgot_password()
+	{
+		$body = $this->_body();
+		$email = isset($body['email']) ? trim($body['email']) : '';
+		if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+			$this->_json(array('success' => false, 'message' => 'Valid email address is required'), 422);
+		}
+
+		$row = $this->db->get_where('users', array('email' => $email))->row_array();
+		if (!$row) {
+			$this->_json(array('success' => false, 'message' => 'Username or Email is Not Found!'), 404);
+		}
+
+		$user_id = (int)$row['user_id'];
+		$token = (string)$row['password'];
+		$reset_url = $this->_pos_app_reset_url($token, $user_id);
+
+		$to = $row['email'];
+		$subject = 'Password';
+		$txt = 'Click on this link to reset your password. ' . $reset_url;
+		$headers = "From: info@shahbazcollegeofpharmacy.edu.pk\r\n" .
+			"CC: xeroraja@gmail.com";
+
+		@mail($to, $subject, $txt, $headers);
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Reset password Link has been sent to your Registered Email Address',
+		));
+	}
+
+	/** Validate reset link token (legacy: md5 password hash + user_id). */
+	public function reset_password_check()
+	{
+		$token = trim((string)$this->input->get('token'));
+		$user_id = (int)$this->input->get('user_id');
+		if ($token === '' || $user_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'Invalid reset link'), 400);
+		}
+
+		$user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+		if (!$user || (string)$user['password'] !== $token) {
+			$this->_json(array('success' => false, 'message' => 'Invalid or expired reset link'), 404);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'user' => array(
+				'user_id' => (int)$user['user_id'],
+				'username' => $user['username'],
+				'first_name' => isset($user['first_name']) ? $user['first_name'] : '',
+				'last_name' => isset($user['last_name']) ? $user['last_name'] : '',
+			),
+		));
+	}
+
+	/** Set new password from email reset link. */
+	public function reset_password()
+	{
+		$body = $this->_body();
+		$token = isset($body['token']) ? trim((string)$body['token']) : '';
+		$user_id = isset($body['user_id']) ? (int)$body['user_id'] : 0;
+		$password = isset($body['password']) ? (string)$body['password'] : '';
+		$confirm = isset($body['password_confirm']) ? (string)$body['password_confirm'] : '';
+
+		if ($user_id <= 0 || $token === '') {
+			$this->_json(array('success' => false, 'message' => 'Invalid reset link'), 400);
+		}
+		if ($password === '') {
+			$this->_json(array('success' => false, 'message' => 'Password is required'), 422);
+		}
+		if ($password !== $confirm) {
+			$this->_json(array('success' => false, 'message' => 'Your password and retype password didn\'t match!'), 422);
+		}
+
+		$user = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+		if (!$user || (string)$user['password'] !== $token) {
+			$this->_json(array('success' => false, 'message' => 'Invalid or expired reset link'), 404);
+		}
+
+		$this->db->where('user_id', $user_id);
+		$this->db->update('users', array('password' => md5($password)));
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Your profile update successfully!',
+		));
+	}
+
+	private function _pos_app_reset_url($token, $user_id)
+	{
+		$base = getenv('POS_APP_URL');
+		if (!$base) {
+			$base = rtrim(str_replace('/index.php', '', site_url()), '/');
+		}
+		return rtrim($base, '/') . '/reset-password?token=' . rawurlencode($token) . '&user_id=' . (int)$user_id;
 	}
 
 	public function me()
