@@ -1178,6 +1178,31 @@ class Incentiveapi extends CI_Controller {
 		$this->db->group_by('contracts.contract_id');
 		$unpaid_payments_contracts = $this->db->get()->result_array();
 
+		$this->db->select('COALESCE(SUM(payments.amount), 0) AS total', false);
+		$this->db->from('payments');
+		$this->db->join('students', 'students.student_id=payments.student_id', 'INNER');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'INNER');
+		$this->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'INNER');
+		$this->db->join('courses', 'courses.course_id=students.course_id', 'INNER');
+		$this->db->where_in('courses.course_id', $course_ids);
+		$this->db->where_in('campuses.campus_id', $campus_ids);
+		$this->db->where(array('payments.dead_line<=' => $to_date, 'payments.paid' => 0, 'students.status' => 1));
+		$student_fee_amount_row = $this->db->get()->row_array();
+		$student_fee_amount = isset($student_fee_amount_row['total']) ? (float)$student_fee_amount_row['total'] : 0;
+
+		$this->db->select('COALESCE(SUM(payments.amount), 0) AS total', false);
+		$this->db->from('payments');
+		$this->db->join('contracts', 'contracts.contract_id=payments.contract_id', 'INNER');
+		$this->db->join('contractors', 'contractors.contractor_id=contracts.contractor_id', 'INNER');
+		$this->db->join('campuses', 'contracts.campus_id=campuses.campus_id', 'INNER');
+		$this->db->join('courses', 'courses.course_id=contracts.course_id', 'INNER');
+		$this->db->where_in('courses.course_id', $course_ids);
+		$this->db->where_in('campuses.campus_id', $campus_ids);
+		$this->db->where(array('payments.dead_line<=' => $to_date, 'payments.paid' => 0));
+		$contract_fee_amount_row = $this->db->get()->row_array();
+		$contract_fee_amount = isset($contract_fee_amount_row['total']) ? (float)$contract_fee_amount_row['total'] : 0;
+		$total_fee_amount = $student_fee_amount + $contract_fee_amount;
+
 		$all_fee_ids = array_merge(
 			array_column($unpaid_payments_students, 'fee_id'),
 			array_column($unpaid_payments_contracts, 'fee_id')
@@ -1265,6 +1290,7 @@ class Incentiveapi extends CI_Controller {
 			'fee_dues_students_count' => count($unpaid_payments_students),
 			'fee_dues_contractors_count' => count($unpaid_payments_contracts),
 			'total_fee_entries' => count($unpaid_payments_students) + count($unpaid_payments_contracts),
+			'total_fee_amount' => $total_fee_amount,
 			'counts' => $counts,
 			'pagination' => array(
 				'page' => $page,
