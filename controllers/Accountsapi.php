@@ -495,6 +495,66 @@ class Accountsapi extends CI_Controller {
 		return ($open + $debit + $revAmt) - $credit - $expenseAmt;
 	}
 
+	/** Legacy pettycash_statement.php detail text for petty_cash_history rows. */
+	private function _petty_history_detail($tran)
+	{
+		$text = '';
+		$dc = isset($tran['debit_credit']) ? $tran['debit_credit'] : '';
+
+		if ($dc === 'C' && !empty($tran['to_pettycash_id'])) {
+			$text = 'Sent to Petty cash account ';
+			$to = $this->db->query(
+				"SELECT users.first_name, users.last_name
+				 FROM petty_cash_college_wise
+				 INNER JOIN users ON users.user_id = petty_cash_college_wise.assign_to
+				 WHERE petty_cash_college_wise.id = ? LIMIT 1",
+				array((int)$tran['to_pettycash_id'])
+			)->row_array();
+			if ($to) {
+				$text .= trim($to['first_name'] . ' ' . $to['last_name']);
+			}
+		} elseif ($dc === 'C' && !empty($tran['to_account'])) {
+			$text = 'Sent to main account ';
+			$acc = $this->db->query(
+				'SELECT account_title, account_name FROM accounts WHERE id = ? LIMIT 1',
+				array((int)$tran['to_account'])
+			)->row_array();
+			if ($acc) {
+				$text .= trim($acc['account_title'] . ' ' . $acc['account_name']);
+			}
+		} elseif ($dc === 'D' && !empty($tran['from_pettycash_id'])) {
+			$text = 'Receive from Petty cash account ';
+			$from = $this->db->query(
+				"SELECT users.first_name, users.last_name
+				 FROM petty_cash_college_wise
+				 INNER JOIN users ON users.user_id = petty_cash_college_wise.assign_to
+				 WHERE petty_cash_college_wise.id = ? LIMIT 1",
+				array((int)$tran['from_pettycash_id'])
+			)->row_array();
+			if ($from) {
+				$text .= trim($from['first_name'] . ' ' . $from['last_name']);
+			}
+		} elseif ($dc === 'D' && !empty($tran['from_account'])) {
+			$text = 'Receive from main account ';
+			$acc = $this->db->query(
+				'SELECT account_title, account_name FROM accounts WHERE id = ? LIMIT 1',
+				array((int)$tran['from_account'])
+			)->row_array();
+			if ($acc) {
+				$text .= trim($acc['account_title'] . ' ' . $acc['account_name']);
+			}
+		} else {
+			$text = 'receive from';
+		}
+
+		$reason = isset($tran['reason']) ? trim((string)$tran['reason']) : '';
+		if ($reason !== '') {
+			$text .= ' - ' . $reason;
+		}
+
+		return $text;
+	}
+
 	private function _expense_head_name($category, $categories)
 	{
 		$current = $category;
@@ -1851,7 +1911,8 @@ class Accountsapi extends CI_Controller {
 		$trans = $this->db->query(
 			"SELECT id as trans_id, 'receive from' as detail, '0' as user_id, 'trans' as trans_type,
 					amount_given as amount, '' as expstatus, debit_credit, created_at,
-					proof_image as image, reason, transaction_by as trans_by
+					proof_image as image, reason, transaction_by as trans_by,
+					to_pettycash_id, to_account, from_pettycash_id, from_account
 			 FROM petty_cash_history
 			 WHERE transaction_pettycash_account = ?
 			   AND created_at >= ? AND created_at <= ?",
@@ -1860,7 +1921,9 @@ class Accountsapi extends CI_Controller {
 
 		$merged = array_merge($expenses, $trans, $reversals);
 		foreach ($merged as $key => $petty) {
-			if (!empty($petty['user_id']) && (string)$petty['user_id'] !== '0') {
+			if (isset($petty['trans_type']) && $petty['trans_type'] === 'trans') {
+				$merged[$key]['detail'] = $this->_petty_history_detail($petty);
+			} elseif (!empty($petty['user_id']) && (string)$petty['user_id'] !== '0') {
 				$userdata = $this->db->query(
 					'SELECT first_name, last_name FROM users WHERE user_id = ? LIMIT 1',
 					array((int)$petty['user_id'])
