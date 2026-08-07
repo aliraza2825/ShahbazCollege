@@ -619,13 +619,18 @@ class Posapi extends CI_Controller {
 		));
 	}
 
-	private function _pos_app_reset_url($token, $user_id)
+	private function _pos_app_base_url()
 	{
 		$base = getenv('POS_APP_URL');
-		if (!$base) {
-			$base = rtrim(str_replace('/index.php', '', site_url()), '/');
+		if ($base) {
+			return rtrim($base, '/');
 		}
-		return rtrim($base, '/') . '/reset-password?token=' . rawurlencode($token) . '&user_id=' . (int)$user_id;
+		return 'https://pos.shahbazcollegeofpharmacy.edu.pk';
+	}
+
+	private function _pos_app_reset_url($token, $user_id)
+	{
+		return $this->_pos_app_base_url() . '/reset-password?token=' . rawurlencode($token) . '&user_id=' . (int)$user_id;
 	}
 
 	public function me()

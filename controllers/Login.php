@@ -110,6 +110,19 @@ class Login extends CI_Controller {
 		echo site_url().'/dashboard';
 	}
 
+	/** Redirect /reset-password on CI host → modern POS SPA (fixes emailed links). */
+	public function pos_reset_redirect()
+	{
+		$token = $this->input->get('token');
+		$user_id = (int)$this->input->get('user_id');
+		$base = getenv('POS_APP_URL');
+		if (!$base) {
+			$base = 'https://pos.shahbazcollegeofpharmacy.edu.pk';
+		}
+		$url = rtrim($base, '/') . '/reset-password?token=' . rawurlencode((string)$token) . '&user_id=' . $user_id;
+		redirect($url);
+	}
+
     public function forgot_pass()
     {
         if(@$this->input->post('email'))
@@ -125,7 +138,9 @@ class Login extends CI_Controller {
                     /*Mail Code*/
                     $to = $user_email;
                     $subject = "Password";
-                    $txt = 'Click on this link to reset your password. ' . site_url() . '/login/reset_password/' . $pass . '/' . $user_id . '"';
+                    $pos_base = getenv('POS_APP_URL') ?: 'https://pos.shahbazcollegeofpharmacy.edu.pk';
+                    $reset_url = rtrim($pos_base, '/') . '/reset-password?token=' . rawurlencode($pass) . '&user_id=' . (int)$user_id;
+                    $txt = 'Click on this link to reset your password. ' . $reset_url;
                     $headers = "From: info@shahbazcollegeofpharmacy.edu.pk" . "\r\n" .
                         "CC: xeroraja@gmail.com";
 
