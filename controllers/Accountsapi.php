@@ -1489,7 +1489,7 @@ class Accountsapi extends CI_Controller {
 			$row['live_balance'] = $live;
 			$row['remaining_amount_db'] = (float)$row['remaining_amount'];
 			$row['remaining_amount'] = $live;
-			$row['require_amount'] = (float)$row['amount'] - (float)$row['remaining_amount_db'];
+			$row['require_amount'] = (float)$row['amount'] - $live;
 			$row['assign_to_name'] = trim(
 				(isset($row['first_name']) ? $row['first_name'] : '') . ' ' .
 				(isset($row['last_name']) ? $row['last_name'] : '')
