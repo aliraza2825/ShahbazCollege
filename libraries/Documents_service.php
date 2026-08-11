@@ -13,7 +13,14 @@ class Documents_service {
 
     public function can_manage($user)
     {
-        return $user && $user['role'] === 'Admin';
+        if (!$user) return false;
+        if ($user['role'] === 'Admin') return true;
+        $acc = $this->ci->db->get_where('access', array('user_id' => $user['user_id']))->row_array();
+        if (!$acc) return false;
+        return !empty($acc['documents_access'])
+            || !empty($acc['documents_diploma'])
+            || !empty($acc['documents_students'])
+            || !empty($acc['download_documents']);
     }
 
     public function meta()

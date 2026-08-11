@@ -33,7 +33,9 @@ class Hrapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Unauthorized'), 401);
 		}
 		if (!$this->_is_admin()) {
-			$this->_json(array('success' => false, 'message' => 'HR access required (Admin)'), 403);
+			if (!$this->_can_hr()) {
+				$this->_json(array('success' => false, 'message' => 'HR access required'), 403);
+			}
 		}
 		if (function_exists('ensure_staff_shift_schema')) {
 			ensure_staff_shift_schema();
@@ -96,6 +98,28 @@ class Hrapi extends CI_Controller {
 	private function _is_admin()
 	{
 		return isset($this->current_user['role']) && $this->current_user['role'] === 'Admin';
+	}
+
+	private function _access_row()
+	{
+		if (!$this->current_user) return null;
+		return $this->db->get_where('access', array('user_id' => $this->current_user['user_id']))->row_array();
+	}
+
+	private function _can_hr()
+	{
+		if ($this->_is_admin()) return true;
+		$row = $this->_access_row();
+		if (!$row) return false;
+		$keys = array(
+			'hr_sidebar', 'attendence_sidebar', 'leave_approval', 'holidays_sidebar',
+			'department_sidebar', 'designation_sidebar', 'staff_type_sidebar', 'staff_sidebar',
+			'salary', 'define_allownces', 'payroll_statutory_rules', 'payroll_income_tax_rules',
+		);
+		foreach ($keys as $k) {
+			if (!empty($row[$k])) return true;
+		}
+		return false;
 	}
 
 	private function _current_user_name()

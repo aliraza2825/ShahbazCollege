@@ -296,6 +296,110 @@ class Posapi extends CI_Controller {
 		return $this->db->get_where('access', array('user_id' => $user['user_id']))->row_array();
 	}
 
+	private function _any_access_flag($row, $keys)
+	{
+		if (!$row) return false;
+		foreach ($keys as $k) {
+			if (!empty($row[$k])) return true;
+		}
+		return false;
+	}
+
+	private function _user_has_incentive_portal($user)
+	{
+		if (!$user || empty($user['user_id'])) return false;
+		if ($this->_any_access_flag($this->_pos_access_row($user), array('recovery_portal', 'all_users_recovery'))) {
+			return true;
+		}
+		if (empty($user['designation_id'])) return false;
+		$desigs = array();
+		foreach (explode(',', (string)$user['designation_id']) as $id) {
+			$id = (int)trim($id);
+			if ($id > 0) $desigs[] = $id;
+		}
+		if (!count($desigs)) return false;
+		foreach ($desigs as $desig) {
+			$recovery = $this->db->query(
+				'SELECT recovery_management_id FROM recovery_management WHERE FIND_IN_SET(?, designation_id) LIMIT 1',
+				array($desig)
+			)->row_array();
+			if ($recovery) return true;
+			$admission = $this->db->query(
+				'SELECT incentive_id FROM admission_management_incentives WHERE FIND_IN_SET(?, designation_id) LIMIT 1',
+				array($desig)
+			)->row_array();
+			if ($admission) return true;
+		}
+		return false;
+	}
+
+	/** Legacy sidebar module visibility — keys match React MODULE_NAV ids. */
+	private function _module_permissions($user, $row, $is_admin)
+	{
+		$ids = array(
+			'dashboard', 'pos', 'students', 'online-applications', 'hr', 'classes',
+			'courses-management', 'course-sessions', 'schedule-management', 'papers-results',
+			'councils', 'reports', 'punjab-council', 'council-list', 'accounts', 'fees',
+			'expenses', 'tax', 'inventory', 'construction', 'incentive', 'complaints',
+			'chats', 'reminders', 'website', 'mobile-app', 'setup', 'access', 'campuses', 'documents',
+		);
+		if ($is_admin) {
+			$out = array();
+			foreach ($ids as $id) {
+				$out[$id] = true;
+			}
+			return $out;
+		}
+		if (!$row) $row = array();
+
+		$accounts_keys = array(
+			'accounts_sidebar', 'account_details', 'campus_petty_cash',
+			'chart_of_accounts', 'profit_distribution', 'advance_system',
+			'loan_approval_accounts', 'dailyclosing', 'dailybankclosing',
+			'closing_reconcile', 'misc_income', 'bank_reconciliation',
+			'how_to_use', 'view_campus_closings',
+		);
+		$hr_keys = array(
+			'hr_sidebar', 'attendence_sidebar', 'leave_approval', 'holidays_sidebar',
+			'department_sidebar', 'designation_sidebar', 'staff_type_sidebar', 'staff_sidebar',
+			'salary', 'define_allownces', 'payroll_statutory_rules', 'payroll_income_tax_rules',
+		);
+
+		return array(
+			'dashboard' => true,
+			'pos' => !empty($row['pos']),
+			'students' => $this->_any_access_flag($row, array('student_sidebar', 'student_add', 'student_all')),
+			'online-applications' => !empty($row['online_application_access']),
+			'hr' => $this->_any_access_flag($row, $hr_keys),
+			'classes' => $this->_any_access_flag($row, array('class_sidebar', 'class_add', 'class_all')),
+			'courses-management' => $this->_any_access_flag($row, array('course_management_access', 'test_engine_sidebar')),
+			'course-sessions' => false,
+			'schedule-management' => $this->_any_access_flag($row, array('schedule_management_sidebar', 'syllabus_sidebar', 'timetable_sidebar')),
+			'papers-results' => !empty($row['papers_results_sidebar']),
+			'councils' => !empty($row['council_report']),
+			'reports' => !empty($row['reports_sidebar']),
+			'punjab-council' => $this->_any_access_flag($row, array('punjab_pharmacy_council_access', 'next_council_admission_access')),
+			'council-list' => !empty($row['council_list_sidebar']),
+			'accounts' => $this->_any_access_flag($row, $accounts_keys),
+			'fees' => !empty($row['fee_due_sidebar']),
+			'expenses' => !empty($row['expense_sidebar']),
+			'tax' => false,
+			'inventory' => !empty($row['inventory']),
+			'construction' => $this->_any_access_flag($row, array('construction_sidebar', 'construction_site_expense', 'construction_projects')),
+			'incentive' => $this->_any_access_flag($row, array('recovery_portal', 'all_users_recovery'))
+				|| $this->_user_has_incentive_portal($user),
+			'complaints' => false,
+			'chats' => false,
+			'reminders' => !empty($row['reminders_sidebar']),
+			'website' => false,
+			'mobile-app' => false,
+			'setup' => !empty($row['sms']),
+			'access' => false,
+			'campuses' => !empty($row['campuses']),
+			'documents' => $this->_any_access_flag($row, array('documents_access', 'download_documents')),
+		);
+	}
+
 	/**
 	 * Resolved POS permissions from CI Access module
 	 */
@@ -348,7 +452,7 @@ class Posapi extends CI_Controller {
 			'can_manage_categories' => $is_admin || ($row && !empty($row['pos_manage_categories'])),
 			'can_manage_bundles' => $is_admin || ($row && !empty($row['pos_manage_bundles'])),
 			'can_view_history' => $is_admin || ($row && !empty($row['pos_view_history'])),
-			'can_manage_access' => $is_admin, // always via CI /access
+			'can_manage_access' => $is_admin,
 			'can_inventory' => $has_inventory,
 			'inventory_campus_ids' => $inventory_campus_ids,
 			'can_construction' => $is_admin
@@ -359,6 +463,7 @@ class Posapi extends CI_Controller {
 				)),
 			'can_verify_construction_expense' => $is_admin
 				|| ($row && !empty($row['construction_expense_verify'])),
+			'modules' => $this->_module_permissions($user, $row, $is_admin),
 		);
 	}
 
