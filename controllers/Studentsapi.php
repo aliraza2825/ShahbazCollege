@@ -221,7 +221,219 @@ class Studentsapi extends CI_Controller {
 			'remove_fine' => $this->_perm('remove_fine') || $this->_perm('fine_remove'),
 			'change_exam_no_in_payments' => $this->_perm('change_exam_no_in_payments'),
 			'discount_reversal' => $this->_perm('discount_reversal'),
+			'update_fee_submission' => $this->_perm('update_fee_submission'),
+			'delete_users_payment' => $this->_perm('delete_users_payment'),
 		);
+	}
+
+	private function _require_student_payment_edit()
+	{
+		if (!$this->_perm('student_payment_edit') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No payment edit permission'), 403);
+		}
+	}
+
+	private function _payment_can_edit_row($payment)
+	{
+		if (empty($payment['clear_by'])) {
+			return true;
+		}
+		if ($payment['fee_pay_through'] === 'pay_pro' && empty($payment['settlement_id'])) {
+			return true;
+		}
+		if ($payment['fee_pay_through'] !== 'pay_pro' && empty($payment['closing_id']) && (int)$payment['paid'] === 0) {
+			return true;
+		}
+		return false;
+	}
+
+	private function _payment_edit_pending_request($payment_id)
+	{
+		return $this->db->get_where('update_payment_requests', array(
+			'id' => (int)$payment_id,
+			'ok_by_admin' => 0,
+		))->result_array();
+	}
+
+	private function _payment_edit_fine_per_day($student_id, $payment)
+	{
+		$student = $this->db->get_where('students', array('student_id' => (int)$student_id))->row_array();
+		if ($student && !empty($student['plan_id'])) {
+			$plan = $this->db->get_where('fee_rules', array('fee_rule_id' => $student['plan_id']))->row_array();
+			if ($plan && isset($plan['payment_plan']) && $plan['payment_plan'] === '24 Installments') {
+				return 10;
+			}
+		}
+		if (isset($payment['payment_plan']) && $payment['payment_plan'] === '24 Installments') {
+			return 10;
+		}
+		return 50;
+	}
+
+	private function _payment_edit_summary($payment)
+	{
+		$fine_per_day = $this->_payment_edit_fine_per_day($payment['student_id'], $payment);
+		$fee_fine = 0;
+		if (!empty($payment['dead_line']) && !empty($payment['paid_date']) && $payment['paid_date'] !== '0000-00-00') {
+			$challan_date = date_create($payment['dead_line']);
+			$paid_date = date_create($payment['paid_date']);
+			if ($challan_date && $paid_date) {
+				$diff = date_diff($challan_date, $paid_date);
+				$difference = (int)$diff->format('%R%a');
+				if ($difference > 0) {
+					$fee_fine = $difference * $fine_per_day;
+				}
+			}
+		} elseif ((int)$payment['paid'] === 0 && !empty($payment['dead_line'])) {
+			$challan_date = date_create($payment['dead_line']);
+			$today_date = date_create(date('Y-m-d'));
+			if ($challan_date && $today_date) {
+				$diff = date_diff($challan_date, $today_date);
+				$difference = (int)$diff->format('%R%a');
+				if ($difference > 0) {
+					$fee_fine = $difference * $fine_per_day;
+				}
+			}
+		}
+		$amount = (float)(isset($payment['amount']) ? $payment['amount'] : 0);
+		$remaining = (float)(isset($payment['remaining_installment_amount']) ? $payment['remaining_installment_amount'] : 0);
+		$extra = (float)(isset($payment['extra_amount']) ? $payment['extra_amount'] : 0);
+		return array(
+			'fine_amount' => $fee_fine,
+			'payable_amount' => $amount + $remaining + $extra + $fee_fine,
+		);
+	}
+
+	private function _payment_edit_extend_bounds($payment)
+	{
+		$date1 = new DateTime($payment['dead_line']);
+		$date2 = new DateTime(date('Y-m-d'));
+		$interval = $date1->diff($date2);
+		if ($date2 > $date1) {
+			$start_offset = -$interval->days;
+		} else {
+			$start_offset = $interval->days;
+		}
+
+		$this->db->select('dead_line');
+		$this->db->from('payments');
+		$this->db->where('student_id', $payment['student_id']);
+		$this->db->order_by('dead_line', 'DESC');
+		$this->db->limit(1);
+		$last_installment = $this->db->get()->result_array();
+		$last_installment_date = count($last_installment) ? $last_installment[0]['dead_line'] : $payment['dead_line'];
+
+		$this->db->select('classes.maximum_fee_last_date');
+		$this->db->from('students');
+		$this->db->join('classes', 'students.class_id=classes.class_id', 'inner');
+		$this->db->where('students.student_id', $payment['student_id']);
+		$class_row = $this->db->get()->row_array();
+		$maximum_fee_last_date = $class_row ? $class_row['maximum_fee_last_date'] : $last_installment_date;
+
+		if (new DateTime($maximum_fee_last_date) > new DateTime($last_installment_date)) {
+			$date1 = new DateTime($last_installment_date);
+			$date1 = $date1->modify('+1 month');
+			$date1 = $date1->format('Y-m-d');
+			$date2 = new DateTime($maximum_fee_last_date);
+			if (new DateTime($date1) > new DateTime($last_installment_date)) {
+				$end_date = date('Y-m-d', strtotime($date1));
+			} else {
+				$end_date = date('Y-m-d', strtotime($date2->format('Y-m-d')));
+			}
+		} else {
+			$end_date = $maximum_fee_last_date;
+		}
+
+		$today = new DateTime(date('Y-m-d'));
+		$max_dt = new DateTime($end_date);
+		$end_offset = (int)$today->diff($max_dt)->days;
+
+		$min_dt = clone $today;
+		if ($start_offset >= 0) {
+			$min_dt->modify('+' . $start_offset . ' days');
+		} else {
+			$min_dt->modify($start_offset . ' days');
+		}
+		$max_dt2 = clone $today;
+		$max_dt2->modify('+' . $end_offset . ' days');
+
+		return array(
+			'current' => $payment['dead_line'],
+			'min_date' => $min_dt->format('Y-m-d'),
+			'max_date' => $max_dt2->format('Y-m-d'),
+		);
+	}
+
+	private function _payment_edit_delete_allowed($payment)
+	{
+		$this->db->select('*');
+		$this->db->from('payments');
+		$this->db->where(array(
+			'student_id' => $payment['student_id'],
+			'payment_comment' => 'College Fee',
+		));
+		$this->db->where('dead_line<', $payment['dead_line']);
+		$this->db->order_by('dead_line', 'DESC');
+		$this->db->limit(1);
+		$last_payment = $this->db->get()->row();
+		if (!$last_payment || empty($last_payment->dead_line)) {
+			return array('allowed' => true, 'reason' => null);
+		}
+
+		$date1 = new DateTime($last_payment->dead_line);
+		$date2 = new DateTime($payment['dead_line']);
+		$days = (int)$date1->diff($date2)->days;
+
+		$this->db->select('classes.maximum_difference_installments');
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'inner');
+		$this->db->where('students.student_id', $payment['student_id']);
+		$class_row = $this->db->get()->row_array();
+		$maximum_difference_installments = $class_row ? (int)$class_row['maximum_difference_installments'] : 0;
+
+		if ($days <= $maximum_difference_installments) {
+			return array('allowed' => true, 'reason' => null);
+		}
+		return array(
+			'allowed' => false,
+			'reason' => 'You cannot delete this transaction because this student has no transaction within the allowed installment gap.',
+		);
+	}
+
+	private function _insert_update_payment_request($payment_details, $overrides = array())
+	{
+		$row = array(
+			'id' => $payment_details['id'],
+			'amount' => $payment_details['amount'],
+			'challan_no' => $payment_details['challan_no'],
+			'dead_line' => $payment_details['dead_line'],
+			'old_dead_line' => $payment_details['dead_line'],
+			'scan_challan' => isset($payment_details['scan_challan']) ? $payment_details['scan_challan'] : '',
+			'fine_application' => isset($payment_details['fine_application']) ? $payment_details['fine_application'] : '',
+			'actual_amount' => $payment_details['actual_amount'],
+			'paid' => $payment_details['paid'],
+			'student_id' => $payment_details['student_id'],
+			'contractor_id' => $payment_details['contractor_id'],
+			'contract_id' => $payment_details['contract_id'],
+			'paid_date' => $payment_details['paid_date'],
+			'payment_plan' => $payment_details['payment_plan'],
+			'remaining_installment_amount' => $payment_details['remaining_installment_amount'],
+			'extra_amount' => $payment_details['extra_amount'],
+			'college_fee' => $payment_details['college_fee'],
+			'clear_college_fee' => $payment_details['clear_college_fee'],
+			'add_by' => $payment_details['add_by'],
+			'last_edit' => isset($this->current_user['name']) ? $this->current_user['name'] : 'POS',
+			'fee_pay_through' => isset($payment_details['fee_pay_through']) ? $payment_details['fee_pay_through'] : '',
+			'bank_details' => isset($payment_details['bank_details']) ? $payment_details['bank_details'] : '',
+			'tid_no' => isset($payment_details['tid_no']) ? $payment_details['tid_no'] : '',
+			'submitted_fee_campus_id' => isset($payment_details['submitted_fee_campus_id']) ? $payment_details['submitted_fee_campus_id'] : 0,
+			'book_no' => isset($payment_details['book_no']) ? $payment_details['book_no'] : '',
+			'receipt_no' => isset($payment_details['receipt_no']) ? $payment_details['receipt_no'] : '',
+		);
+		foreach ($overrides as $key => $value) {
+			$row[$key] = $value;
+		}
+		$this->db->insert('update_payment_requests', $row);
 	}
 
 	private function _require_student_payments()
@@ -3201,6 +3413,320 @@ class Studentsapi extends CI_Controller {
 		$this->db->where('id', $payment_id)->delete('payments');
 		$this->db->where('id', $payment_id)->delete('update_payment_requests');
 		$this->_json(array('success' => true, 'message' => 'Fee deleted'));
+	}
+
+	public function payments_edit($student_id = 0, $payment_id = 0)
+	{
+		$this->_require_student_payment_edit();
+		$student_id = (int)$student_id;
+		$payment_id = (int)$payment_id;
+		$row = $this->db->get_where('payments', array('id' => $payment_id, 'student_id' => $student_id))->row_array();
+		if (!$row) {
+			$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		}
+		if (!$this->_payment_can_edit_row($row)) {
+			$this->_json(array('success' => false, 'message' => 'This payment cannot be edited'), 403);
+		}
+
+		$students = $this->student->getSingleStudent($student_id);
+		$student = count($students) ? $students[0] : null;
+		$summary = $this->_payment_edit_summary($row);
+		$pending = $this->_payment_edit_pending_request($payment_id);
+		$is_paid = (int)$row['paid'] === 1;
+
+		$campus = null;
+		if (!empty($row['submitted_fee_campus_id'])) {
+			$campus = $this->db->get_where('campuses', array('campus_id' => $row['submitted_fee_campus_id']))->row_array();
+		}
+
+		$scan_url = null;
+		if (!empty($row['scan_challan'])) {
+			$online = isset($row['online_scan_challan']) ? $row['online_scan_challan'] : '';
+			$scan_url = $this->_upload_url($row['scan_challan'], $online);
+		}
+
+		$challan_image_url = null;
+		if ($is_paid && $row['fee_pay_through'] === 'college' && isset($row['fee_submit_type']) && $row['fee_submit_type'] === 'computer_challan') {
+			$challan_image_url = $this->_legacy_base() . '/students/print_college_challan/' . $payment_id;
+		} elseif ($scan_url) {
+			$challan_image_url = $scan_url;
+		}
+
+		$delete_check = array('allowed' => false, 'reason' => null);
+		if (!$is_paid && ($this->_perm('delete_users_payment') || $this->_is_admin())) {
+			$delete_check = $this->_payment_edit_delete_allowed($row);
+		}
+
+		$this->db->select('campuses.*');
+		$this->db->from('campus_rules');
+		$this->db->join('campuses', 'campuses.campus_id=campus_rules.campus_id', 'inner');
+		$this->db->where('campus_rules.college_fee', 1);
+		$campuses = $this->db->get()->result_array();
+		if (!count($campuses)) {
+			$campuses = $this->db->where('status', 1)->get('campuses')->result_array();
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student' => array(
+					'name' => $student ? trim($student['first_name'] . ' ' . $student['last_name']) : '',
+					'roll_no' => $student && isset($student['roll_no']) ? $student['roll_no'] : '',
+					'mobile' => $student && isset($student['mobile']) ? $student['mobile'] : '',
+					'emergency_no' => $student && isset($student['emergency_no']) ? $student['emergency_no'] : '',
+				),
+				'payment' => array(
+					'id' => (int)$row['id'],
+					'paid' => (int)$row['paid'],
+					'challan_no' => isset($row['paid']) && (int)$row['paid'] === 1 && !empty($row['paid_challans'])
+						? $row['paid_challans'] : $row['challan_no'],
+					'amount' => (float)$row['amount'],
+					'remaining_installment_amount' => (float)$row['remaining_installment_amount'],
+					'extra_amount' => (float)$row['extra_amount'],
+					'shifted_installment' => (float)(isset($row['shifted_installment']) ? $row['shifted_installment'] : 0),
+					'shifted_previous_fine' => (float)(isset($row['shifted_previous_fine']) ? $row['shifted_previous_fine'] : 0),
+					'removed_previous_fine' => (float)(isset($row['removed_previous_fine']) ? $row['removed_previous_fine'] : 0),
+					'shifted_fine' => (float)(isset($row['shifted_fine']) ? $row['shifted_fine'] : 0),
+					'removed_fine' => (float)(isset($row['removed_fine']) ? $row['removed_fine'] : 0),
+					'actual_amount' => (float)$row['actual_amount'],
+					'paid_date' => $row['paid_date'],
+					'dead_line' => $row['dead_line'],
+					'payment_comment' => $row['payment_comment'],
+					'fee_pay_through' => isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '',
+					'fee_submit_type' => isset($row['fee_submit_type']) ? $row['fee_submit_type'] : '',
+					'bank_details' => isset($row['bank_details']) ? $row['bank_details'] : '',
+					'tid_no' => isset($row['tid_no']) ? $row['tid_no'] : '',
+					'submitted_campus_name' => $campus ? $campus['campus_name'] : '',
+					'book_no' => isset($row['book_no']) ? $row['book_no'] : '',
+					'receipt_no' => isset($row['receipt_no']) ? $row['receipt_no'] : '',
+					'paid_by' => isset($row['paid_by']) ? $row['paid_by'] : '',
+					'challan_image_url' => $challan_image_url,
+				),
+				'summary' => $summary,
+				'pending_request' => count($pending) > 0,
+				'extend_deadline' => !$is_paid ? $this->_payment_edit_extend_bounds($row) : null,
+				'delete' => $delete_check,
+				'accounts' => $this->db->get_where('accounts', array('type' => '1'))->result_array(),
+				'campuses' => $campuses,
+				'permissions' => array(
+					'can_update_paid_date' => $is_paid,
+					'can_update_status' => $is_paid,
+					'can_update_challan_image' => $is_paid
+						&& $row['fee_pay_through'] !== 'college'
+						&& $row['fee_submit_type'] !== 'computer_challan',
+					'can_update_bank' => $is_paid
+						&& $row['fee_pay_through'] === 'bank'
+						&& ($this->_perm('update_fee_submission') || $this->_is_admin()),
+					'can_extend_deadline' => !$is_paid,
+					'can_delete' => !$is_paid && ($this->_perm('delete_users_payment') || $this->_is_admin()) && $delete_check['allowed'],
+				),
+			),
+		));
+	}
+
+	public function payments_edit_update($student_id = 0, $payment_id = 0)
+	{
+		$this->_require_student_payment_edit();
+		$student_id = (int)$student_id;
+		$payment_id = (int)$payment_id;
+		$row = $this->db->get_where('payments', array('id' => $payment_id, 'student_id' => $student_id))->row_array();
+		if (!$row) {
+			$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		}
+		if (!$this->_payment_can_edit_row($row)) {
+			$this->_json(array('success' => false, 'message' => 'This payment cannot be edited'), 403);
+		}
+		if (count($this->_payment_edit_pending_request($payment_id)) > 0) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'This challan request is already submitted. Clear the previous request first.',
+			), 422);
+		}
+
+		$action = $this->input->post('action');
+		if (!$action) {
+			$body = $this->_body();
+			$action = isset($body['action']) ? $body['action'] : '';
+		}
+		$reason = trim((string)$this->input->post('reason'));
+		if ($reason === '') {
+			$body = $this->_body();
+			$reason = isset($body['reason']) ? trim($body['reason']) : '';
+		}
+		if ($reason === '') {
+			$this->_json(array('success' => false, 'message' => 'Reason is required'), 422);
+		}
+
+		if ($action === 'paid_date') {
+			$paid_date = $this->input->post('paid_date');
+			if (!$paid_date) {
+				$body = $this->_body();
+				$paid_date = isset($body['paid_date']) ? $body['paid_date'] : '';
+			}
+			if (!$paid_date) {
+				$this->_json(array('success' => false, 'message' => 'paid_date required'), 422);
+			}
+			$this->db->set('paid_date', $paid_date);
+			$this->db->set('clear_college_fee', 0);
+			$this->db->set('clear_by', '');
+			$this->db->where('id', $payment_id);
+			$this->db->update('payments');
+			$this->_insert_update_payment_request($row, array(
+				'paid_date' => $paid_date,
+				'reason' => $reason,
+				'ok_by_admin' => 1,
+				'clear_by' => 'System',
+			));
+			$this->_json(array('success' => true, 'message' => 'Paid date updated'));
+		}
+
+		if ($action === 'payment_status') {
+			$this->_insert_update_payment_request($row, array(
+				'scan_challan' => '',
+				'fine_application' => '',
+				'actual_amount' => 0,
+				'paid' => 0,
+				'paid_date' => '0000-00-00',
+				'reason' => $reason,
+				'fee_pay_through' => '',
+				'bank_details' => '',
+				'tid_no' => '',
+				'submitted_fee_campus_id' => 0,
+				'book_no' => '',
+				'receipt_no' => '',
+			));
+			$this->_json(array('success' => true, 'message' => 'Payment status update submitted for approval'));
+		}
+
+		if ($action === 'payment_image') {
+			$this->load->helper('form');
+			$this->load->library('upload', array(
+				'upload_path' => 'uploads/',
+				'allowed_types' => 'gif|jpg|jpeg|png',
+			));
+			$scan_challan = '';
+			if ($this->upload->do_upload('new_scan_challan')) {
+				$upload_data = $this->upload->data();
+				if (!empty($upload_data['file_name'])) {
+					$scan_challan = $upload_data['file_name'];
+				}
+			}
+			if ($scan_challan === '') {
+				$this->_json(array('success' => false, 'message' => 'Challan image upload failed'), 422);
+			}
+			$this->db->set('scan_challan', $scan_challan);
+			$this->db->set('clear_college_fee', 0);
+			$this->db->set('clear_by', '');
+			$this->db->where('id', $payment_id);
+			$this->db->update('payments');
+			$this->_insert_update_payment_request($row, array(
+				'scan_challan' => $scan_challan,
+				'reason' => $reason,
+				'ok_by_admin' => 1,
+				'clear_by' => 'System',
+			));
+			$this->_json(array('success' => true, 'message' => 'Challan image updated'));
+		}
+
+		if ($action === 'payment_method') {
+			if (!$this->_perm('update_fee_submission') && !$this->_is_admin()) {
+				$this->_json(array('success' => false, 'message' => 'No bank update permission'), 403);
+			}
+			$bank_details = $this->input->post('bank_details');
+			$tid_no = $this->input->post('tid_no');
+			$paid_date = $this->input->post('paid_date');
+			if (!$bank_details || !$tid_no || !$paid_date) {
+				$body = $this->_body();
+				$bank_details = $bank_details ?: (isset($body['bank_details']) ? $body['bank_details'] : '');
+				$tid_no = $tid_no ?: (isset($body['tid_no']) ? $body['tid_no'] : '');
+				$paid_date = $paid_date ?: (isset($body['paid_date']) ? $body['paid_date'] : '');
+			}
+			$account = $this->db->get_where('accounts', array('account_name' => $bank_details))->row_array();
+			if (!$account) {
+				$this->_json(array('success' => false, 'message' => 'Bank account not found'), 404);
+			}
+			if (!empty($row['statement_id'])) {
+				$this->db->set('tagged_amount', 'tagged_amount -' . (float)$row['actual_amount'], false);
+				$this->db->where('id', $row['statement_id']);
+				$this->db->update('bank_reconciliation_statement');
+			}
+			$this->db->select('*');
+			$this->db->from('bank_reconciliation_statement');
+			$this->db->where(
+				'account_id = ' . (int)$account['id']
+				. ' and trans_date = ' . $this->db->escape($paid_date)
+				. ' and (description like ' . $this->db->escape('%' . $tid_no . '%')
+				. ' or reference_no like ' . $this->db->escape('%' . $tid_no . '%') . ')'
+				. ' and CAST(REPLACE(credit,",","") as SIGNED) >= ' . (float)$row['actual_amount'],
+				null,
+				false
+			);
+			$this->db->group_by('description');
+			$concile_details = $this->db->get()->result_array();
+			if (!count($concile_details)) {
+				$this->_json(array('success' => false, 'message' => 'TID not found in bank statement'), 422);
+			}
+			$this->db->set('bank_details', $bank_details);
+			$this->db->set('tid_no', $tid_no);
+			$this->db->set('statement_id', $concile_details[0]['id']);
+			$this->db->set('clear_college_fee', 0);
+			$this->db->set('paid_date', $paid_date);
+			$this->db->set('clear_by', '');
+			$this->db->where('id', $payment_id);
+			$this->db->update('payments');
+			$this->_json(array('success' => true, 'message' => 'Bank submission updated'));
+		}
+
+		if ($action === 'extend_date') {
+			$new_dead_line = $this->input->post('new_dead_line');
+			if (!$new_dead_line) {
+				$body = $this->_body();
+				$new_dead_line = isset($body['new_dead_line']) ? $body['new_dead_line'] : '';
+			}
+			if (!$new_dead_line) {
+				$this->_json(array('success' => false, 'message' => 'new_dead_line required'), 422);
+			}
+			$date1 = date_create($new_dead_line);
+			$date2 = date_create($row['dead_line']);
+			$diff = $date1 && $date2 ? date_diff($date1, $date2)->days : 999;
+			$already_requested = $this->db->get_where('update_payment_requests', array('id' => $payment_id))->result_array();
+			if ($diff < 32 && count($already_requested) < 1) {
+				$this->db->set('dead_line', $new_dead_line);
+				$this->db->set('clear_college_fee', 0);
+				$this->db->set('clear_by', '');
+				$this->db->where('id', $payment_id);
+				$this->db->update('payments');
+				$this->_insert_update_payment_request($row, array(
+					'dead_line' => $new_dead_line,
+					'reason' => $reason,
+					'ok_by_admin' => 1,
+					'clear_by' => 'System',
+				));
+				$this->_json(array('success' => true, 'message' => 'Deadline extended'));
+			}
+			$this->_insert_update_payment_request($row, array(
+				'dead_line' => $new_dead_line,
+				'reason' => $reason,
+			));
+			$this->_json(array('success' => true, 'message' => 'Deadline extension submitted for approval'));
+		}
+
+		if ($action === 'delete_payment') {
+			if (!$this->_perm('delete_users_payment') && !$this->_is_admin()) {
+				$this->_json(array('success' => false, 'message' => 'No delete permission'), 403);
+			}
+			$delete_check = $this->_payment_edit_delete_allowed($row);
+			if (!$delete_check['allowed']) {
+				$this->_json(array('success' => false, 'message' => $delete_check['reason']), 422);
+			}
+			$this->_insert_update_payment_request($row, array(
+				'reason' => $reason,
+				'del' => 1,
+			));
+			$this->_json(array('success' => true, 'message' => 'Delete request submitted'));
+		}
+
+		$this->_json(array('success' => false, 'message' => 'Unknown action'), 422);
 	}
 
 	public function payments_comment($student_id = 0)
