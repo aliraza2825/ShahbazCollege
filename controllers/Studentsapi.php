@@ -220,6 +220,7 @@ class Studentsapi extends CI_Controller {
 			'fine_remove' => $this->_perm('fine_remove') || $this->_perm('remove_fine'),
 			'remove_fine' => $this->_perm('remove_fine') || $this->_perm('fine_remove'),
 			'change_exam_no_in_payments' => $this->_perm('change_exam_no_in_payments'),
+			'discount_reversal' => $this->_perm('discount_reversal'),
 		);
 	}
 
@@ -3669,6 +3670,179 @@ class Studentsapi extends CI_Controller {
 	}
 
 	/** Rules & Regulation admission form — mirrors Students::admission_letter_print */
+	public function discount_details($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$student_id = (int) $student_id;
+		if ($student_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'student_id required'), 422);
+		}
+
+		$students = $this->student->getSingleStudent($student_id);
+		if (!count($students)) {
+			$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		}
+		$student = $students[0];
+
+		$discount_rows = $this->db->get_where('discounts_approval', array('student_id' => $student_id))->result_array();
+		$special_discounts = array();
+		foreach ($discount_rows as $row) {
+			$status = (int) (isset($row['status']) ? $row['status'] : 0);
+			$status_label = 'Pending';
+			if ($status === 1) $status_label = 'Approved';
+			elseif ($status === 2) $status_label = 'Rejected';
+			elseif ($status === 3) $status_label = 'Reversed';
+
+			$special_discounts[] = array(
+				'id' => (int) $row['id'],
+				'remaining_fee' => (float) (isset($row['remaining_fee']) ? $row['remaining_fee'] : 0),
+				'discount' => (float) (isset($row['discount']) ? $row['discount'] : 0),
+				'reason' => isset($row['reason']) ? $row['reason'] : '',
+				'created_by' => isset($row['created_by']) ? $row['created_by'] : '',
+				'application_url' => $this->_upload_url(
+					isset($row['application']) ? $row['application'] : '',
+					isset($row['application_online']) ? $row['application_online'] : ''
+				),
+				'status' => $status,
+				'status_label' => $status_label,
+				'can_reverse' => $status === 1 && ($this->_perm('discount_reversal') || $this->_is_admin()),
+			);
+		}
+
+		$specialdisc = 0;
+		$sd = $this->db->select('sum(discount) as special_disc', false)
+			->where('status', '1')
+			->where('student_id', $student_id)
+			->get('discounts_approval')
+			->row_array();
+		if ($sd && $sd['special_disc'] !== null) {
+			$specialdisc = (float) $sd['special_disc'];
+		}
+
+		$plan_total_fee = null;
+		if (!empty($student['plan_id'])) {
+			$plan = $this->db->get_where('fee_rules', array('fee_rule_id' => $student['plan_id']))->row_array();
+			if ($plan && isset($plan['total_fee'])) {
+				$plan_total_fee = (float) $plan['total_fee'];
+			}
+		}
+		if ($plan_total_fee === null) {
+			$course_fee = $this->db->get_where('fee_rules', array('course_id' => $student['course_id']))->row_array();
+			$plan_total_fee = ($course_fee && isset($course_fee['total_fee'])) ? (float) $course_fee['total_fee'] : 0;
+		}
+
+		$student_total_fee = (float) (isset($student['total_fee']) ? $student['total_fee'] : 0);
+		$admission_discount = null;
+		if ($plan_total_fee != ($student_total_fee + $specialdisc)) {
+			$admission_discount = array(
+				'amount' => ($plan_total_fee - $student_total_fee) + $specialdisc,
+				'can_reverse' => $this->_perm('discount_reversal') || $this->_is_admin(),
+			);
+		}
+
+		$removals = $this->db->get_where('discount_removals', array('student_id' => $student_id))->result_array();
+		$removal_rows = array();
+		foreach ($removals as $removal) {
+			$removal_rows[] = array(
+				'id' => (int) $removal['id'],
+				'amount' => (float) (isset($removal['amount']) ? $removal['amount'] : 0),
+				'type' => isset($removal['type']) ? $removal['type'] : '',
+				'comment' => isset($removal['comment']) ? $removal['comment'] : '',
+				'removed_by' => isset($removal['removed_by']) ? $removal['removed_by'] : '',
+				'created_at' => isset($removal['created_at']) ? $removal['created_at'] : '',
+			);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student_name' => trim($student['first_name'] . ' ' . $student['last_name']),
+				'roll_no' => isset($student['roll_no']) ? $student['roll_no'] : '',
+				'special_discounts' => $special_discounts,
+				'admission_discount' => $admission_discount,
+				'removals' => $removal_rows,
+				'can_view_details' => $this->_perm('student_payment_edit') || $this->_is_admin(),
+			),
+		));
+	}
+
+	public function discount_reverse_special($student_id = 0)
+	{
+		$this->_require_student_payments();
+		if (!$this->_perm('discount_reversal') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No discount reversal permission'), 403);
+		}
+
+		$student_id = (int) $student_id;
+		$rev_id = (int) $this->input->post('rev_id');
+		$rev_amount = (float) $this->input->post('rev_amount');
+		$comment = trim((string) $this->input->post('comment'));
+		if ($student_id <= 0 || $rev_id <= 0 || $rev_amount <= 0 || $comment === '') {
+			$this->_json(array('success' => false, 'message' => 'Invalid reversal request'), 422);
+		}
+
+		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$student) {
+			$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		}
+
+		$discount = $this->db->get_where('discounts_approval', array('id' => $rev_id, 'student_id' => $student_id))->row_array();
+		if (!$discount || (int) $discount['status'] !== 1) {
+			$this->_json(array('success' => false, 'message' => 'Approved discount not found'), 404);
+		}
+
+		$this->db->where('id', $rev_id);
+		$this->db->delete('discounts_approval');
+
+		$new_total = (float) $student['total_fee'] + $rev_amount;
+		$this->db->set('total_fee', $new_total);
+		$this->db->where('student_id', $student_id);
+		$this->db->update('students');
+
+		$this->db->set('amount', $rev_amount);
+		$this->db->set('student_id', $student_id);
+		$this->db->set('type', 'Special Discount');
+		$this->db->set('comment', $comment);
+		$this->db->set('removed_by', isset($this->current_user['name']) ? $this->current_user['name'] : 'POS');
+		$this->db->insert('discount_removals');
+
+		$this->_json(array('success' => true, 'message' => 'Special discount reversed'));
+	}
+
+	public function discount_reverse_admission($student_id = 0)
+	{
+		$this->_require_student_payments();
+		if (!$this->_perm('discount_reversal') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No discount reversal permission'), 403);
+		}
+
+		$student_id = (int) $student_id;
+		$rev_amount = (float) $this->input->post('rev_amount');
+		$comment = trim((string) $this->input->post('comment'));
+		if ($student_id <= 0 || $rev_amount <= 0 || $comment === '') {
+			$this->_json(array('success' => false, 'message' => 'Invalid reversal request'), 422);
+		}
+
+		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$student) {
+			$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		}
+
+		$new_total = (float) $student['total_fee'] + $rev_amount;
+		$this->db->set('total_fee', $new_total);
+		$this->db->where('student_id', $student_id);
+		$this->db->update('students');
+
+		$this->db->set('amount', $rev_amount);
+		$this->db->set('student_id', $student_id);
+		$this->db->set('type', 'Disount on Admission');
+		$this->db->set('comment', $comment);
+		$this->db->set('removed_by', isset($this->current_user['name']) ? $this->current_user['name'] : 'POS');
+		$this->db->insert('discount_removals');
+
+		$this->_json(array('success' => true, 'message' => 'Admission discount reversed'));
+	}
+
 	public function admission_rules_form($student_id = 0)
 	{
 		$this->_require_student_payments();
