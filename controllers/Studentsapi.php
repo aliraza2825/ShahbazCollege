@@ -2204,6 +2204,13 @@ class Studentsapi extends CI_Controller {
 			$campus = $this->db->get_where('campuses', array('campus_id' => $payment['submitted_fee_campus_id']))->row_array();
 		}
 		$payment['submitted_campus_name'] = $campus ? $campus['campus_name'] : '';
+		$payment['bank_statement_no'] = '';
+		if (!empty($payment['statement_id'])) {
+			$stmt = $this->db->get_where('bank_reconciliation_statement', array('id' => $payment['statement_id']))->row_array();
+			if ($stmt && isset($stmt['statement_no'])) {
+				$payment['bank_statement_no'] = $stmt['statement_no'];
+			}
+		}
 		$payment['scan_challan_url'] = null;
 		$payment['fine_application_url'] = null;
 		$payment['paypro_bill_url'] = null;
