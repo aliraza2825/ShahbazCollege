@@ -3416,6 +3416,163 @@ class Studentsapi extends CI_Controller {
 		$this->_json(array('success' => true, 'message' => 'Reversal completed'));
 	}
 
+	public function payments_challan_detail($student_id = 0, $payment_id = 0)
+	{
+		$this->_require_student_payments();
+		$detail = $this->_build_challan_detail((int) $student_id, (int) $payment_id);
+		if (!$detail) {
+			$this->_json(array('success' => false, 'message' => 'Challan not found'), 404);
+		}
+		$this->_json(array('success' => true, 'data' => $detail));
+	}
+
+	private function _build_challan_detail($student_id, $payment_id)
+	{
+		$student_id = (int) $student_id;
+		$payment_id = (int) $payment_id;
+		if ($student_id <= 0 || $payment_id <= 0) {
+			return null;
+		}
+
+		$this->load->model('student');
+		$rows = $this->student->challan($payment_id);
+		if (!count($rows)) {
+			return null;
+		}
+		$c = $rows[0];
+		if ((int) $c['student_id'] !== $student_id) {
+			return null;
+		}
+
+		$campus = $this->db->get_where('campuses', array('campus_id' => $c['campus_id']))->row_array();
+		$logo_url = null;
+		if ($campus && !empty($campus['logo'])) {
+			$logo_url = $this->_asset_base() . '/uploads/' . rawurlencode($campus['logo']);
+		}
+
+		$photo_url = null;
+		$photo = $this->db->get_where('student_documents', array(
+			'student_id' => $student_id,
+			'type' => 'Photo',
+		))->row_array();
+		if ($photo) {
+			$photo_url = $this->_doc_url($photo);
+			if ($photo_url) {
+				$photo_url = $this->_cdn_url($photo_url);
+			}
+		}
+
+		$installment_parts = array();
+		$totalpayable = (float) $c['amount'];
+		if (!empty($c['merged_challan']) && !empty($c['paid_challans'])) {
+			$challan_ids = array_filter(array_map('trim', explode(',', rtrim($c['paid_challans'], ', '))));
+			if (count($challan_ids)) {
+				$this->db->where_in('challan_no', $challan_ids);
+				$this->db->where('student_id', $student_id);
+				$merged = $this->db->get('payments')->result_array();
+				$totalpayable = 0;
+				foreach ($merged as $m) {
+					$installment_parts[] = array(
+						'challan_no' => $m['challan_no'],
+						'amount' => (float) $m['amount'],
+						'comment' => isset($m['payment_comment']) ? $m['payment_comment'] : '',
+					);
+					$totalpayable += (float) $m['amount'];
+				}
+			}
+		}
+
+		$difference = 0;
+		$fee_fine = 0;
+		$challan_date = !empty($c['dead_line']) ? date_create($c['dead_line']) : false;
+		$paid_date = !empty($c['paid_date']) ? date_create($c['paid_date']) : false;
+		if ($challan_date && $paid_date) {
+			$diff = date_diff($challan_date, $paid_date);
+			$difference = (int) $diff->format('%R%a');
+			if ($difference > 0) {
+				$per_day = (isset($c['payment_plan']) && $c['payment_plan'] === '24 Installments') ? 10 : 50;
+				$fee_fine = $difference * $per_day;
+			}
+		}
+
+		if ((float) $c['fine_amount'] > 0) {
+			$fine_amount = (float) $c['fine_amount'];
+		} elseif ((float) $c['removed_fine'] > 0) {
+			$fine_amount = (float) $c['removed_fine'];
+		} else {
+			$fine_amount = (float) $fee_fine;
+		}
+
+		if (!empty($c['paid_challans'])) {
+			$net_payable = $totalpayable
+				+ (float) $c['remaining_installment_amount']
+				+ (float) $c['extra_amount']
+				+ $fine_amount;
+		} else {
+			$net_payable = (float) $c['amount']
+				+ (float) $c['remaining_installment_amount']
+				+ (float) $c['extra_amount']
+				+ $fine_amount;
+		}
+
+		$fine_per_day = (isset($c['payment_plan']) && $c['payment_plan'] === '24 Installments') ? 10 : 50;
+		$challan_no = !empty($c['paid_challans']) ? rtrim($c['paid_challans'], ', ') : $c['challan_no'];
+
+		$installment_display = (string) (float) $c['amount'];
+		if (count($installment_parts)) {
+			$parts = array();
+			foreach ($installment_parts as $p) {
+				$parts[] = (string) $p['amount'];
+			}
+			$installment_display = implode(' + ', $parts);
+		}
+
+		$qr_data = urlencode($this->_legacy_base() . '/students/print_college_challan/' . $payment_id . '/print');
+		$qr_url = 'https://qrcode.tec-it.com/API/QRCode?data=' . $qr_data . '&choe=UTF-8';
+
+		return array(
+			'payment_id' => $payment_id,
+			'challan_no' => (string) $challan_no,
+			'campus_name' => isset($c['campus_name']) ? $c['campus_name'] : '',
+			'campus_address' => isset($c['address']) ? $c['address'] : '',
+			'logo_url' => $logo_url,
+			'student_photo_url' => $photo_url,
+			'student_name' => trim($c['first_name'] . ' ' . $c['last_name']),
+			'roll_no' => isset($c['roll_no']) ? $c['roll_no'] : '',
+			'cnic' => isset($c['cnic']) ? $c['cnic'] : '',
+			'class_name' => isset($c['class_name']) ? $c['class_name'] : '',
+			'father_name' => isset($c['father_name']) ? $c['father_name'] : '',
+			'dead_line' => $c['dead_line'],
+			'paid_date' => $c['paid_date'],
+			'updated_at' => isset($c['updated_at']) ? $c['updated_at'] : '',
+			'late_days' => $difference > 0 ? $difference : 0,
+			'payment_comment' => isset($c['payment_comment']) ? $c['payment_comment'] : '',
+			'paid_by' => isset($c['paid_by']) ? $c['paid_by'] : '',
+			'clear_by' => isset($c['clear_by']) ? $c['clear_by'] : '',
+			'fee_pay_through' => isset($c['fee_pay_through']) ? $c['fee_pay_through'] : '',
+			'fee_submit_type' => isset($c['fee_submit_type']) ? $c['fee_submit_type'] : '',
+			'receipt_no' => isset($c['receipt_no']) ? $c['receipt_no'] : '',
+			'book_no' => isset($c['book_no']) ? $c['book_no'] : '',
+			'tid_no' => isset($c['tid_no']) ? $c['tid_no'] : '',
+			'installment_amount' => $totalpayable,
+			'installment_parts' => $installment_parts,
+			'installment_display' => $installment_display,
+			'remaining_installment_amount' => (float) $c['remaining_installment_amount'],
+			'extra_amount' => (float) $c['extra_amount'],
+			'fine_amount' => $fine_amount,
+			'net_payable' => $net_payable,
+			'shifted_fine' => (float) (isset($c['shifted_fine']) ? $c['shifted_fine'] : 0),
+			'discount' => (float) (isset($c['discount']) ? $c['discount'] : 0),
+			'removed_fine' => (float) (isset($c['removed_fine']) ? $c['removed_fine'] : 0),
+			'actual_amount' => (float) $c['actual_amount'],
+			'payment_plan' => isset($c['payment_plan']) ? $c['payment_plan'] : '',
+			'fine_per_day' => $fine_per_day,
+			'qr_url' => $qr_url,
+			'stamp_url' => $this->_asset_base() . '/images/paid-stamp.png',
+			'copy_label' => 'Fee Challan - Student Copy',
+		);
+	}
+
 	public function payments_print_challan($student_id = 0)
 	{
 		$ids = $this->input->get('ids');
