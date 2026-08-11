@@ -159,9 +159,25 @@ class Studentsapi extends CI_Controller {
 		return $ids;
 	}
 
-	private function _asset_base()
+	private function _cdn_url($url)
 	{
-		return rtrim(base_url(), '/');
+		if (!$url) {
+			return null;
+		}
+		$bucket = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+		$cloudfront = 'https://d10iw6eujrfvyr.cloudfront.net';
+		return str_replace($bucket, $cloudfront, $url);
+	}
+
+	private function _upload_url($local, $online)
+	{
+		if (!empty($online)) {
+			return $this->_cdn_url($online);
+		}
+		if (!empty($local)) {
+			return $this->_asset_base() . '/uploads/' . rawurlencode($local);
+		}
+		return null;
 	}
 
 	private function _legacy_base()
@@ -2183,6 +2199,57 @@ class Studentsapi extends CI_Controller {
 			$campus = $this->db->get_where('campuses', array('campus_id' => $payment['submitted_fee_campus_id']))->row_array();
 		}
 		$payment['submitted_campus_name'] = $campus ? $campus['campus_name'] : '';
+		$payment['scan_challan_url'] = null;
+		$payment['fine_application_url'] = null;
+		$payment['paypro_bill_url'] = null;
+		$payment['legacy_challan_url'] = null;
+		$payment['can_edit_payment'] = false;
+
+		if (!empty($payment['scan_challan'])) {
+			$online = isset($payment['online_scan_challan']) ? $payment['online_scan_challan'] : '';
+			if (!empty($payment['merged_challan'])) {
+				$this->db->order_by('id', 'DESC');
+				$merged = $this->db->get_where('payments', array('merged_challan' => $payment['merged_challan']))->row_array();
+				if ($merged && !empty($merged['online_scan_challan'])) {
+					$online = $merged['online_scan_challan'];
+				}
+			}
+			$payment['scan_challan_url'] = $this->_upload_url($payment['scan_challan'], $online);
+		}
+
+		if (!empty($payment['fine_application']) && (int)$payment['paid'] === 1) {
+			$online = isset($payment['online_fine_application']) ? $payment['online_fine_application'] : '';
+			$payment['fine_application_url'] = $this->_upload_url($payment['fine_application'], $online);
+		}
+
+		if ($payment['fee_pay_through'] === 'pay_pro' && (int)$payment['paid'] === 1 && !empty($payment['paid_challans'])) {
+			$this->db->from('students_payments');
+			$this->db->where('transaction_status', 'PAID');
+			$this->db->like('challan_ids', $payment['paid_challans']);
+			$paypro = $this->db->get()->row_array();
+			if ($paypro && !empty($paypro['bill_url'])) {
+				$payment['paypro_bill_url'] = $paypro['bill_url'];
+			}
+		}
+
+		if ((int)$payment['paid'] === 1
+			&& $payment['fee_pay_through'] === 'college'
+			&& isset($payment['fee_submit_type'])
+			&& $payment['fee_submit_type'] === 'computer_challan') {
+			$payment['legacy_challan_url'] = $this->_legacy_base() . '/students/print_college_challan/' . (int)$payment['id'];
+		}
+
+		$can_edit = false;
+		if (empty($payment['clear_by'])
+			|| ($payment['fee_pay_through'] === 'pay_pro' && empty($payment['settlement_id']))
+			|| ($payment['fee_pay_through'] !== 'pay_pro' && empty($payment['closing_id']) && (int)$payment['paid'] === 0)) {
+			$can_edit = true;
+		}
+		$payment['can_edit_payment'] = $can_edit && ($this->_perm('student_payment_edit') || $this->_is_admin());
+		$payment['legacy_edit_url'] = $can_edit && ($this->_perm('student_payment_edit') || $this->_is_admin())
+			? $this->_legacy_base() . '/students/edit_payment/' . (int)$payment['id'] . '/' . ((int)$index + 1)
+			: null;
+
 		return $payment;
 	}
 
