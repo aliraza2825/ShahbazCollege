@@ -755,10 +755,16 @@ class Posapi extends CI_Controller {
 		));
 	}
 
+	private function _header_flag($is_admin, $access, $key)
+	{
+		return $is_admin || ($access && !empty($access[$key]));
+	}
+
 	private function _header_meta($user)
 	{
 		$is_admin = $this->_is_admin($user);
 		$access = $this->_pos_access_row($user);
+		$accounts_bundle = $is_admin || ($access && !empty($access['accounts_sidebar']));
 
 		$designations = array();
 		if (!empty($user['designation_id'])) {
@@ -791,10 +797,51 @@ class Posapi extends CI_Controller {
 		return array(
 			'designations' => $designations,
 			'petty_cash' => $petty_cash,
-			'show_accounts_menu' => $is_admin || ($access && !empty($access['accounts_sidebar'])),
+			'show_accounts_menu' => $accounts_bundle
+				|| $this->_header_flag($is_admin, $access, 'account_details')
+				|| $this->_header_flag($is_admin, $access, 'profit_distribution')
+				|| $this->_header_flag($is_admin, $access, 'chart_of_accounts')
+				|| $this->_header_flag($is_admin, $access, 'campus_petty_cash')
+				|| $this->_header_flag($is_admin, $access, 'advance_system')
+				|| $this->_header_flag($is_admin, $access, 'loan_approval_accounts')
+				|| $this->_header_flag($is_admin, $access, 'dailyclosing')
+				|| $this->_header_flag($is_admin, $access, 'closing_reconcile')
+				|| $this->_header_flag($is_admin, $access, 'bank_reconciliation'),
+			'accounts' => array(
+				'account_details' => $accounts_bundle || $this->_header_flag($is_admin, $access, 'account_details'),
+				'profit_distribution' => $accounts_bundle || $this->_header_flag($is_admin, $access, 'profit_distribution'),
+				'chart_of_accounts' => $accounts_bundle || $this->_header_flag($is_admin, $access, 'chart_of_accounts'),
+				'campus_petty_cash' => $accounts_bundle || $this->_header_flag($is_admin, $access, 'campus_petty_cash'),
+				'advance_system' => $accounts_bundle || $this->_header_flag($is_admin, $access, 'advance_system'),
+				'loan_approval_accounts' => $this->_header_flag($is_admin, $access, 'loan_approval_accounts'),
+				'dailyclosing' => $this->_header_flag($is_admin, $access, 'dailyclosing'),
+				'closing_reconcile' => $this->_header_flag($is_admin, $access, 'closing_reconcile'),
+				'bank_reconciliation' => $this->_header_flag($is_admin, $access, 'bank_reconciliation'),
+				'paypro_settlements' => $this->_header_flag($is_admin, $access, 'bank_reconciliation'),
+				'paypro_untagged' => $this->_header_flag($is_admin, $access, 'bank_reconciliation'),
+				'day_closing_report' => $this->_header_flag($is_admin, $access, 'bank_reconciliation'),
+			),
+			'show_students_menu' => $is_admin || $this->_any_access_flag($access, array('student_sidebar', 'student_add', 'student_all')),
+			'students' => array(
+				'student_add' => $is_admin
+					|| $this->_header_flag($is_admin, $access, 'student_add')
+					|| ($access && !empty($access['student_sidebar'])),
+				'student_all' => $is_admin
+					|| $this->_header_flag($is_admin, $access, 'student_all')
+					|| ($access && !empty($access['student_sidebar'])),
+			),
 			'show_expenses_menu' => $is_admin || ($access && !empty($access['expense_sidebar'])),
 			'expense_add' => $is_admin || ($access && !empty($access['expense_add'])),
 			'expense_all' => $is_admin || ($access && !empty($access['expense_all'])),
+			'show_visitors_menu' => $is_admin || $this->_any_access_flag($access, array('visitor_sidebar', 'visitor_add', 'visitor_all')),
+			'visitors' => array(
+				'visitor_add' => $is_admin
+					|| $this->_header_flag($is_admin, $access, 'visitor_add')
+					|| ($access && !empty($access['visitor_sidebar'])),
+				'visitor_all' => $is_admin
+					|| $this->_header_flag($is_admin, $access, 'visitor_all')
+					|| ($access && !empty($access['visitor_sidebar'])),
+			),
 			'legacy_root' => rtrim(base_url(), '/') . '/index.php',
 		);
 	}
