@@ -2033,6 +2033,16 @@ class Studentsapi extends CI_Controller {
 			$enriched[] = $this->_enrich_payment_row($p, $idx, $student_id, $fine_per_day);
 		}
 
+		$deleted_enriched = array();
+		foreach ($deleted as $idx => $p) {
+			$row = $this->_enrich_payment_row($p, count($enriched) + $idx, $student_id, $fine_per_day);
+			$row['is_deleted'] = true;
+			if (!empty($p['reason'])) {
+				$row['delete_reason'] = $p['reason'];
+			}
+			$deleted_enriched[] = $row;
+		}
+
 		$freeze = $this->db->get_where('freeze_student', array('student_id' => $student_id))->result_array();
 		$archive_type = null;
 		if ((int)$student['status'] === 0) {
@@ -2120,7 +2130,7 @@ class Studentsapi extends CI_Controller {
 					'shifted_fees_count' => (int)$this->student->getCountShiftedFess($student_id),
 				),
 				'payments' => $enriched,
-				'deleted_payments' => $deleted,
+				'deleted_payments' => $deleted_enriched,
 				'old_plans' => $this->db->group_by('payment_id')->get_where('archive_payments', array('student_id' => $student_id))->result_array(),
 				'account_numbers' => $this->db->get_where('accounts', array('type' => '1'))->result_array(),
 				'campuses' => $campuses,
@@ -3431,6 +3441,114 @@ class Studentsapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Challan not found'), 404);
 		}
 		$this->_json(array('success' => true, 'data' => $detail));
+	}
+
+	/** Rules & Regulation admission form — mirrors Students::admission_letter_print */
+	public function admission_rules_form($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$student_id = (int) $student_id;
+		if ($student_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'student_id required'), 422);
+		}
+
+		$students = $this->student->getSingleStudent($student_id);
+		if (!count($students)) {
+			$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		}
+		$student = $students[0];
+
+		$this->db->select('*');
+		$this->db->from('payments');
+		$this->db->where(array('student_id' => $student_id, 'paid' => 0));
+		$this->db->order_by('dead_line', 'ASC');
+		$unpaid_payments = $this->db->get()->result_array();
+
+		$this->db->select('*');
+		$this->db->from('payments');
+		$this->db->where(array('student_id' => $student_id, 'paid' => 1));
+		$this->db->order_by('dead_line', 'ASC');
+		$paid_payments = $this->db->get()->result_array();
+
+		$rules = $this->db->get('admission_rules_regulations')->row_array();
+		$course = $this->db->get_where('courses', array('course_id' => $student['course_id']))->row_array();
+		$logo_url = null;
+		if (!empty($student['logo'])) {
+			$logo_url = $this->_asset_base() . '/uploads/' . rawurlencode($student['logo']);
+		}
+
+		$total_fee = (float) (isset($student['total_fee']) ? $student['total_fee'] : 0)
+			+ (float) (isset($student['extra_added_fee']) ? $student['extra_added_fee'] : 0);
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'student_name' => trim($student['first_name'] . ' ' . $student['last_name']),
+				'roll_no' => isset($student['roll_no']) ? $student['roll_no'] : '',
+				'cnic' => isset($student['cnic']) ? $student['cnic'] : '',
+				'course_name' => $course && isset($course['course_name']) ? $course['course_name'] : '',
+				'class_name' => isset($student['class_name']) ? $student['class_name'] : '',
+				'session' => isset($student['session']) ? $student['session'] : '',
+				'total_fee' => $total_fee,
+				'campus_name' => isset($student['campus_name']) ? $student['campus_name'] : '',
+				'logo_url' => $logo_url,
+				'rules_html' => ($rules && isset($rules['rules'])) ? $rules['rules'] : '',
+				'plan_rows' => $this->_build_admission_plan_rows($paid_payments, $unpaid_payments),
+			),
+		));
+	}
+
+	private function _build_admission_plan_rows($paid_payments, $unpaid_payments)
+	{
+		$rows = array();
+		$challans = array();
+
+		foreach ($paid_payments as $payment) {
+			if ($payment['merged_challan'] === null || $payment['merged_challan'] === '') {
+				$rows[] = array(
+					'dead_line' => $payment['dead_line'],
+					'challan_no' => $payment['challan_no'],
+					'payable' => (float) $payment['amount'],
+					'paid' => (float) $payment['actual_amount'],
+				);
+				continue;
+			}
+			if (in_array($payment['paid_challans'], $challans, true)) {
+				continue;
+			}
+			$challans[] = $payment['paid_challans'];
+			$this->db->select('*');
+			$this->db->from('payments');
+			$this->db->where('paid_challans', $payment['paid_challans']);
+			$this->db->order_by('dead_line', 'DESC');
+			$merge_challans = $this->db->get()->result_array();
+			if (!count($merge_challans)) {
+				continue;
+			}
+			$amount = 0;
+			$nos = array();
+			foreach ($merge_challans as $merge_challan) {
+				$amount += (float) $merge_challan['amount'];
+				$nos[] = $merge_challan['challan_no'];
+			}
+			$rows[] = array(
+				'dead_line' => $merge_challans[0]['dead_line'],
+				'challan_no' => implode(',', $nos),
+				'payable' => $amount,
+				'paid' => (float) $merge_challans[0]['actual_amount'],
+			);
+		}
+
+		foreach ($unpaid_payments as $payment) {
+			$rows[] = array(
+				'dead_line' => $payment['dead_line'],
+				'challan_no' => $payment['challan_no'],
+				'payable' => (float) $payment['amount'],
+				'paid' => ((int) $payment['paid'] === 1) ? (float) $payment['actual_amount'] : 0,
+			);
+		}
+
+		return $rows;
 	}
 
 	private function _build_challan_detail($student_id, $payment_id)
