@@ -2331,10 +2331,12 @@ class Studentsapi extends CI_Controller {
 			}
 		}
 
-		$payment['can_edit_exam'] = ((int)$payment['paid'] === 0)
-			&& isset($payment['payment_comment'])
+		$payment['can_edit_exam'] = isset($payment['payment_comment'])
 			&& $payment['payment_comment'] !== 'College Fee'
-			&& ($this->_perm('change_exam_no_in_payments') || $this->_is_admin());
+			&& (
+				($this->_is_admin())
+				|| ($this->_perm('change_exam_no_in_payments') && (int)$payment['paid'] === 0)
+			);
 
 		return $payment;
 	}
@@ -3219,11 +3221,17 @@ class Studentsapi extends CI_Controller {
 		$reason = isset($body['reason']) ? trim($body['reason']) : (isset($body['comment']) ? trim($body['comment']) : '');
 
 		$changing_exam = $exam_sequence_id > 0 || $council_sequence_id > 0;
-		if ($changing_exam && !$this->_perm('change_exam_no_in_payments')) {
-			$this->_json(array('success' => false, 'message' => 'No permission to change exam/council comment'), 403);
-		}
 		if ($changing_exam && isset($row['payment_comment']) && $row['payment_comment'] === 'College Fee') {
 			$this->_json(array('success' => false, 'message' => 'Cannot change College Fee exam comment'), 422);
+		}
+		if ($changing_exam) {
+			if ($this->_is_admin()) {
+				// legacy: Admin may edit exam on paid council rows
+			} elseif ($this->_perm('change_exam_no_in_payments') && (int)$row['paid'] === 0) {
+				// legacy: permission holder — unpaid only
+			} else {
+				$this->_json(array('success' => false, 'message' => 'No permission to change exam/council comment'), 403);
+			}
 		}
 
 		$upd = array();
