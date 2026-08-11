@@ -755,6 +755,63 @@ class Posapi extends CI_Controller {
 		));
 	}
 
+	/** Designation responsibilities + access rules for the signed-in user's designation */
+	public function designation_detail($designation_id = 0)
+	{
+		$designation_id = (int) $designation_id;
+		if ($designation_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'Invalid designation'), 400);
+		}
+
+		$user_ids = $this->_user_designation_ids($this->current_user);
+		if (!in_array($designation_id, $user_ids, true)) {
+			$this->_json(array('success' => false, 'message' => 'Designation not assigned to this user'), 403);
+		}
+
+		$row = $this->db
+			->select('designations.designation_id, designations.designation_name, designations.description, departments.department_name')
+			->from('designations')
+			->join('departments', 'departments.department_id = designations.department_id', 'inner')
+			->where('designations.designation_id', $designation_id)
+			->get()
+			->row_array();
+		if (!$row) {
+			$this->_json(array('success' => false, 'message' => 'Designation not found'), 404);
+		}
+
+		$this->load->library('access_service');
+		$loaded = $this->access_service->load_designation($designation_id);
+		$access_sections = $this->access_service->summarize_granted_access(
+			$loaded ? $loaded['values'] : array()
+		);
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'designation_id' => $designation_id,
+				'designation_name' => $row['designation_name'],
+				'department_name' => $row['department_name'],
+				'description' => isset($row['description']) ? $row['description'] : '',
+				'access_sections' => $access_sections,
+			),
+		));
+	}
+
+	private function _user_designation_ids($user)
+	{
+		$ids = array();
+		if (empty($user['designation_id'])) {
+			return $ids;
+		}
+		foreach (explode(',', (string) $user['designation_id']) as $id) {
+			$id = (int) trim($id);
+			if ($id > 0) {
+				$ids[] = $id;
+			}
+		}
+		return $ids;
+	}
+
 	private function _header_flag($is_admin, $access, $key)
 	{
 		return $is_admin || ($access && !empty($access[$key]));
@@ -776,7 +833,7 @@ class Posapi extends CI_Controller {
 				if ($id > 0) $ids[] = $id;
 			}
 			if ($ids) {
-				$this->db->select('designation_name, description');
+				$this->db->select('designation_id, designation_name, description');
 				$this->db->from('designations');
 				$this->db->where_in('designation_id', $ids);
 				$designations = $this->db->get()->result_array();

@@ -5060,13 +5060,60 @@ endif?>
     endif;
 ?>
 <script>
-$(document).on('click', '.designation-popup', function () {
-    var name = $(this).data('name');
-    var description = $(this).data('description');
+function renderDesignationAccess(sections) {
+    if (!sections || !sections.length) {
+        return '<p style="color:#888;">No system access rules configured for this designation.</p>';
+    }
+    var html = '';
+    sections.forEach(function (section) {
+        html += '<div style="margin-bottom: 12px; padding: 10px; background: #f4f4f4; border-radius: 4px;">';
+        html += '<strong style="display:block; margin-bottom: 6px; text-transform: uppercase; font-size: 12px; color: #666;">' + section.title + '</strong><ul style="margin: 0; padding-left: 18px;">';
+        (section.items || []).forEach(function (item) {
+            var line = item.label;
+            if (item.values && item.values.length) {
+                line += ' — ' + item.values.join(', ');
+            }
+            html += '<li style="margin-bottom: 4px;">' + line + '</li>';
+        });
+        html += '</ul></div>';
+    });
+    return html;
+}
 
-    $('#designationModalTitle').text(name + ' Responsibilities');
-    $('#designationModalDescription').text(description ? description : 'No responsibilities found.');
+$(document).on('click', '.designation-popup', function () {
+    var $el = $(this);
+    var id = $el.data('id');
+    var name = $el.data('name');
+    var description = $el.data('description');
+
+    $('#designationModalTitle').text(name);
+    $('#designationModalDepartment').text('');
+    $('#designationModalDescription').text(description ? description : 'No responsibilities listed.');
+    $('#designationModalAccess').html('<p style="color:#888;">Loading access…</p>');
     $('#designationModal').modal('show');
+
+    if (!id) {
+        $('#designationModalAccess').html('<p style="color:#888;">No system access rules configured for this designation.</p>');
+        return;
+    }
+
+    $.getJSON('<?php echo site_url(); ?>/designations/detail/' + id)
+        .done(function (res) {
+            if (!res || !res.success || !res.data) {
+                $('#designationModalAccess').html('<p style="color:#c0392b;">Could not load access details.</p>');
+                return;
+            }
+            if (res.data.department_name) {
+                $('#designationModalDepartment').text(res.data.department_name);
+            }
+            if (res.data.description) {
+                $('#designationModalDescription').text(res.data.description);
+            }
+            $('#designationModalAccess').html(renderDesignationAccess(res.data.access_sections));
+        })
+        .fail(function () {
+            $('#designationModalAccess').html('<p style="color:#c0392b;">Could not load access details.</p>');
+        });
 });
 </script>
 <?php

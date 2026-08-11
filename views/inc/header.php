@@ -141,7 +141,7 @@
 				<!-- DOC: Apply "dropdown-dark" class after below "dropdown-extended" to change the dropdown styte -->
 				<li>
                     <?php  
-                        $this->db->select('designation_name, description');
+                        $this->db->select('designation_id, designation_name, description');
                         $this->db->from('designations');
                         $desig = $this->db
                             ->where_in("designation_id", explode(",", $this->session->userdata('designation_id')))
@@ -154,6 +154,7 @@
                         <?php foreach($desig as $index => $d): ?>
                             <a href="javascript:void(0);"
                                class="designation-popup"
+                               data-id="<?php echo (int)$d['designation_id']; ?>"
                                data-name="<?php echo htmlspecialchars($d['designation_name'], ENT_QUOTES, 'UTF-8'); ?>"
                                data-description="<?php echo htmlspecialchars($d['description'], ENT_QUOTES, 'UTF-8'); ?>"
                                style="color: white; font-weight: bolder;">
@@ -633,7 +634,11 @@
                 <h4 class="modal-title" id="designationModalTitle">Designation Responsibilities</h4>
             </div>
             <div class="modal-body">
-                <p id="designationModalDescription" style="white-space: pre-line; font-size: 15px;"></p>
+                <p id="designationModalDepartment" style="margin-top: 0; color: #888;"></p>
+                <h5 style="font-weight: bold; margin-bottom: 8px;">Responsibilities</h5>
+                <div id="designationModalDescription" style="white-space: pre-line; font-size: 15px; margin-bottom: 18px;"></div>
+                <h5 style="font-weight: bold; margin-bottom: 8px;">System Access</h5>
+                <div id="designationModalAccess" style="font-size: 14px;"></div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn default" data-dismiss="modal">Close</button>

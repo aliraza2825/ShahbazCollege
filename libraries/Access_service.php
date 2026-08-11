@@ -354,4 +354,148 @@ class Access_service {
 
         return array('success' => true, 'message' => 'Access has been granted successfully');
     }
+
+    /**
+     * Human-readable granted permissions for a designation or user access row.
+     */
+    public function summarize_granted_access($values)
+    {
+        if (!is_array($values)) {
+            $values = array();
+        }
+
+        $schema = $this->parse_schema();
+        $meta = $this->get_meta();
+        $sections = array();
+
+        foreach ($schema['sections'] as $section) {
+            $items = array();
+            foreach ($section['fields'] as $field) {
+                $name = $field['name'];
+                if ($field['type'] === 'checkbox') {
+                    if (!empty($values[$name])) {
+                        $items[] = array(
+                            'label' => $field['label'],
+                            'values' => array(),
+                        );
+                    }
+                    continue;
+                }
+
+                if ($field['type'] !== 'multiselect') {
+                    continue;
+                }
+
+                $selected = isset($values[$name]) ? $values[$name] : array();
+                if (!is_array($selected)) {
+                    $selected = array_values(array_filter(explode(',', (string) $selected), 'strlen'));
+                }
+                if (empty($selected)) {
+                    continue;
+                }
+
+                $optionsKey = isset($field['optionsKey']) ? $field['optionsKey'] : 'campuses';
+                $labels = $this->resolve_option_labels($optionsKey, $selected, $meta);
+                $items[] = array(
+                    'label' => $field['label'],
+                    'values' => $labels,
+                );
+            }
+
+            if (!empty($items)) {
+                $sections[] = array(
+                    'title' => $section['title'],
+                    'items' => $items,
+                );
+            }
+        }
+
+        return $sections;
+    }
+
+    private function resolve_option_labels($optionsKey, $selected, $meta)
+    {
+        $options = isset($meta[$optionsKey]) && is_array($meta[$optionsKey]) ? $meta[$optionsKey] : array();
+        $lookup = array();
+        foreach ($options as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $value = $this->option_value($row, $optionsKey);
+            $label = $this->option_label($row, $optionsKey);
+            if ($value !== '') {
+                $lookup[$value] = $label;
+            }
+        }
+
+        $labels = array();
+        foreach ($selected as $id) {
+            $key = (string) $id;
+            $labels[] = isset($lookup[$key]) ? $lookup[$key] : $key;
+        }
+
+        return array_values(array_unique($labels));
+    }
+
+    private function option_label($row, $optionsKey)
+    {
+        switch ($optionsKey) {
+            case 'campuses':
+                return (string) (isset($row['campus_name']) ? $row['campus_name'] : (isset($row['campus_id']) ? $row['campus_id'] : ''));
+            case 'classes':
+                return (string) (isset($row['name']) ? $row['name'] : (isset($row['class_id']) ? $row['class_id'] : ''));
+            case 'courses':
+                return (string) (isset($row['course_name']) ? $row['course_name'] : (isset($row['course_id']) ? $row['course_id'] : ''));
+            case 'subjects':
+            case 'assignment_subjects':
+                $subject = isset($row['subject_name']) ? $row['subject_name'] : '';
+                $course = isset($row['course_name']) ? $row['course_name'] : '';
+                return trim($subject . ($course !== '' ? ' (' . $course . ')' : ''));
+            case 'closing_persons':
+            case 'petty_cash_users':
+                $campus = isset($row['campus_name']) ? $row['campus_name'] : '';
+                $user = trim((isset($row['first_name']) ? $row['first_name'] : '') . ' ' . (isset($row['last_name']) ? $row['last_name'] : ''));
+                return trim($campus . ($user !== '' ? ' - ' . $user : ''));
+            case 'cash_accounts':
+            case 'bank_accounts':
+            case 'transfer_accounts':
+                return (string) (isset($row['account_name']) ? $row['account_name'] : (isset($row['account_id']) ? $row['account_id'] : ''));
+            case 'attendance_types':
+                return (string) (isset($row['label']) ? $row['label'] : (isset($row['value']) ? $row['value'] : ''));
+            default:
+                if (isset($row['label'])) {
+                    return (string) $row['label'];
+                }
+                if (isset($row['name'])) {
+                    return (string) $row['name'];
+                }
+                return (string) (isset($row['id']) ? $row['id'] : '');
+        }
+    }
+
+    private function option_value($row, $optionsKey)
+    {
+        switch ($optionsKey) {
+            case 'campuses':
+                return (string) (isset($row['campus_id']) ? $row['campus_id'] : '');
+            case 'classes':
+                return (string) (isset($row['class_id']) ? $row['class_id'] : '');
+            case 'courses':
+                return (string) (isset($row['course_id']) ? $row['course_id'] : '');
+            case 'subjects':
+            case 'assignment_subjects':
+                return (string) (isset($row['course_subject_id']) ? $row['course_subject_id'] : '');
+            case 'closing_persons':
+            case 'petty_cash_users':
+                return (string) (isset($row['id']) ? $row['id'] : '');
+            case 'cash_accounts':
+            case 'bank_accounts':
+            case 'transfer_accounts':
+                return (string) (isset($row['account_id']) ? $row['account_id'] : '');
+            case 'attendance_types':
+                return (string) (isset($row['value']) ? $row['value'] : '');
+            default:
+                return (string) (isset($row['id']) ? $row['id'] : '');
+        }
+    }
 }

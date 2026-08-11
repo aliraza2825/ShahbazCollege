@@ -81,5 +81,63 @@ class Designations extends CI_Controller {
 		$this->session->set_flashdata('message','Designation Updated Successfully');
 		redirect('designations/edit_designation/'.$designation_id);
 	}
+
+	/** JSON: responsibilities + access for the signed-in user's designation */
+	public function detail($designation_id = 0)
+	{
+		header('Content-Type: application/json; charset=utf-8');
+		if (!$this->session->userdata('user_id')) {
+			echo json_encode(array('success' => false, 'message' => 'Unauthorized'));
+			return;
+		}
+
+		$designation_id = (int) $designation_id;
+		if ($designation_id <= 0) {
+			echo json_encode(array('success' => false, 'message' => 'Invalid designation'));
+			return;
+		}
+
+		$user_ids = array();
+		$raw = (string) $this->session->userdata('designation_id');
+		foreach (explode(',', $raw) as $id) {
+			$id = (int) trim($id);
+			if ($id > 0) {
+				$user_ids[] = $id;
+			}
+		}
+		if (!in_array($designation_id, $user_ids, true)) {
+			echo json_encode(array('success' => false, 'message' => 'Designation not assigned to this user'));
+			return;
+		}
+
+		$row = $this->db
+			->select('designations.designation_id, designations.designation_name, designations.description, departments.department_name')
+			->from('designations')
+			->join('departments', 'departments.department_id = designations.department_id', 'inner')
+			->where('designations.designation_id', $designation_id)
+			->get()
+			->row_array();
+		if (!$row) {
+			echo json_encode(array('success' => false, 'message' => 'Designation not found'));
+			return;
+		}
+
+		$this->load->library('access_service');
+		$loaded = $this->access_service->load_designation($designation_id);
+		$access_sections = $this->access_service->summarize_granted_access(
+			$loaded ? $loaded['values'] : array()
+		);
+
+		echo json_encode(array(
+			'success' => true,
+			'data' => array(
+				'designation_id' => $designation_id,
+				'designation_name' => $row['designation_name'],
+				'department_name' => $row['department_name'],
+				'description' => isset($row['description']) ? $row['description'] : '',
+				'access_sections' => $access_sections,
+			),
+		));
+	}
 		
 }
