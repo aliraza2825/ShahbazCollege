@@ -159,6 +159,11 @@ class Studentsapi extends CI_Controller {
 		return $ids;
 	}
 
+	private function _asset_base()
+	{
+		return rtrim(base_url(), '/');
+	}
+
 	private function _cdn_url($url)
 	{
 		if (!$url) {
