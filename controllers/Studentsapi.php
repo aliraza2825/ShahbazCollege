@@ -2143,6 +2143,7 @@ class Studentsapi extends CI_Controller {
 					'max_discount_merge' => $plan && isset($plan['max_discount_merge']) ? (float)$plan['max_discount_merge'] : 0,
 					'plan_name' => $plan && isset($plan['payment_plan']) ? $plan['payment_plan'] : (isset($student['payment_plan']) ? $student['payment_plan'] : ''),
 					'fine_per_day' => ($plan && isset($plan['payment_plan']) && $plan['payment_plan'] === '24 Installments') ? 10 : 50,
+					'course_type' => $course && isset($course['course_type']) ? $course['course_type'] : '',
 				),
 				'permissions' => $this->_permissions(),
 				'asset_base' => $this->_asset_base(),
@@ -2182,7 +2183,11 @@ class Studentsapi extends CI_Controller {
 			if (count($ids)) {
 				$this->db->where_in('challan_no', $ids);
 				$this->db->where('student_id', $student_id);
-				$payment['merged_children'] = $this->db->order_by('payment_comment', 'DESC')->get('payments')->result_array();
+				$children = $this->db->order_by('payment_comment', 'DESC')->get('payments')->result_array();
+				foreach ($children as $ci => $child) {
+					$children[$ci] = $this->_enrich_council_exam_labels($child);
+				}
+				$payment['merged_children'] = $children;
 			}
 		}
 		$payment['fees_remarks'] = array();
@@ -2271,6 +2276,65 @@ class Studentsapi extends CI_Controller {
 		$payment['legacy_edit_url'] = $can_edit && ($this->_perm('student_payment_edit') || $this->_is_admin())
 			? $this->_legacy_base() . '/students/edit_payment/' . (int)$payment['id'] . '/' . ((int)$index + 1)
 			: null;
+
+		return $this->_enrich_council_exam_labels($payment);
+	}
+
+	private function _ordinal($number)
+	{
+		$number = (int)$number;
+		$suffixes = array('th', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th');
+		if (($number % 100) >= 11 && ($number % 100) <= 13) {
+			return $number . 'th';
+		}
+		return $number . $suffixes[$number % 10];
+	}
+
+	private function _enrich_council_exam_labels($payment)
+	{
+		$payment['council_sequence_label'] = '';
+		$payment['exam_sequence_label'] = '';
+		$payment['council_fee_last_date'] = '';
+		$payment['is_consultation_fee'] = (
+			(isset($payment['payment_plan']) && $payment['payment_plan'] === 'consulation fee')
+			|| (isset($payment['payment_comment']) && $payment['payment_comment'] === 'consulation fee')
+		);
+
+		if (!empty($payment['council_sequence_id'])) {
+			$seq = $this->db->get_where('council_sequence', array(
+				'council_sequence_id' => $payment['council_sequence_id'],
+			))->row_array();
+			if ($seq && isset($seq['type_name'])) {
+				$payment['council_sequence_label'] = $seq['type_name'];
+			}
+		}
+
+		if (!empty($payment['exam_sequence_id'])) {
+			$ex = $this->db->get_where('exam_sequence', array('id' => $payment['exam_sequence_id']))->row_array();
+			if ($ex) {
+				$course = $this->db->get_where('courses', array('course_id' => $ex['course_id']))->row_array();
+				$course_type = ($course && isset($course['course_type']) && $course['course_type'] === 'Annual')
+					? 'Year' : ($course && isset($course['course_type']) ? $course['course_type'] : '');
+				$payment['exam_sequence_label'] = $ex['first_year'] . ' - ' . $ex['first_year_type']
+					. ' - ' . $this->_ordinal($ex['class']) . ' ' . $course_type;
+				if (!empty($payment['council_sequence_id']) && !empty($payment['dead_line'])) {
+					$rule = $this->db->order_by('from_date', 'ASC')
+						->where('sequence_fee_id', $payment['council_sequence_id'])
+						->where('exam_sequence_id', $payment['exam_sequence_id'])
+						->where('to_date >=', $payment['dead_line'])
+						->get('council_sequence_fee_rules')
+						->row_array();
+					if ($rule && !empty($rule['to_date'])) {
+						$payment['council_fee_last_date'] = $rule['to_date'];
+					}
+				}
+			}
+		}
+
+		$payment['can_edit_exam'] = ((int)$payment['paid'] === 0)
+			&& isset($payment['payment_comment'])
+			&& $payment['payment_comment'] !== 'College Fee'
+			&& ($this->_perm('change_exam_no_in_payments') || $this->_is_admin());
 
 		return $payment;
 	}
@@ -3140,31 +3204,68 @@ class Studentsapi extends CI_Controller {
 	{
 		$this->_require_student_payments();
 		$body = $this->_body();
-		$payment_id = isset($body['payment_id']) ? (int)$body['payment_id'] : 0;
+		$payment_id = isset($body['payment_id']) ? (int)$body['payment_id'] : (isset($body['id']) ? (int)$body['id'] : 0);
 		$row = $this->db->get_where('payments', array('id' => $payment_id, 'student_id' => (int)$student_id))->row_array();
 		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
-		$changing_exam = isset($body['exam_sequence_id']) || isset($body['council_sequence_id']) || isset($body['payment_comment']);
+
+		$exam_sequence_id = isset($body['exam_sequence_id']) ? (int)$body['exam_sequence_id'] : 0;
+		if (!$exam_sequence_id && isset($body['payment_comment']) && is_numeric($body['payment_comment'])) {
+			$exam_sequence_id = (int)$body['payment_comment'];
+		}
+		$council_sequence_id = isset($body['council_sequence_id']) ? (int)$body['council_sequence_id'] : 0;
+		if (!$council_sequence_id && isset($body['sequence_id'])) {
+			$council_sequence_id = (int)$body['sequence_id'];
+		}
+		$reason = isset($body['reason']) ? trim($body['reason']) : (isset($body['comment']) ? trim($body['comment']) : '');
+
+		$changing_exam = $exam_sequence_id > 0 || $council_sequence_id > 0;
 		if ($changing_exam && !$this->_perm('change_exam_no_in_payments')) {
 			$this->_json(array('success' => false, 'message' => 'No permission to change exam/council comment'), 403);
 		}
 		if ($changing_exam && isset($row['payment_comment']) && $row['payment_comment'] === 'College Fee') {
 			$this->_json(array('success' => false, 'message' => 'Cannot change College Fee exam comment'), 422);
 		}
+
 		$upd = array();
-		if (isset($body['exam_sequence_id'])) $upd['exam_sequence_id'] = $body['exam_sequence_id'];
-		if (isset($body['council_sequence_id'])) $upd['council_sequence_id'] = $body['council_sequence_id'];
-		if (isset($body['payment_comment'])) $upd['payment_comment'] = $body['payment_comment'];
-		if (count($upd)) $this->db->where('id', $payment_id)->update('payments', $upd);
-		if (!empty($body['reason']) && $this->db->table_exists('fees_remarks')) {
+		$new_comment = isset($row['payment_comment']) ? $row['payment_comment'] : '';
+		if ($exam_sequence_id > 0) {
+			$this->db->select('exam_sequence.*, courses.course_type');
+			$this->db->from('exam_sequence');
+			$this->db->join('courses', 'courses.course_id = exam_sequence.course_id', 'left');
+			$this->db->where('exam_sequence.id', $exam_sequence_id);
+			$fee = $this->db->get()->row_array();
+			if (!$fee) $this->_json(array('success' => false, 'message' => 'Exam sequence not found'), 404);
+			$course_type = (isset($fee['course_type']) && $fee['course_type'] === 'Annual') ? 'Year' : $fee['course_type'];
+			$new_comment = 'This fee for next exam # ' . $fee['first_year'] . ' ' . $this->_ordinal($fee['class']) . ' ' . $course_type;
+			$upd['payment_comment'] = $new_comment;
+			$upd['exam_sequence_id'] = $exam_sequence_id;
+			$upd['exam_sequence_no'] = $fee['first_year'];
+			$upd['exam_class'] = $fee['class'];
+		}
+		if ($council_sequence_id > 0) {
+			$upd['council_sequence_id'] = $council_sequence_id;
+		}
+		if (count($upd)) {
+			$this->db->where('id', $payment_id)->update('payments', $upd);
+		}
+
+		$image = $this->_upload_field('image');
+		if (($reason !== '' || $image !== '') && $this->db->table_exists('fees_remarks')) {
 			$this->db->insert('fees_remarks', array(
 				'fee_id' => $payment_id,
-				'comment' => $body['reason'],
+				'comment' => $reason,
 				'paid_on_date' => date('Y-m-d'),
 				'clear_status' => 0,
 				'add_by' => $this->_actor_name(),
+				'image' => $image,
 			));
 		}
-		$this->_json(array('success' => true, 'message' => 'Updated'));
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Updated',
+			'payment_comment' => $new_comment,
+		));
 	}
 
 	public function payments_session_fee($student_id = 0)
@@ -3214,57 +3315,173 @@ class Studentsapi extends CI_Controller {
 	{
 		$this->_require_student_payments();
 		$body = $this->_body();
-		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
-		$comment = isset($body['payment_comment']) ? $body['payment_comment'] : 'Extra Fee';
-		$deadline = isset($body['dead_line']) ? $body['dead_line'] : date('Y-m-d');
-		if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
-		if ($comment === 'College Fee' && !$this->_perm('extra_fee_access')) {
+		$student_id = (int)$student_id;
+		$fee_type = isset($body['fee_type']) ? $body['fee_type'] : '';
+		$amount = isset($body['amount']) ? (float)$body['amount'] : (isset($body['extra_fee']) ? (float)$body['extra_fee'] : 0);
+		$deadline = isset($body['dead_line']) ? $body['dead_line'] : (isset($body['extra_fee_dead_line']) ? $body['extra_fee_dead_line'] : date('Y-m-d'));
+		$comment = isset($body['payment_comment']) ? trim($body['payment_comment']) : 'Extra Fee';
+		$plan = 'Custom Plan';
+
+		if ($fee_type === '' && $comment) {
+			$fee_type = $comment;
+		}
+
+		if (is_numeric($fee_type)) {
+			$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+			$rules = $this->db->get_where('payment_rules', array(
+				'status' => 1,
+				'course_id' => $student ? $student['course_id'] : 0,
+			))->result_array();
+			$idx = (int)$fee_type;
+			if (!isset($rules[$idx])) {
+				$this->_json(array('success' => false, 'message' => 'Payment rule not found'), 404);
+			}
+			$amount = (float)$rules[$idx]['amount'];
+			$comment = isset($rules[$idx]['name']) ? $rules[$idx]['name'] : (isset($rules[$idx]['rule_name']) ? $rules[$idx]['rule_name'] : 'Extra Fee');
+			$plan = 'Custom Plan';
+		} elseif ($fee_type === 'College Fee') {
+			if (!$this->_perm('extra_fee_access')) {
+				$this->_json(array('success' => false, 'message' => 'No permission to add College Fee as extra'), 403);
+			}
+			$plan = 'Custom Plan';
+		} elseif ($fee_type === 'Extra Fee') {
+			$fee_for = isset($body['fee_for']) ? $body['fee_for'] : 'Books';
+			if ($fee_for === 'Other') {
+				$payment_for = isset($body['payment_for']) ? trim($body['payment_for']) : '';
+				$comment = $comment . ' For ' . $payment_for;
+			} else {
+				$comment = $comment . ' For ' . $fee_for;
+			}
+			$plan = 'Custom Plan';
+		} elseif ($fee_type === 'consulation fee') {
+			$exam_no = isset($body['exam_no']) ? $body['exam_no'] : '';
+			$class_label = isset($body['class']) ? $body['class'] : '';
+			if (!$exam_no && !empty($body['exam_sequence_id'])) {
+				$ex = $this->db->get_where('exam_sequence', array('id' => (int)$body['exam_sequence_id']))->row_array();
+				if ($ex) {
+					$course = $this->db->get_where('courses', array('course_id' => $ex['course_id']))->row_array();
+					$type = ($course && $course['course_type'] === 'Annual') ? 'Year' : ($course ? $course['course_type'] : '');
+					$exam_no = $ex['first_year'];
+					$class_label = $this->_ordinal($ex['class']) . ' ' . $type;
+				}
+			}
+			$comment = 'This fee for next exam # ' . $exam_no . ' ' . $class_label;
+			$plan = 'consulation fee';
+		} elseif ($comment === 'College Fee' && !$this->_perm('extra_fee_access')) {
 			$this->_json(array('success' => false, 'message' => 'No permission to add College Fee as extra'), 403);
 		}
+
+		if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
+
 		$challan = $this->_new_challan_no();
-		$this->db->insert('payments', array(
-			'student_id' => (int)$student_id,
+		$insert = array(
+			'student_id' => $student_id,
 			'challan_no' => $challan,
 			'amount' => $amount,
 			'dead_line' => $deadline,
-			'payment_plan' => 'Custom Plan',
+			'payment_plan' => $plan,
 			'payment_comment' => $comment,
 			'paid' => 0,
 			'contract_id' => 0,
 			'add_by' => $this->_actor_name(),
 			'last_edit' => $this->_actor_name(),
-		));
-		$this->db->set('extra_added_fee', 'extra_added_fee + ' . $amount, false);
-		$this->db->where('student_id', (int)$student_id);
-		$this->db->update('students');
+		);
+		if (!empty($body['exam_sequence_id'])) {
+			$insert['exam_sequence_id'] = (int)$body['exam_sequence_id'];
+		}
+		$this->db->insert('payments', $insert);
+		if ($fee_type !== 'consulation fee' && strpos($comment, 'consulation') === false) {
+			$this->db->set('extra_added_fee', 'extra_added_fee + ' . $amount, false);
+			$this->db->where('student_id', $student_id);
+			$this->db->update('students');
+		}
 		$this->_json(array('success' => true, 'message' => 'Extra fee added', 'challan_no' => $challan));
 	}
 
 	public function payments_council_fee($student_id = 0)
 	{
 		$this->_require_student_payments();
+		$student_id = (int)$student_id;
 		$body = $this->_body();
 		$exam_sequence_id = isset($body['exam_sequence_id']) ? (int)$body['exam_sequence_id'] : 0;
-		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
-		$deadline = isset($body['dead_line']) ? $body['dead_line'] : date('Y-m-d');
-		$council_sequence_id = isset($body['council_sequence_id']) ? (int)$body['council_sequence_id'] : 0;
-		if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
-		$challan = $this->_new_challan_no();
-		$this->db->insert('payments', array(
-			'student_id' => (int)$student_id,
-			'challan_no' => $challan,
-			'amount' => $amount,
-			'dead_line' => $deadline,
-			'payment_plan' => 'consulation fee',
-			'payment_comment' => 'consulation fee',
-			'paid' => 0,
-			'contract_id' => 0,
-			'exam_sequence_id' => $exam_sequence_id,
-			'council_sequence_id' => $council_sequence_id,
-			'add_by' => $this->_actor_name(),
-			'last_edit' => $this->_actor_name(),
-		));
-		$this->_json(array('success' => true, 'message' => 'Council fee added', 'challan_no' => $challan));
+		if (!$exam_sequence_id && isset($body['exam_sequence'])) {
+			$exam_sequence_id = (int)$body['exam_sequence'];
+		}
+		if (!$exam_sequence_id) {
+			$this->_json(array('success' => false, 'message' => 'exam_sequence required'), 422);
+		}
+
+		$exam_sequence = $this->db->get_where('exam_sequence', array('id' => $exam_sequence_id))->row_array();
+		if (!$exam_sequence) $this->_json(array('success' => false, 'message' => 'Exam sequence not found'), 404);
+
+		$course = $this->db->get_where('courses', array('course_id' => $exam_sequence['course_id']))->row_array();
+		$type = ($course && $course['course_type'] === 'Annual') ? 'Year' : ($course ? $course['course_type'] : '');
+
+		$this->db->select('*');
+		$this->db->from('council_sequence');
+		$this->db->where('course_id', $exam_sequence['course_id']);
+		$this->db->where('has_fee', 1);
+		$this->db->where('action_type', 'fee');
+		$this->db->where_in('recurring', array('One Time', 'Each Exam', 'Every Semester'));
+		$sequences = $this->db->get()->result_array();
+
+		$errors = array();
+		$created = 0;
+		$this->db->trans_start();
+
+		foreach ($sequences as $sequence) {
+			$fee = $this->db->order_by('from_date', 'ASC')
+				->where('sequence_fee_id', $sequence['council_sequence_id'])
+				->where('exam_sequence_id', $exam_sequence['id'])
+				->get('council_sequence_fee_rules')
+				->row_array();
+			if (!$fee) {
+				$errors[] = 'Please Generate Fee For ' . $sequence['type_name'];
+				continue;
+			}
+
+			$already = $this->db->get_where('payments', array(
+				'student_id' => $student_id,
+				'exam_sequence_id' => $exam_sequence['id'],
+				'exam_class' => $exam_sequence['class'],
+				'council_sequence_id' => $sequence['council_sequence_id'],
+			))->row_array();
+
+			if ($already) {
+				continue;
+			}
+
+			$challan = $this->_new_challan_no();
+			$this->db->insert('payments', array(
+				'student_id' => $student_id,
+				'amount' => $fee['exam_fee'],
+				'disc_per_inst' => 0,
+				'dead_line' => $fee['from_date'],
+				'payment_plan' => 'consulation fee',
+				'payment_comment' => 'This fee for next exam # ' . $exam_sequence['first_year'] . ' '
+					. $this->_ordinal($exam_sequence['class']) . ' ' . $type,
+				'challan_no' => $challan,
+				'paid' => 0,
+				'contract_id' => 0,
+				'exam_sequence_id' => $exam_sequence['id'],
+				'council_sequence_id' => $sequence['council_sequence_id'],
+				'exam_class' => $exam_sequence['class'],
+				'add_by' => $this->_actor_name(),
+				'last_edit' => $this->_actor_name(),
+			));
+			$created++;
+		}
+
+		if (count($errors)) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => implode('; ', $errors)), 422);
+		}
+
+		$this->db->trans_complete();
+		if (!$created) {
+			$this->_json(array('success' => false, 'message' => 'Council fees already exist for this exam'), 422);
+		}
+		$this->_json(array('success' => true, 'message' => 'Council fee added', 'created' => $created));
 	}
 
 	public function payments_auto_fees($student_id = 0)
@@ -3777,11 +3994,66 @@ class Studentsapi extends CI_Controller {
 		$fee_id = (int)$fee_id;
 		$row = $this->db->get_where('payments', array('id' => $fee_id, 'student_id' => (int)$student_id))->row_array();
 		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
-		$date = $row['dead_line'];
-		if (!empty($row['exam_sequence_id'])) {
-			$ex = $this->db->get_where('exam_sequence', array('id' => $row['exam_sequence_id']))->row_array();
-			if ($ex && !empty($ex['council_fee_last_date'])) $date = $ex['council_fee_last_date'];
+
+		$to_date = '';
+		if (!empty($row['council_sequence_id']) && !empty($row['exam_sequence_id']) && !empty($row['dead_line'])) {
+			$rule = $this->db->order_by('from_date', 'ASC')
+				->where('sequence_fee_id', $row['council_sequence_id'])
+				->where('exam_sequence_id', $row['exam_sequence_id'])
+				->where('to_date >=', $row['dead_line'])
+				->get('council_sequence_fee_rules')
+				->row_array();
+			if ($rule && !empty($rule['to_date'])) {
+				$to_date = $rule['to_date'];
+			}
 		}
-		$this->_json(array('success' => true, 'date' => $date));
+		if ($to_date === '') {
+			$to_date = isset($row['dead_line']) ? $row['dead_line'] : '';
+		}
+
+		$this->_json(array('success' => true, 'date' => $to_date, 'to_date' => $to_date));
+	}
+
+	public function payments_regenerate_council_fee($student_id = 0, $fee_id = 0)
+	{
+		$this->_require_student_payments();
+		$student_id = (int)$student_id;
+		$fee_id = (int)$fee_id;
+		$fee = $this->db->get_where('payments', array('id' => $fee_id, 'student_id' => $student_id))->row_array();
+		if (!$fee) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+
+		$fee_sequence = $this->db->get_where('council_sequence', array(
+			'council_sequence_id' => $fee['council_sequence_id'],
+		))->row_array();
+		$exam_sequence = $this->db->get_where('exam_sequence', array('id' => $fee['exam_sequence_id']))->row_array();
+
+		$today = date('Y-m-d');
+		$student_fee_plan = $this->db->order_by('from_date', 'ASC')
+			->where('sequence_fee_id', $fee['council_sequence_id'])
+			->where('exam_sequence_id', $fee['exam_sequence_id'])
+			->where('to_date >=', $today)
+			->get('council_sequence_fee_rules')
+			->result_array();
+
+		if (!count($student_fee_plan)) {
+			$label = $fee_sequence && isset($fee_sequence['type_name']) ? $fee_sequence['type_name'] : 'Council fee';
+			$exam_no = $exam_sequence && isset($exam_sequence['first_year']) ? $exam_sequence['first_year'] : '';
+			$this->_json(array(
+				'success' => false,
+				'message' => 'No Fee Rule Available for ' . $label . ' | Exam No : ' . $exam_no,
+			), 422);
+		}
+
+		$this->db->where('id', $fee_id)->update('payments', array(
+			'dead_line' => $student_fee_plan[0]['to_date'],
+			'amount' => $student_fee_plan[0]['exam_fee'],
+		));
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Fee regenerated successfully',
+			'dead_line' => $student_fee_plan[0]['to_date'],
+			'amount' => $student_fee_plan[0]['exam_fee'],
+		));
 	}
 }
