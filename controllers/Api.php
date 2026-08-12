@@ -4346,4 +4346,27 @@ class Api extends CI_Controller {
 		}
 
 	}
+
+    public function getZoomMeetings()
+    {
+        header('Content-Type: application/json; charset=utf-8');
+
+        $rows = $this->db->order_by('zoom_id', 'ASC')->get('zoom')->result_array();
+        $response = array();
+
+        foreach ($rows as $row) {
+            if (empty($row['personal_meeting_id'])) continue;
+
+            $response[] = array(
+                'zoom_id' => (string) $row['zoom_id'],
+                'personal_meeting_id' => (string) $row['personal_meeting_id'],
+                'admission_timing' => (string) $row['admission_timing'],
+                'image' => (string) $row['image'],
+                'title' => (string) $row['title'],
+                'name' => (string) $row['name'],
+            );
+        }
+
+        echo json_encode($response);
+    }
 }
