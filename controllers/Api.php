@@ -4355,18 +4355,21 @@ class Api extends CI_Controller {
         $response = array();
 
         foreach ($rows as $row) {
-            $meetingId = trim((string) ($row['personal_meeting_id'] ?? ''));
+            $meetingId = '';
+            if (isset($row['personal_meeting_id'])) {
+                $meetingId = trim((string) $row['personal_meeting_id']);
+            }
             if ($meetingId === '') {
                 continue;
             }
 
             $response[] = array(
-                'zoom_id' => (string) ($row['zoom_id'] ?? ''),
+                'zoom_id' => isset($row['zoom_id']) ? (string) $row['zoom_id'] : '',
                 'personal_meeting_id' => $meetingId,
-                'admission_timing' => (string) ($row['admission_timing'] ?? ''),
-                'image' => (string) ($row['image'] ?? ''),
-                'title' => (string) ($row['title'] ?? ''),
-                'name' => (string) ($row['name'] ?? ''),
+                'admission_timing' => isset($row['admission_timing']) ? (string) $row['admission_timing'] : '',
+                'image' => isset($row['image']) ? (string) $row['image'] : '',
+                'title' => isset($row['title']) ? (string) $row['title'] : '',
+                'name' => isset($row['name']) ? (string) $row['name'] : '',
             );
         }
 
