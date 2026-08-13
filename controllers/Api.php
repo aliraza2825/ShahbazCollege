@@ -3462,7 +3462,7 @@ class Api extends CI_Controller {
 		$type = $this->input->post('type');
 
 		$student_details = $this->db->get_where('students',array('student_id'=>$student_id))->result_array();
-        print_r($student_details);
+        print_r($student_id);
         exit();
 		$my_result=array();
 		if($type=='board')
