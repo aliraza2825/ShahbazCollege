@@ -3495,6 +3495,7 @@ class Api extends CI_Controller {
 				{
 					$my_result[$i]['result_image'] = base_url().$result['result_image'];
 				}
+                $i++;
 			}
 			echo json_encode($my_result,JSON_PRETTY_PRINT);
 		}
