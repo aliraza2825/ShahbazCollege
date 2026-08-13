@@ -3559,12 +3559,59 @@ class Accountsapi extends CI_Controller {
 	private function _brs_num($v)
 	{
 		if ($v === null || $v === '') return 0.0;
-		return (float)str_replace(array(',', ' '), '', (string)$v);
+		$s = str_replace(array(',', ' '), '', (string)$v);
+		if ($s === '' || $s === '-' || strtoupper($s) === 'NULL') return 0.0;
+		return (float)$s;
 	}
 
 	private function _brs_empty($v)
 	{
 		return $v === null || $v === '' || $v === '0' || $v === 0 || $v === 'NULL';
+	}
+
+	/** SQL expression matching {@see _brs_is_tagged_row} for list filters + counts. */
+	private function _brs_is_tagged_sql($alias = 'brs')
+	{
+		$a = $alias;
+		$parts = array();
+		$intCols = array(
+			'expense_id', 'closing_id', 'bank_transfer_id', 'paypro_id', 'statement_id',
+			'profit_distribution_id', 'loan_id', 'reversal_payroll_trans_id', 'reversal_payroll_id',
+			'payment_id', 'related_to',
+		);
+		foreach ($intCols as $c) {
+			$parts[] = "({$a}.{$c} IS NOT NULL AND {$a}.{$c} != '' AND {$a}.{$c} != 0)";
+		}
+		$parts[] = "({$a}.salary_expense_ids IS NOT NULL AND TRIM({$a}.salary_expense_ids) != '' AND {$a}.salary_expense_ids != '0')";
+		$parts[] = "({$a}.is_council_fee IS NOT NULL AND {$a}.is_council_fee != '' AND {$a}.is_council_fee != 0)";
+		if ($this->_table_exists('payments')) {
+			$parts[] = "EXISTS (SELECT 1 FROM payments p WHERE p.statement_id = {$a}.id LIMIT 1)";
+		}
+		return '(' . implode(' OR ', $parts) . ')';
+	}
+
+	/** Shared FROM/WHERE for bank statement list + count. */
+	private function _brs_statement_from_sql($from, $to, $account_id, $tagged)
+	{
+		$sql = " FROM bank_reconciliation_statement brs
+			 LEFT JOIN accounts ON accounts.id = brs.account_id
+			 WHERE brs.trans_date >= ? AND brs.trans_date <= ?";
+		$params = array($from, $to);
+		if ($account_id !== null && $account_id !== '') {
+			$ids = array_filter(array_map('intval', explode(',', (string)$account_id)));
+			if (count($ids) === 1) {
+				$sql .= ' AND brs.account_id = ?';
+				$params[] = $ids[0];
+			} elseif (count($ids) > 1) {
+				$sql .= ' AND brs.account_id IN (' . implode(',', $ids) . ')';
+			}
+		}
+		if ($tagged === '0' || $tagged === 0) {
+			$sql .= ' AND NOT ' . $this->_brs_is_tagged_sql('brs');
+		} elseif ($tagged === '1' || $tagged === 1) {
+			$sql .= ' AND ' . $this->_brs_is_tagged_sql('brs');
+		}
+		return array($sql, $params);
 	}
 
 	private function _brs_expense_categories()
@@ -4081,8 +4128,14 @@ class Accountsapi extends CI_Controller {
 		$to = $this->input->get('to_date');
 		$account_id = $this->input->get('account_id');
 		$tagged = $this->input->get('tagged');
+		$page = (int)$this->input->get('page');
+		$page_size = (int)$this->input->get('page_size');
+		if ($page < 1) $page = 1;
+		if ($page_size < 1) $page_size = 25;
+		if ($page_size > 100) $page_size = 100;
 		if (!$from) $from = date('Y-m-01');
 		if (!$to) $to = date('Y-m-d');
+		$offset = ($page - 1) * $page_size;
 
 		$meta = array(
 			'accounts' => $this->_bank_accounts_rows(),
@@ -4095,43 +4148,47 @@ class Accountsapi extends CI_Controller {
 			),
 		);
 
+		$pagination = array(
+			'page' => $page,
+			'page_size' => $page_size,
+			'total' => 0,
+			'total_pages' => 1,
+		);
+
 		if (!$this->_table_exists('bank_reconciliation_statement')) {
 			$this->_json(array_merge(array(
 				'success' => true,
 				'from_date' => $from,
 				'to_date' => $to,
 				'entries' => array(),
+				'pagination' => $pagination,
 			), $meta));
 		}
 
-		$sql = "SELECT brs.*, brs.id AS trans_id, brs.statement_id AS str_id, brs.closing_id AS closing_bank_id,
-					accounts.account_name, accounts.account_title
-				FROM bank_reconciliation_statement brs
-				LEFT JOIN accounts ON accounts.id = brs.account_id
-				WHERE brs.trans_date >= ? AND brs.trans_date <= ?";
-		$params = array($from, $to);
-		if ($account_id !== null && $account_id !== '') {
-			// support single id or comma list
-			$ids = array_filter(array_map('intval', explode(',', (string)$account_id)));
-			if (count($ids) === 1) {
-				$sql .= ' AND brs.account_id = ?';
-				$params[] = $ids[0];
-			} elseif (count($ids) > 1) {
-				$sql .= ' AND brs.account_id IN (' . implode(',', $ids) . ')';
-			}
+		list($fromSql, $params) = $this->_brs_statement_from_sql($from, $to, $account_id, $tagged);
+		$countRow = $this->db->query('SELECT COUNT(*) AS cnt' . $fromSql, $params)->row_array();
+		$total = (int)(isset($countRow['cnt']) ? $countRow['cnt'] : 0);
+		$total_pages = $page_size > 0 ? max(1, (int)ceil($total / $page_size)) : 1;
+		if ($page > $total_pages) {
+			$page = $total_pages;
+			$offset = ($page - 1) * $page_size;
 		}
-		$sql .= ' ORDER BY brs.trans_date ASC, brs.id ASC LIMIT 3000';
+		$pagination = array(
+			'page' => $page,
+			'page_size' => $page_size,
+			'total' => $total,
+			'total_pages' => $total_pages,
+		);
+
+		$sql = "SELECT brs.*, brs.id AS trans_id, brs.statement_id AS str_id, brs.closing_id AS closing_bank_id,
+					accounts.account_name, accounts.account_title"
+			. $fromSql
+			. ' ORDER BY brs.trans_date ASC, brs.id ASC LIMIT ' . (int)$page_size . ' OFFSET ' . (int)$offset;
 		$raw = $this->db->query($sql, $params)->result_array();
 
 		$entries = array();
 		foreach ($raw as $row) {
-			$enriched = $this->_brs_enrich_entry($row);
-			if ($tagged === '0' || $tagged === 0) {
-				if ($enriched['is_tagged']) continue;
-			} elseif ($tagged === '1' || $tagged === 1) {
-				if (!$enriched['is_tagged']) continue;
-			}
-			$entries[] = $enriched;
+			$entries[] = $this->_brs_enrich_entry($row);
 		}
 
 		$this->_json(array_merge(array(
@@ -4141,6 +4198,7 @@ class Accountsapi extends CI_Controller {
 			'account_id' => $account_id,
 			'tagged' => $tagged,
 			'entries' => $entries,
+			'pagination' => $pagination,
 		), $meta));
 	}
 
