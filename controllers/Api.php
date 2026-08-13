@@ -3464,9 +3464,9 @@ class Api extends CI_Controller {
 		$student_details = $this->db->get_where('students',array('student_id'=>$student_id))->result_array();
 
 		$my_result=array();
-		if($course_id==1 && $type=='board')
+		if($type=='board')
 		{
-			$results = $this->db->get_where('punjab_council_roll_number',array('cnic'=>$student_details[0]['cnic']))->result_array();
+			$results = $this->db->get_where('punjab_council_roll_number',array('cnic'=>$student_details[0]['cnic'],"course_id" =>$course_id))->result_array();
 			//$my_result=array();
 			$i=0;
 			foreach($results as $result)
