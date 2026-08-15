@@ -3580,7 +3580,6 @@ class Api extends CI_Controller {
 			$this->db->or_like('designation_id',','.$designation_id.',', 'both');
 			$this->db->or_like('designation_id',$designation_id.',', 'both');
 			$this->db->where(array('users.campus_id'=>$campuses[0]['campus_id']));
-            $this->db->where(array('users.status'=> "1"));
 			$users = $this->db->get()->result_array();
 
 
@@ -3778,11 +3777,7 @@ class Api extends CI_Controller {
 
 					foreach($topics as $topic)
 					{
-						$lecture_subjects[$a]['date_time'][$b]['topics'][] = array(
-							'topic_id' => $topic['topic_id'],
-							'topic_name' => $topic['topic_name'],
-							'is_studied' => false,
-						);
+						$lecture_subjects[$a]['date_time'][$b]['topics'][] = $topic['topic_name'];
 					}
 
 					$practical_ids = explode(',',$lecture_detail['practical_ids']);
@@ -3792,11 +3787,7 @@ class Api extends CI_Controller {
 
 					foreach($practicals as $practical)
 					{
-						$lecture_subjects[$a]['date_time'][$b]['practicals'][] = array(
-							'practical_id' => $practical['practical_id'],
-							'practical_name' => $practical['practical_name'],
-							'is_studied' => false,
-						);
+						$lecture_subjects[$a]['date_time'][$b]['practicals'][] = $practical['practical_name'];
 					}
 
 					$b++;
@@ -3879,22 +3870,7 @@ class Api extends CI_Controller {
 
 					foreach($topics as $topic)
 					{
-						$topic_row = array(
-							'topic_id' => $topic['topic_id'],
-							'topic_name' => $topic['topic_name'],
-							'is_studied' => false,
-						);
-						$studied = $this->db->get_where('study_by_teacher', array(
-							'topic_id' => $topic['topic_id'],
-							'session_syllabus_id' => $lecture_detail['id'],
-							'is_quiz' => $lecture_detail['is_quiz'],
-						))->row_array();
-						if (!empty($studied)) {
-							$topic_row['is_studied'] = true;
-							$topic_row['studied_by'] = $studied['created_by'];
-							$topic_row['studied_at'] = $studied['created_at'];
-						}
-						$lecture_subjects[$a]['date_time'][$b]['topics'][] = $topic_row;
+						$lecture_subjects[$a]['date_time'][$b]['topics'][] = $topic['topic_name'];
 					}
 
 					$practical_ids = explode(',',$lecture_detail['practical_ids']);
@@ -3904,22 +3880,7 @@ class Api extends CI_Controller {
 
 					foreach($practicals as $practical)
 					{
-						$practical_row = array(
-							'practical_id' => $practical['practical_id'],
-							'practical_name' => $practical['practical_name'],
-							'is_studied' => false,
-						);
-						$studied = $this->db->get_where('study_by_teacher', array(
-							'practical_id' => $practical['practical_id'],
-							'session_syllabus_id' => $lecture_detail['id'],
-							'is_quiz' => $lecture_detail['is_quiz'],
-						))->row_array();
-						if (!empty($studied)) {
-							$practical_row['is_studied'] = true;
-							$practical_row['studied_by'] = $studied['created_by'];
-							$practical_row['studied_at'] = $studied['created_at'];
-						}
-						$lecture_subjects[$a]['date_time'][$b]['practicals'][] = $practical_row;
+						$lecture_subjects[$a]['date_time'][$b]['practicals'][] = $practical['practical_name'];
 					}
 
 					$b++;
