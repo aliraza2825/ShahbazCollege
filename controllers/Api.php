@@ -3580,6 +3580,7 @@ class Api extends CI_Controller {
 			$this->db->or_like('designation_id',','.$designation_id.',', 'both');
 			$this->db->or_like('designation_id',$designation_id.',', 'both');
 			$this->db->where(array('users.campus_id'=>$campuses[0]['campus_id']));
+            $this->db->where(array('users.status'=> "1"));
 			$users = $this->db->get()->result_array();
 
 
