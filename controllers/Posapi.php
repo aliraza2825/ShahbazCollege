@@ -2849,4 +2849,362 @@ class Posapi extends CI_Controller {
 			),
 		));
 	}
+
+	private function _require_return_perm()
+	{
+		$perms = $this->_permissions();
+		if (!$perms['is_admin'] && empty($perms['can_view_history']) && empty($perms['can_sell'])) {
+			$this->_json(array('success' => false, 'message' => 'Permission denied'), 403);
+		}
+		return $perms;
+	}
+
+	private function _product_closing_tagged($closing_id)
+	{
+		return !($closing_id === null || $closing_id === '' || $closing_id === '0' || (int)$closing_id === 0);
+	}
+
+	private function _my_pettycash_balance()
+	{
+		$user_id = (int)$this->current_user['user_id'];
+		if ($user_id <= 0 || !$this->db->table_exists('petty_cash_college_wise')) {
+			return 0.0;
+		}
+		$cash = $this->db->get_where('petty_cash_college_wise', array('assign_to' => $user_id))->row_array();
+		if (!$cash || empty($cash['id'])) {
+			return 0.0;
+		}
+		if (!function_exists('pettycash_statement')) {
+			$this->load->helper('custom_helper');
+		}
+		return (float)pettycash_statement((int)$cash['id']);
+	}
+
+	private function _return_expense_category_id()
+	{
+		if (!$this->db->table_exists('default_return_category_inventory')) {
+			return 0;
+		}
+		$row = $this->db->get_where('default_return_category_inventory', array('id' => 1))->row_array();
+		return $row && !empty($row['expense_category_id']) ? (int)$row['expense_category_id'] : 0;
+	}
+
+	private function _order_by_invoice($invoice_no)
+	{
+		$invoice_no = trim((string)$invoice_no);
+		if ($invoice_no === '' || !$this->db->table_exists('pos_orders')) {
+			return null;
+		}
+		return $this->db->get_where('pos_orders', array('invoice_no' => $invoice_no))->row_array();
+	}
+
+	private function _assert_return_invoice_access($invoice_no)
+	{
+		$order = $this->_order_by_invoice($invoice_no);
+		if (!$order) {
+			$this->_json(array('success' => false, 'message' => 'Invoice not found'), 404);
+		}
+		$perms = $this->_require_return_perm();
+		$is_seller = !empty($order['sold_by']) && (int)$order['sold_by'] === (int)$this->current_user['user_id'];
+		if (!$perms['is_admin'] && empty($perms['can_view_history']) && !$is_seller && empty($perms['can_sell'])) {
+			$this->_json(array('success' => false, 'message' => 'Permission denied'), 403);
+		}
+		if (!empty($order['campus_id']) && !$is_seller) {
+			$this->_require_campus_access($order['campus_id']);
+		}
+		return array($order, $perms);
+	}
+
+	private function _returnable_units($invoice_no, $product_name_id = null)
+	{
+		$this->db->select('products.*, product_names.product_name', false);
+		$this->db->from('products');
+		$this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'inner');
+		$this->db->where(array(
+			'products.invoice_no' => $invoice_no,
+			'products.return_status' => 0,
+			'products.sold' => 1,
+		));
+		if ($product_name_id !== null) {
+			$this->db->where('products.product_name_id', (int)$product_name_id);
+		}
+		$this->db->order_by('products.product_id', 'ASC');
+		$rows = $this->db->get()->result_array();
+		usort($rows, function ($a, $b) {
+			$aOpen = $this->_product_closing_tagged(isset($a['closing_id']) ? $a['closing_id'] : null) ? 1 : 0;
+			$bOpen = $this->_product_closing_tagged(isset($b['closing_id']) ? $b['closing_id'] : null) ? 1 : 0;
+			if ($aOpen !== $bOpen) return $aOpen - $bOpen;
+			return (int)$a['product_id'] - (int)$b['product_id'];
+		});
+		return $rows;
+	}
+
+	private function _return_preview_lines($invoice_no)
+	{
+		$this->db->select(
+			'products.product_name_id, product_names.product_name,
+			 COUNT(*) AS returnable_qty,
+			 SUM(CASE WHEN products.closing_id IS NOT NULL AND products.closing_id != "" AND products.closing_id != "0" THEN 1 ELSE 0 END) AS closed_qty,
+			 SUM(products.sold_amount) AS total_sold_price',
+			false
+		);
+		$this->db->from('products');
+		$this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'inner');
+		$this->db->where(array(
+			'products.invoice_no' => $invoice_no,
+			'products.return_status' => 0,
+			'products.sold' => 1,
+		));
+		$this->db->group_by('products.product_name_id');
+		$this->db->order_by('product_names.product_name', 'ASC');
+		$rows = $this->db->get()->result_array();
+		$lines = array();
+		$total_units = 0;
+		$closed_units = 0;
+		foreach ($rows as $row) {
+			$qty = (int)$row['returnable_qty'];
+			$closed = (int)$row['closed_qty'];
+			$open = max(0, $qty - $closed);
+			$total_units += $qty;
+			$closed_units += $closed;
+			$lines[] = array(
+				'product_name_id' => (int)$row['product_name_id'],
+				'product_name' => $row['product_name'],
+				'returnable_qty' => $qty,
+				'closed_qty' => $closed,
+				'open_qty' => $open,
+				'total_sold_price' => (float)$row['total_sold_price'],
+			);
+		}
+		$closing_status = 'none';
+		if ($total_units > 0) {
+			if ($closed_units <= 0) $closing_status = 'open';
+			elseif ($closed_units >= $total_units) $closing_status = 'closed';
+			else $closing_status = 'mixed';
+		}
+		return array($lines, $closing_status, $total_units, $closed_units);
+	}
+
+	private function _restock_from_sold_row($product)
+	{
+		$copy = array(
+			'campus_id' => $product['campus_id'],
+			'room_id' => $product['room_id'],
+			'subroom_id' => $product['subroom_id'],
+			'product_name_id' => $product['product_name_id'],
+			'product_image' => $product['product_image'],
+			'online_product_image' => isset($product['online_product_image']) ? $product['online_product_image'] : '',
+			'purchase_slip' => $product['purchase_slip'],
+			'online_purchase_slip' => isset($product['online_purchase_slip']) ? $product['online_purchase_slip'] : '',
+			'product_quantity' => $product['product_quantity'],
+			'remaining_quantity' => $product['remaining_quantity'],
+			'qr_code' => $product['qr_code'],
+			'estimated_price' => $product['estimated_price'],
+			'product_guarantee' => $product['product_guarantee'],
+			'product_guarantee_start_date' => $product['product_guarantee_start_date'],
+			'product_guarantee_end_date' => $product['product_guarantee_end_date'],
+			'remarks' => $product['remarks'],
+			'date' => $product['date'],
+			'add_by' => $product['add_by'],
+			'last_edit' => $product['last_edit'],
+			'clear_by' => $product['clear_by'],
+			'status' => $product['status'],
+			'consumeable' => $product['consumeable'],
+			'consume' => $product['consume'],
+			'consume_reason' => $product['consume_reason'],
+			'consume_date' => $product['consume_date'],
+			'sale_quantity' => $product['sale_quantity'],
+			'move_quantity' => $product['move_quantity'],
+			'upload_image' => $product['upload_image'],
+			'delete_image' => $product['delete_image'],
+			'po_no' => $product['po_no'],
+			'grn_no' => $product['grn_no'],
+			'sale_id' => $product['sale_id'],
+			'user_id' => $product['user_id'],
+			'reponsilble_user_id' => $product['reponsilble_user_id'],
+			'saleable' => $product['saleable'],
+			'sale_amount' => $product['sale_amount'],
+			'expire' => $product['expire'],
+			'expire_date' => $product['expire_date'],
+			'returnable' => $product['returnable'],
+			'sold_amount' => '',
+			'sold' => 0,
+			'invoice_no' => '',
+			'sold_date' => '',
+			'sold_by' => 0,
+			'student_id' => 0,
+			'purchaser_name' => '',
+			'purchaser_phone' => '',
+			'purchase_no' => isset($product['purchase_no']) ? $product['purchase_no'] : '',
+			'return_status' => 0,
+			'return_by' => 0,
+		);
+		$this->db->insert('products', $copy);
+	}
+
+	private function _return_one_unit($product, $needs_petty_expense)
+	{
+		$sold_amount = (float)$product['sold_amount'];
+		if ($needs_petty_expense && $sold_amount > 0) {
+			$balance = $this->_my_pettycash_balance();
+			if ($balance < $sold_amount) {
+				return array(false, 'Not enough petty cash balance for refund (need ' . number_format($sold_amount, 2) . ')');
+			}
+			$expense_category_id = $this->_return_expense_category_id();
+			if ($expense_category_id <= 0 || !$this->db->table_exists('expenses')) {
+				return array(false, 'Return expense category is not configured');
+			}
+			$purpose = 'Product (' . $product['product_name'] . ') Return To '
+				. $product['purchaser_name'] . ' ' . $product['purchaser_phone']
+				. ' Purchased on ' . $product['sold_date'];
+			$this->db->insert('expenses', array(
+				'date' => date('Y-m-d'),
+				'actual_date' => date('Y-m-d H:i:s'),
+				'purpose' => $purpose,
+				'title' => 'Product Return',
+				'amount' => $sold_amount,
+				'add_by' => trim(
+					(isset($this->current_user['first_name']) ? $this->current_user['first_name'] : '') . ' '
+					. (isset($this->current_user['last_name']) ? $this->current_user['last_name'] : '')
+				),
+				'add_by_id' => (int)$this->current_user['user_id'],
+				'last_edit' => trim(
+					(isset($this->current_user['first_name']) ? $this->current_user['first_name'] : '') . ' '
+					. (isset($this->current_user['last_name']) ? $this->current_user['last_name'] : '')
+				),
+				'expense_category_id' => $expense_category_id,
+				'campus_id' => $product['campus_id'],
+				'payment_type' => 'cash',
+				'paid_type' => 'cash',
+				'approved_status' => 1,
+			));
+		}
+
+		$this->db->where('product_id', (int)$product['product_id'])->update('products', array(
+			'return_status' => 1,
+			'return_by' => (int)$this->current_user['user_id'],
+		));
+		$this->_restock_from_sold_row($product);
+		return array(true, null);
+	}
+
+	/**
+	 * GET return_preview?invoice_no=
+	 * Returnable lines + whether closing already tagged (petty cash refund needed).
+	 */
+	public function return_preview()
+	{
+		$invoice_no = trim((string)$this->input->get('invoice_no'));
+		if ($invoice_no === '') {
+			$this->_json(array('success' => false, 'message' => 'invoice_no required'), 400);
+		}
+		list($order,) = $this->_assert_return_invoice_access($invoice_no);
+		list($lines, $closing_status, $total_units, $closed_units) = $this->_return_preview_lines($invoice_no);
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'invoice_no' => $invoice_no,
+				'order_id' => (int)$order['order_id'],
+				'purchaser_name' => isset($order['purchaser_name']) ? $order['purchaser_name'] : '',
+				'created_at' => isset($order['created_at']) ? $order['created_at'] : '',
+				'lines' => $lines,
+				'closing_status' => $closing_status,
+				'requires_petty_cash_when_closed' => $closed_units > 0,
+				'petty_cash_balance' => $this->_my_pettycash_balance(),
+				'total_returnable_units' => $total_units,
+				'closed_units' => $closed_units,
+			),
+		));
+	}
+
+	/**
+	 * POST return_items — { invoice_no, items:[{product_name_id, quantity}], confirm_petty_cash? }
+	 */
+	public function return_items()
+	{
+		$body = $this->_body();
+		$invoice_no = trim((string)(isset($body['invoice_no']) ? $body['invoice_no'] : ''));
+		$items = isset($body['items']) && is_array($body['items']) ? $body['items'] : array();
+		$confirm_petty = !empty($body['confirm_petty_cash']);
+		if ($invoice_no === '' || !count($items)) {
+			$this->_json(array('success' => false, 'message' => 'invoice_no and items required'), 400);
+		}
+		list($order,) = $this->_assert_return_invoice_access($invoice_no);
+
+		$returned = 0;
+		$planned_refund = 0.0;
+		$needs_confirm = false;
+
+		foreach ($items as $item) {
+			$product_name_id = (int)(isset($item['product_name_id']) ? $item['product_name_id'] : 0);
+			$qty = (int)(isset($item['quantity']) ? $item['quantity'] : 0);
+			if ($product_name_id <= 0 || $qty <= 0) continue;
+			$units = $this->_returnable_units($invoice_no, $product_name_id);
+			if (count($units) < $qty) {
+				$this->_json(array('success' => false, 'message' => 'Return quantity exceeds sold quantity'), 409);
+			}
+			for ($i = 0; $i < $qty; $i++) {
+				$unit = $units[$i];
+				$tagged = $this->_product_closing_tagged(isset($unit['closing_id']) ? $unit['closing_id'] : null);
+				if ($tagged && (float)$unit['sold_amount'] > 0) {
+					$needs_confirm = true;
+					$planned_refund += (float)$unit['sold_amount'];
+				}
+			}
+		}
+
+		if ($needs_confirm && !$confirm_petty) {
+			$this->_json(array(
+				'success' => false,
+				'needs_petty_cash_confirm' => true,
+				'refund_total' => round($planned_refund, 2),
+				'petty_cash_balance' => $this->_my_pettycash_balance(),
+				'message' => 'Some items were already included in a closed closing. Refund will be paid from your petty cash.',
+			), 409);
+		}
+
+		if ($needs_confirm && $this->_my_pettycash_balance() < $planned_refund) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Not enough petty cash balance for this return',
+				'refund_total' => round($planned_refund, 2),
+				'petty_cash_balance' => $this->_my_pettycash_balance(),
+			), 409);
+		}
+
+		$refund_total = 0.0;
+		$this->db->trans_start();
+		foreach ($items as $item) {
+			$product_name_id = (int)(isset($item['product_name_id']) ? $item['product_name_id'] : 0);
+			$qty = (int)(isset($item['quantity']) ? $item['quantity'] : 0);
+			if ($product_name_id <= 0 || $qty <= 0) continue;
+			$units = $this->_returnable_units($invoice_no, $product_name_id);
+			for ($i = 0; $i < $qty; $i++) {
+				$unit = $units[$i];
+				$tagged = $this->_product_closing_tagged(isset($unit['closing_id']) ? $unit['closing_id'] : null);
+				list($ok, $err) = $this->_return_one_unit($unit, $tagged);
+				if (!$ok) {
+					$this->db->trans_rollback();
+					$this->_json(array('success' => false, 'message' => $err ? $err : 'Return failed'), 409);
+				}
+				$returned++;
+				if ($tagged && (float)$unit['sold_amount'] > 0) {
+					$refund_total += (float)$unit['sold_amount'];
+				}
+			}
+		}
+		$this->db->trans_complete();
+		if (!$this->db->trans_status()) {
+			$this->_json(array('success' => false, 'message' => 'Return failed'), 500);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'message' => $returned . ' item(s) returned',
+			'returned' => $returned,
+			'refund_total' => round($refund_total, 2),
+			'invoice_no' => $invoice_no,
+			'order_id' => (int)$order['order_id'],
+		));
+	}
 }
