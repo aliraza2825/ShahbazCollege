@@ -130,4 +130,45 @@ class Dashboardapi extends CI_Controller {
 		if (empty($result['success'])) $this->_json($result, 422);
 		$this->_json($result);
 	}
+
+	public function home_clear_procedure()
+	{
+		$this->_json(array('success' => true, 'data' => $this->service->home_clear_procedure($this->current_user)));
+	}
+
+	public function home_pending_tasks()
+	{
+		$this->_json(array('success' => true, 'data' => $this->service->home_pending_tasks($this->current_user)));
+	}
+
+	public function home_statistics()
+	{
+		$this->_json(array('success' => true, 'data' => $this->service->home_statistics($this->current_user)));
+	}
+
+	public function home_reminders()
+	{
+		$this->_json(array('success' => true, 'data' => $this->service->home_reminders($this->current_user)));
+	}
+
+	public function home_lectures()
+	{
+		$this->_json(array('success' => true, 'data' => $this->service->home_lectures($this->current_user)));
+	}
+
+	public function campus_status()
+	{
+		if (!$this->service->permissions($this->current_user)['campus_status']) {
+			$this->_json(array('success' => false, 'message' => 'Campus status access required'), 403);
+		}
+		$this->_json(array(
+			'success' => true,
+			'data' => $this->service->campus_status(
+				$this->current_user,
+				$this->input->get('from_date'),
+				$this->input->get('to_date'),
+				$this->input->get('date_type')
+			),
+		));
+	}
 }

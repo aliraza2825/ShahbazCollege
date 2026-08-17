@@ -23,11 +23,298 @@ class Dashboard_service {
     public function meta($user)
     {
         return array(
-            'permissions' => array(
-                'is_admin' => $user && $user['role'] === 'Admin',
-                'fee_status' => $this->can_view_fee_status($user),
-            ),
+            'permissions' => $this->permissions($user),
             'campuses' => $this->_campuses_for_user($user),
+        );
+    }
+
+    public function permissions($user)
+    {
+        return array(
+            'is_admin' => $this->_is_admin($user),
+            'check_student' => $this->_can($user, 'dashboard_check_student_box'),
+            'campus_status' => $this->_can($user, 'dashboard_campus_status_box'),
+            'new_admission_entries' => $this->_can($user, 'dashboard_new_admisssion_entries_box'),
+            'new_expense_entries' => $this->_can($user, 'dashboard_new_expense_entries_box'),
+            'fee_status' => $this->can_view_fee_status($user),
+            'update_fee_requests' => $this->_can($user, 'dashboard_update_payment_box'),
+            'discount_requests' => $this->_can($user, 'dashboard_update_discount_box'),
+            'update_student_requests' => $this->_can($user, 'dashboard_update_student_box'),
+            'reminders_status' => $this->_can($user, 'dashboard_reminders_status'),
+            'test_engine_questions' => $this->_can($user, 'dashboard_test_engine_questions'),
+            'uncheck_assignments' => $this->_can($user, 'dashboard_uncheck_assignment'),
+            'fee_reversal_requests' => $this->_can($user, 'dashboard_students_fees_reversal'),
+            'total_students' => $this->_can($user, 'dashboard_total_student_box'),
+            'total_teachers' => $this->_can($user, 'dashboard_total_teacher_box'),
+            'new_admissions_month' => $this->_can($user, 'dashboard_new_admission'),
+            'month_earning' => $this->_can($user, 'dashboard_month_earning'),
+            'month_expense' => $this->_can($user, 'dashboard_month_expense'),
+            'month_profit' => $this->_can($user, 'dashboard_month_profit'),
+            'classes_status' => $this->_can($user, 'dashboard_classes_status'),
+            'council_report' => $this->_can($user, 'council_report'),
+            'online_applications' => $this->_can($user, 'online_application_new_admissions'),
+            'expense_reversals' => $this->_can($user, 'expense_second_approval'),
+            'struck_off_inquiry' => $this->_can($user, 'student_struck_off_list'),
+            'struck_off_final' => $this->_can($user, 'student_delete'),
+            'expense_approval' => $this->_can($user, 'expense_approval'),
+        );
+    }
+
+    /** Clear procedure matrix + aggregate tiles (only permitted columns). */
+    public function home_clear_procedure($user)
+    {
+        $this->_bootstrap_session($user);
+        $this->ci->load->helper('custom');
+        $perms = $this->permissions($user);
+        $campuses = $this->_campuses_for_user($user);
+        $matrix = array();
+        $tiles = array(
+            'new_admission_entries' => 0,
+            'new_expense_entries' => 0,
+            'fee_status' => 0,
+            'update_fee_requests' => 0,
+            'discount_requests' => 0,
+            'update_student_requests' => 0,
+            'reminders_pending' => 0,
+            'reminders_under_review' => 0,
+            'new_applications' => 0,
+            'pending_applications' => 0,
+        );
+
+        foreach ($campuses as $campus) {
+            $cid = (int) $campus['campus_id'];
+            $row = array(
+                'campus_id' => $cid,
+                'campus_name' => $campus['campus_name'],
+            );
+
+            if ($perms['new_admission_entries']) {
+                $n = count(dashboardNewAdmissions($cid));
+                $row['new_admission_entries'] = $n;
+                $tiles['new_admission_entries'] += $n;
+            }
+            if ($perms['new_expense_entries']) {
+                $n = count(dashboardNewExpenseEntries($cid));
+                $row['new_expense_entries'] = $n;
+                $tiles['new_expense_entries'] += $n;
+            }
+            if ($perms['fee_status']) {
+                $student = $this->_count_student_fee_groups($cid, $user);
+                $contractor = $this->_count_contractor_fee_groups($cid, $user);
+                $row['student_fee_count'] = $student;
+                $row['contractor_fee_count'] = $contractor;
+                $row['fee_status_count'] = $student + $contractor;
+                $tiles['fee_status'] += $student + $contractor;
+            }
+            if ($perms['update_fee_requests']) {
+                $n = count(dashboardUpdateFeeRequests($cid)) + count(dashboardUpdateFeeRequestsContractors($cid));
+                $row['update_fee_requests'] = $n;
+                $tiles['update_fee_requests'] += $n;
+            }
+            if ($perms['update_student_requests']) {
+                $n = count(dashboardUpdateStudentRequests($cid));
+                $row['update_student_requests'] = $n;
+                $tiles['update_student_requests'] += $n;
+            }
+            if ($perms['reminders_status']) {
+                $pending = count(dashboardPendingReminders($cid));
+                $review = count(dashboardRemindersUnderReview($cid));
+                $row['reminders_pending'] = $pending;
+                $row['reminders_under_review'] = $review;
+                $tiles['reminders_pending'] += $pending;
+                $tiles['reminders_under_review'] += $review;
+            }
+            if ($perms['online_applications']) {
+                $new_apps = dashboardNewApplications($cid);
+                $pending_apps = dashboardPendingApplications($cid);
+                $row['new_applications'] = $new_apps;
+                $row['pending_applications'] = $pending_apps;
+                $tiles['new_applications'] += $new_apps;
+                $tiles['pending_applications'] += $pending_apps;
+            }
+
+            $matrix[] = $row;
+        }
+
+        if ($perms['discount_requests']) {
+            $tiles['discount_requests'] = (int) $this->ci->db
+                ->where('status', 0)
+                ->count_all_results('discounts_approval');
+        }
+
+        return array('tiles' => $tiles, 'matrix' => $matrix);
+    }
+
+    /** Pending task tiles on dashboard home. */
+    public function home_pending_tasks($user)
+    {
+        $this->_bootstrap_session($user);
+        $perms = $this->permissions($user);
+        $out = array();
+
+        if ($perms['test_engine_questions']) {
+            $out['test_engine_questions'] = (int) $this->ci->db
+                ->where('status', 0)
+                ->count_all_results('questions');
+        }
+        if ($perms['uncheck_assignments']) {
+            $out['uncheck_assignments'] = count($this->ci->dashboards->getUncheckAssignments());
+        }
+        if ($perms['struck_off_inquiry']) {
+            $out['struck_off_inquiry'] = $this->_struck_off_count(false);
+        }
+        if ($perms['struck_off_final']) {
+            $out['struck_off_final'] = $this->_struck_off_count(true);
+        }
+        if ($perms['expense_approval']) {
+            $row = $this->ci->db->query(
+                "SELECT COUNT(*) AS c FROM expenses WHERE approved_status = '0' AND add_by != 'Muhammad Irfan'"
+            )->row_array();
+            $out['expense_approval'] = $row ? (int) $row['c'] : 0;
+        }
+        if ($perms['fee_reversal_requests']) {
+            $out['fee_reversal_requests'] = (int) $this->ci->db
+                ->where('status', 0)
+                ->count_all_results('payments_reversal_requests');
+        }
+        if ($perms['expense_reversals']) {
+            $this->ci->db->where(array('approved_status' => '1', 'rev_status' => '0'));
+            if (!$this->_is_admin($user)) {
+                $acc = $this->_access_row($user);
+                $ids = ($acc && !empty($acc['campus_ids']))
+                    ? array_filter(array_map('intval', explode(',', $acc['campus_ids'])))
+                    : array(0);
+                $this->ci->db->where_in('campus_id', $ids);
+            }
+            $out['expense_reversals'] = (int) $this->ci->db->count_all_results('expenses');
+        }
+
+        return $out;
+    }
+
+    /** Monthly statistics tiles. */
+    public function home_statistics($user)
+    {
+        $this->_bootstrap_session($user);
+        $perms = $this->permissions($user);
+        $acc = $this->_access_row($user);
+        $has_campus = $this->_is_admin($user) || ($acc && !empty($acc['campus_ids']));
+        if (!$has_campus) {
+            return array();
+        }
+
+        $out = array();
+        if ($perms['total_students']) {
+            $out['total_students'] = (int) $this->ci->dashboards->total_students();
+        }
+        if ($perms['total_teachers']) {
+            $out['total_teachers'] = (int) $this->ci->dashboards->total_teachers();
+        }
+        if ($perms['new_admissions_month']) {
+            $out['new_admissions_month'] = (int) $this->ci->dashboards->new_students_this_month();
+        }
+        if ($perms['month_earning']) {
+            $earning = $this->ci->dashboards->getTotalSubmittedFee(date('Y-m-01'), date('Y-m-d'), 'actual_paid_date');
+            $out['month_earning'] = isset($earning[0]['this_month_earning']) ? (float) $earning[0]['this_month_earning'] : 0;
+        }
+        if ($perms['month_expense']) {
+            $expense = $this->ci->dashboards->thisMonthExpense();
+            $out['month_expense'] = isset($expense[0]['this_month_expense']) ? (float) $expense[0]['this_month_expense'] : 0;
+        }
+        if ($perms['month_profit']) {
+            $earning = $this->ci->dashboards->getTotalSubmittedFee(date('Y-m-01'), date('Y-m-d'), 'actual_paid_date');
+            $expense = $this->ci->dashboards->thisMonthExpense();
+            $e = isset($earning[0]['this_month_earning']) ? (float) $earning[0]['this_month_earning'] : 0;
+            $x = isset($expense[0]['this_month_expense']) ? (float) $expense[0]['this_month_expense'] : 0;
+            $out['month_profit'] = $e - $x;
+        }
+        if ($perms['classes_status']) {
+            $out['classes_status'] = count($this->ci->dashboards->classesStatus());
+        }
+
+        return $out;
+    }
+
+    /** Logged-in user's due reminders (always available). */
+    public function home_reminders($user)
+    {
+        $this->_bootstrap_session($user);
+        $rows = $this->ci->dashboards->getReminders();
+        $out = array();
+        foreach ($rows as $r) {
+            $out[] = array(
+                'reminder_id' => (int) $r['reminder_id'],
+                'note' => isset($r['note']) ? $r['note'] : '',
+                'date' => isset($r['date']) ? $r['date'] : '',
+                'status' => isset($r['status']) ? $r['status'] : '',
+                'add_by' => isset($r['add_by']) ? $r['add_by'] : '',
+            );
+        }
+        return $out;
+    }
+
+    /** Teacher's upcoming lectures for today / schedule. */
+    public function home_lectures($user)
+    {
+        if (!$user) return array();
+        $rows = $this->ci->db
+            ->select('lectures.*, courses.course_name, campuses.campus_name, rooms.room_name')
+            ->from('lectures')
+            ->join('courses', 'courses.course_id = lectures.course', 'left')
+            ->join('campuses', 'campuses.campus_id = lectures.campus', 'left')
+            ->join('rooms', 'rooms.room_id = lectures.room', 'left')
+            ->where('lectures.teacher', (int) $user['user_id'])
+            ->order_by('lectures.date', 'ASC')
+            ->limit(20)
+            ->get()->result_array();
+        $out = array();
+        foreach ($rows as $r) {
+            $out[] = array(
+                'lecture_id' => (int) $r['lecture_id'],
+                'course_name' => isset($r['course_name']) ? $r['course_name'] : '',
+                'campus_name' => isset($r['campus_name']) ? $r['campus_name'] : '',
+                'room_name' => isset($r['room_name']) ? $r['room_name'] : '',
+                'date' => isset($r['date']) ? $r['date'] : '',
+                'start_time' => isset($r['start_time']) ? $r['start_time'] : '',
+                'end_time' => isset($r['end_time']) ? $r['end_time'] : '',
+            );
+        }
+        return $out;
+    }
+
+    /** Campus P&L status table for date range. */
+    public function campus_status($user, $from_date, $to_date, $date_type)
+    {
+        if (!$this->_can($user, 'dashboard_campus_status_box')) {
+            return array();
+        }
+        $this->_bootstrap_session($user);
+        $this->ci->load->helper('custom');
+        if (!$from_date) $from_date = date('Y-m-01');
+        if (!$to_date) $to_date = date('Y-m-d');
+        if (!in_array($date_type, array('paid_date', 'actual_paid_date'), true)) {
+            $date_type = 'actual_paid_date';
+        }
+
+        $campuses = $this->_campuses_for_user($user);
+        $rows = array();
+        foreach ($campuses as $campus) {
+            $cid = (int) $campus['campus_id'];
+            $rows[] = array(
+                'campus_id' => $cid,
+                'campus_name' => $campus['campus_name'],
+                'new_admissions' => (int) getNewAdmissions($cid, $from_date, $to_date, $date_type),
+                'fee_college' => (float) getFeeCollectinCollege($cid, $from_date, $to_date, $date_type),
+                'fee_bank' => (float) getFeeCollectinBank($cid, $from_date, $to_date, $date_type),
+                'expense' => (float) getCampusTotalExpense($cid, $from_date, $to_date),
+            );
+        }
+
+        return array(
+            'from_date' => $from_date,
+            'to_date' => $to_date,
+            'date_type' => $date_type,
+            'rows' => $rows,
         );
     }
 
@@ -633,5 +920,57 @@ class Dashboard_service {
             : array();
         if (!count($ids)) return array();
         return $this->ci->db->where_in('campus_id', $ids)->order_by('campus_name', 'ASC')->get('campuses')->result_array();
+    }
+
+    private function _bootstrap_session($user)
+    {
+        if (!$user) return;
+        $name = trim((isset($user['first_name']) ? $user['first_name'] : '').' '.(isset($user['last_name']) ? $user['last_name'] : ''));
+        $this->ci->session->set_userdata(array(
+            'user_id' => (int) $user['user_id'],
+            'role' => isset($user['role']) ? $user['role'] : '',
+            'name' => $name,
+        ));
+    }
+
+    private function _access_row($user)
+    {
+        if (!$user) return null;
+        static $cache = array();
+        $uid = (int) $user['user_id'];
+        if (!isset($cache[$uid])) {
+            $cache[$uid] = $this->ci->db->get_where('access', array('user_id' => $uid))->row_array();
+        }
+        return $cache[$uid];
+    }
+
+    private function _is_admin($user)
+    {
+        return $user && isset($user['role']) && $user['role'] === 'Admin';
+    }
+
+    private function _can($user, $key)
+    {
+        if (!$user) return false;
+        if ($this->_is_admin($user)) return true;
+        $acc = $this->_access_row($user);
+        return $acc && !empty($acc[$key]);
+    }
+
+    /** @param bool $final true = final struck-off pending delete */
+    private function _struck_off_count($final)
+    {
+        if ($final) {
+            $sql = "SELECT COUNT(ast.student_id) AS c FROM struckofdetails_students ast
+                WHERE (ast.status = 0 AND (SELECT COUNT(student_id) FROM struckofdetails_students WHERE student_id = ast.student_id) = 3)
+                   OR (ast.action_type = 1 AND ast.status = 0)
+                GROUP BY ast.student_id";
+        } else {
+            $sql = "SELECT COUNT(struckofdetails_students.student_id) AS c FROM struckofdetails_students
+                WHERE struckofdetails_students.status = '0'
+                GROUP BY struckofdetails_students.student_id";
+        }
+        $rows = $this->ci->db->query($sql)->result_array();
+        return count($rows);
     }
 }
