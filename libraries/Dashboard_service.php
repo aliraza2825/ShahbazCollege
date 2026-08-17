@@ -253,7 +253,7 @@ class Dashboard_service {
         return $out;
     }
 
-    /** Teacher's upcoming lectures for today / schedule. */
+    /** Teacher's assigned lectures (legacy dashboard "My Lectures"). */
     public function home_lectures($user)
     {
         if (!$user) return array();
@@ -264,19 +264,20 @@ class Dashboard_service {
             ->join('campuses', 'campuses.campus_id = lectures.campus', 'left')
             ->join('rooms', 'rooms.room_id = lectures.room', 'left')
             ->where('lectures.teacher', (int) $user['user_id'])
-            ->order_by('lectures.date', 'ASC')
+            ->order_by('lectures.id', 'DESC')
             ->limit(20)
             ->get()->result_array();
         $out = array();
         foreach ($rows as $r) {
             $out[] = array(
-                'lecture_id' => (int) $r['lecture_id'],
+                'lecture_id' => (int) $r['id'],
+                'lecture_name' => isset($r['lecture_name']) ? $r['lecture_name'] : '',
                 'course_name' => isset($r['course_name']) ? $r['course_name'] : '',
                 'campus_name' => isset($r['campus_name']) ? $r['campus_name'] : '',
                 'room_name' => isset($r['room_name']) ? $r['room_name'] : '',
-                'date' => isset($r['date']) ? $r['date'] : '',
-                'start_time' => isset($r['start_time']) ? $r['start_time'] : '',
-                'end_time' => isset($r['end_time']) ? $r['end_time'] : '',
+                'start_date' => isset($r['start_date']) ? $r['start_date'] : '',
+                'end_date' => isset($r['end_date']) ? $r['end_date'] : '',
+                'days' => isset($r['days']) ? $r['days'] : '',
             );
         }
         return $out;
