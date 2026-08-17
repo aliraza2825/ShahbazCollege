@@ -318,6 +318,25 @@ class Dashboard_service {
         );
     }
 
+    /** Single bootstrap payload for dashboard home (one request). */
+    public function home($user)
+    {
+        $perms = $this->permissions($user);
+        $data = array(
+            'permissions' => $perms,
+            'campuses' => $this->_campuses_for_user($user),
+            'clear_procedure' => $this->home_clear_procedure($user),
+            'pending_tasks' => $this->home_pending_tasks($user),
+            'statistics' => $this->home_statistics($user),
+            'reminders' => $this->home_reminders($user),
+            'lectures' => $this->home_lectures($user),
+        );
+        if (!empty($perms['campus_status'])) {
+            $data['campus_status'] = $this->campus_status($user, date('Y-m-01'), date('Y-m-d'), 'actual_paid_date');
+        }
+        return $data;
+    }
+
     public function clear_procedure($user)
     {
         if (!$this->can_view_fee_status($user)) return array();

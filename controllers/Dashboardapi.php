@@ -171,4 +171,9 @@ class Dashboardapi extends CI_Controller {
 			),
 		));
 	}
+
+	public function home()
+	{
+		$this->_json(array('success' => true, 'data' => $this->service->home($this->current_user)));
+	}
 }
