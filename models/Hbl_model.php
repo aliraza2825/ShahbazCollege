@@ -21,7 +21,8 @@ class Hbl_model extends CI_Model
         ");
         $this->db->from('payments');
         $this->db->join('students', 'students.student_id = payments.student_id', 'left');
-        $this->db->where('payments.id', $consumerNumber);
+        // HBL sends the college challan number as p_ConsumerNumber.
+        $this->db->where('payments.challan_no', $consumerNumber);
         $row = $this->db->get()->row_array();
 
         if (!empty($row)) {
@@ -51,7 +52,8 @@ class Hbl_model extends CI_Model
 
     public function mark_bill_paid($consumerNumber, $data)
     {
-        $this->db->where('id', $consumerNumber);
+        // Keep the payment update on the same HBL consumer identifier used at inquiry.
+        $this->db->where('challan_no', $consumerNumber);
         $this->db->where('paid', 0);
         $this->db->update('payments', $data);
 
