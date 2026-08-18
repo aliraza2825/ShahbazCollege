@@ -214,19 +214,17 @@ class Dashboard_service {
             $out['new_admissions_month'] = (int) $this->ci->dashboards->new_students_this_month();
         }
         if ($perms['month_earning']) {
-            $earning = $this->ci->dashboards->getTotalSubmittedFee(date('Y-m-01'), date('Y-m-d'), 'actual_paid_date');
-            $out['month_earning'] = isset($earning[0]['this_month_earning']) ? (float) $earning[0]['this_month_earning'] : 0;
+            $out['month_earning'] = $this->_month_submitted_fee();
         }
         if ($perms['month_expense']) {
             $expense = $this->ci->dashboards->thisMonthExpense();
             $out['month_expense'] = isset($expense[0]['this_month_expense']) ? (float) $expense[0]['this_month_expense'] : 0;
         }
         if ($perms['month_profit']) {
-            $earning = $this->ci->dashboards->getTotalSubmittedFee(date('Y-m-01'), date('Y-m-d'), 'actual_paid_date');
+            $earning = $this->_month_submitted_fee();
             $expense = $this->ci->dashboards->thisMonthExpense();
-            $e = isset($earning[0]['this_month_earning']) ? (float) $earning[0]['this_month_earning'] : 0;
             $x = isset($expense[0]['this_month_expense']) ? (float) $expense[0]['this_month_expense'] : 0;
-            $out['month_profit'] = $e - $x;
+            $out['month_profit'] = $earning - $x;
         }
         if ($perms['classes_status']) {
             $out['classes_status'] = count($this->ci->dashboards->classesStatus());
@@ -307,7 +305,7 @@ class Dashboard_service {
                 'new_admissions' => (int) getNewAdmissions($cid, $from_date, $to_date, $date_type),
                 'fee_college' => (float) getFeeCollectinCollege($cid, $from_date, $to_date, $date_type),
                 'fee_bank' => (float) getFeeCollectinBank($cid, $from_date, $to_date, $date_type),
-                'expense' => (float) getCampusTotalExpense($cid, $from_date, $to_date),
+                'expense' => (float) (getCampusTotalExpense($cid, $from_date, $to_date, $date_type) ?: 0),
             );
         }
 
@@ -323,9 +321,17 @@ class Dashboard_service {
     public function home($user)
     {
         $perms = $this->permissions($user);
+        $campus_rows = $this->_campuses_for_user($user);
+        $campuses = array();
+        foreach ($campus_rows as $c) {
+            $campuses[] = array(
+                'campus_id' => (int) $c['campus_id'],
+                'campus_name' => isset($c['campus_name']) ? $c['campus_name'] : '',
+            );
+        }
         $data = array(
             'permissions' => $perms,
-            'campuses' => $this->_campuses_for_user($user),
+            'campuses' => $campuses,
             'clear_procedure' => $this->home_clear_procedure($user),
             'pending_tasks' => $this->home_pending_tasks($user),
             'statistics' => $this->home_statistics($user),
@@ -964,6 +970,13 @@ class Dashboard_service {
         return $cache[$uid];
     }
 
+    /** Legacy dashboard: getTotalSubmittedFee → total_submitted_fee */
+    private function _month_submitted_fee($date_type = 'actual_paid_date')
+    {
+        $rows = $this->ci->dashboards->getTotalSubmittedFee(date('Y-m-01'), date('Y-m-d'), $date_type);
+        return isset($rows[0]['total_submitted_fee']) ? (float) $rows[0]['total_submitted_fee'] : 0;
+    }
+
     private function _is_admin($user)
     {
         return $user && isset($user['role']) && $user['role'] === 'Admin';
@@ -975,6 +988,13 @@ class Dashboard_service {
         if ($this->_is_admin($user)) return true;
         $acc = $this->_access_row($user);
         return $acc && !empty($acc[$key]);
+    }
+
+    /** Bootstrap CI session + helpers for legacy Dashboards model queries. */
+    public function bootstrap_for_legacy($user)
+    {
+        $this->_bootstrap_session($user);
+        $this->ci->load->helper('custom');
     }
 
     /** @param bool $final true = final struck-off pending delete */
