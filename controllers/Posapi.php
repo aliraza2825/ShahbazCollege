@@ -196,6 +196,7 @@ class Posapi extends CI_Controller {
 			'http://localhost:5173',
 			'http://localhost:4173',
 			'http://127.0.0.1:5173',
+			'http://3.6.136.4',
 			'https://pos.shahbazcollegeofpharmacy.edu.pk',
 			'http://pos.shahbazcollegeofpharmacy.edu.pk',
 		);
