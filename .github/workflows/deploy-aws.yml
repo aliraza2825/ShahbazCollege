@@ -1,0 +1,28 @@
+name: Deploy legacy application to AWS
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**'
+
+concurrency:
+  group: shahbaz-aws-production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure restricted SSH access
+        env:
+          DEPLOY_KEY: ${{ secrets.SHAHBAZ_AWS_DEPLOY_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' '3.6.136.4 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGAl+sA7GOeUBM2bvv4FCSk+luWTk9HUle/vwXINHfT6' > ~/.ssh/known_hosts
+
+      - name: Deploy current main branch
+        run: ssh -i ~/.ssh/id_ed25519 github-deploy@3.6.136.4
