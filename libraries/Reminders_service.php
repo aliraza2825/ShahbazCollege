@@ -227,7 +227,8 @@ class Reminders_service {
     private function _campus_scope_ids($user)
     {
         if (!$user || $user['role'] === 'Admin') return null;
-        $acc = $this->ci->db->get_where('access', array('user_id' => $user['user_id']))->row_array();
+        // Must run on a clean QB — never call mid-query (get_where merges into active FROM/WHERE).
+        $acc = $this->ci->db->get_where('access', array('user_id' => (int) $user['user_id']))->row_array();
         return ($acc && !empty($acc['campus_ids']))
             ? array_filter(array_map('intval', explode(',', $acc['campus_ids'])))
             : array(0);
@@ -235,6 +236,8 @@ class Reminders_service {
 
     private function _instances_list($user, $check_by_admin, $campus_id = null)
     {
+        $scope = $this->_campus_scope_ids($user);
+
         $this->ci->db->select('reminder.*, users.first_name, users.last_name, users.campus_id, campuses.campus_name');
         $this->ci->db->from('reminder');
         $this->ci->db->join('users', 'users.user_id=reminder.user_id', 'INNER');
@@ -243,7 +246,6 @@ class Reminders_service {
             $this->ci->db->where('campuses.campus_id', (int) $campus_id);
         }
         $this->ci->db->where('reminder.check_by_admin', (int) $check_by_admin);
-        $scope = $this->_campus_scope_ids($user);
         if ($scope !== null) {
             $this->ci->db->where_in('campuses.campus_id', $scope);
         }

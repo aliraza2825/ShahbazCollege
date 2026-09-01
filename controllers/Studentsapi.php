@@ -134,9 +134,18 @@ class Studentsapi extends CI_Controller {
 	{
 		if ($this->_is_admin()) return true;
 		$row = $this->_access();
-		return !empty($row['student_sidebar'])
-			|| !empty($row['student_all'])
-			|| !empty($row['student_add']);
+		$keys = array(
+			'student_sidebar', 'student_add', 'student_all', 'student_edit',
+			'student_upload_documents', 'student_payments', 'student_payment_reset',
+			'student_payment_edit', 'can_student_struckof', 'student_issue_refund',
+			'council_list_report', 'extra_fee_access',
+		);
+		foreach ($keys as $key) {
+			if (!empty($row[$key])) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private function _perm($key)
@@ -223,6 +232,7 @@ class Studentsapi extends CI_Controller {
 			'discount_reversal' => $this->_perm('discount_reversal'),
 			'update_fee_submission' => $this->_perm('update_fee_submission'),
 			'delete_users_payment' => $this->_perm('delete_users_payment'),
+			'installment_date' => $this->_perm('installment_date'),
 		);
 	}
 
@@ -1750,22 +1760,60 @@ class Studentsapi extends CI_Controller {
 		$cnic = trim((string)$this->input->get('cnic'));
 		$course_id = (int)$this->input->get('course_id');
 		$exclude = (int)$this->input->get('exclude_student_id');
-		if ($cnic === '' || !$course_id) {
-			$this->_json(array('success' => true, 'exists' => false));
-		}
-		$rows = $this->student->checkStudentNIC($cnic, $course_id);
-		if ($exclude > 0) {
-			$rows = array_values(array_filter($rows, function ($r) use ($exclude) {
-				return (int)$r['student_id'] !== $exclude;
-			}));
+		if ($cnic === '') {
+			$this->_json(array('success' => false, 'message' => 'CNIC required'), 422);
 		}
 		$by_cnic = $this->db->get_where('students', array('cnic' => $cnic))->row_array();
+		$rows = array();
+		$exists = false;
+		if ($course_id > 0) {
+			$rows = $this->student->checkStudentNIC($cnic, $course_id);
+			if ($exclude > 0) {
+				$rows = array_values(array_filter($rows, function ($r) use ($exclude) {
+					return (int)$r['student_id'] !== $exclude;
+				}));
+			}
+			$exists = count($rows) > 0;
+		}
 		$this->_json(array(
 			'success' => true,
-			'exists' => count($rows) > 0,
+			'found' => $by_cnic ? true : false,
+			'exists' => $exists,
 			'existing_for_course' => $rows,
 			'prefill' => $by_cnic ? $by_cnic : null,
 		));
+	}
+
+	public function admission_criteria()
+	{
+		$course_id = (int)$this->input->get('course_id');
+		if ($course_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'course_id required'), 422);
+		}
+		$this->load->library('Admission_criteria_service', null, 'admission_criteria');
+		$this->admission_criteria->seed_defaults();
+		$set = $this->admission_criteria->get_set_for_course($course_id, false);
+		$this->_json(array(
+			'success' => true,
+			'has_criteria' => $set ? true : false,
+			'data' => $set,
+			'qualification_options' => $this->admission_criteria->qualification_options(),
+			'subject_options' => $this->admission_criteria->subject_options(),
+			'can_override' => $this->_is_admin(),
+		));
+	}
+
+	public function admission_criteria_evaluate()
+	{
+		$body = $this->_body();
+		$course_id = isset($body['course_id']) ? (int)$body['course_id'] : 0;
+		$answers = isset($body['answers']) && is_array($body['answers']) ? $body['answers'] : array();
+		if ($course_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'course_id required'), 422);
+		}
+		$this->load->library('Admission_criteria_service', null, 'admission_criteria');
+		$eval = $this->admission_criteria->evaluate($course_id, $answers);
+		$this->_json(array('success' => true, 'data' => $eval));
 	}
 
 	// ─── Occupations ────────────────────────────────────────
@@ -1899,6 +1947,48 @@ class Studentsapi extends CI_Controller {
 		if (!empty($class->dead_line_entry) && $class->dead_line_entry < date('Y-m-d')) {
 			$this->_json(array('success' => false, 'message' => 'Class admission deadline has passed'), 422);
 		}
+
+		$enforce_admission_eligibility = true;
+		$eligibility_answers = array();
+		$eligibility_override_reason = '';
+		$eligibility_result = 'pass';
+		$eligibility_set_id = 0;
+		if ($enforce_admission_eligibility) {
+			$this->load->library('Admission_criteria_service', null, 'admission_criteria');
+			$criteria_set = $this->admission_criteria->get_active_set($course_id);
+			$eligibility_answers = isset($body['eligibility_answers']) && is_array($body['eligibility_answers'])
+				? $body['eligibility_answers'] : array();
+			$eligibility_override = !empty($body['eligibility_override']);
+			$eligibility_override_reason = isset($body['eligibility_override_reason'])
+				? trim((string)$body['eligibility_override_reason']) : '';
+			if ($criteria_set) {
+				$eligibility_set_id = (int)$criteria_set['id'];
+				$eval = $this->admission_criteria->evaluate($course_id, $eligibility_answers);
+				if ($eval['result'] !== 'pass') {
+					if ($eligibility_override && $this->_is_admin()) {
+						if ($eligibility_override_reason === '') {
+							$this->_json(array('success' => false, 'message' => 'Override reason is required'), 422);
+						}
+						$eligibility_result = 'override';
+					} elseif (!empty($eval['soft_fail'])) {
+						$eligibility_result = 'fail';
+					} else {
+						$msg = 'Admission criteria not met';
+						if (!empty($eval['failures'][0]['message'])) {
+							$msg = $eval['failures'][0]['message'];
+						}
+						$this->_json(array(
+							'success' => false,
+							'message' => $msg,
+							'eligibility' => $eval,
+						), 422);
+					}
+				} else {
+					$eligibility_result = 'pass';
+				}
+			}
+		}
+
 		$campus = $this->db->get_where('campuses', array('campus_id' => $class->campus_id))->row();
 		$count_row = $this->db->select('MAX(count) as count', false)->get_where('students', array('class_id' => $class_id))->row();
 		$student_count = ($count_row && $count_row->count !== null) ? ((int)$count_row->count + 1) : 1;
@@ -1966,6 +2056,18 @@ class Studentsapi extends CI_Controller {
 
 		$student_id = $this->student->storeStudent($data);
 
+		if ($enforce_admission_eligibility && $eligibility_set_id > 0) {
+			$this->admission_criteria->record_eligibility(
+				$student_id,
+				$course_id,
+				$eligibility_set_id,
+				$eligibility_answers,
+				$eligibility_result,
+				$eligibility_result === 'override' ? $this->_actor_name() : null,
+				$eligibility_result === 'override' ? $eligibility_override_reason : null
+			);
+		}
+
 		// Machine ID (legacy logic)
 		$campus_row = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
 		if ($campus_row) {
@@ -2021,9 +2123,13 @@ class Studentsapi extends CI_Controller {
 
 		$pending = $this->db->get_where('update_student_requests', array('student_id' => $id, 'ok_by_admin' => 0))->result_array();
 
+		$this->load->library('Admission_criteria_service', null, 'admission_criteria');
+		$eligibility = $this->admission_criteria->latest_eligibility_for_student($id);
+
 		$this->_json(array(
 			'success' => true,
 			'data' => $s,
+			'admission_eligibility' => $eligibility,
 			'pending_update_request' => count($pending) > 0,
 			'permissions' => $this->_permissions(),
 		));
@@ -2162,9 +2268,13 @@ class Studentsapi extends CI_Controller {
 		$paid_rows = $this->db->get_where('payments', array('student_id' => $student_id, 'paid' => 1))->result_array();
 		$reg_form = $this->db->get_where('student_documents', array('student_id' => $student_id, 'type' => 'Rules and Regulation Form'))->result_array();
 		$has_plan = count($plan_rows) > 0;
-		$needs_plan = !$has_plan;
+		// Contractor students (contract_id set) do not use individual fee plans —
+		// open payments console even when plan/payments are empty (legacy parity).
+		$is_contractor_student = (int)(isset($student['contract_id']) ? $student['contract_id'] : 0) > 0
+			|| (int)(isset($student['contractor_id']) ? $student['contractor_id'] : 0) > 0;
+		$needs_plan = !$has_plan && !$is_contractor_student;
 		$plans = array();
-		if (!empty($student['course_id'])) {
+		if (!$is_contractor_student && !empty($student['course_id'])) {
 			$this->db->from('fee_rules');
 			$this->db->where('course_id', $student['course_id']);
 			if (!empty($student['session'])) $this->db->where('session', $student['session']);
@@ -2183,9 +2293,11 @@ class Studentsapi extends CI_Controller {
 				'plans' => $plans,
 				'has_plan' => $has_plan,
 				'needs_plan' => $needs_plan,
+				'is_contractor_student' => $is_contractor_student,
 				'has_paid' => count($paid_rows) > 0,
 				'has_rules_form' => count($reg_form) > 0,
 			),
+			'permissions' => $this->_permissions(),
 			'legacy_base' => $this->_legacy_base(),
 		));
 	}
@@ -2387,11 +2499,20 @@ class Studentsapi extends CI_Controller {
 	private function _enrich_payment_row($payment, $index, $student_id, $fine_per_day = 50)
 	{
 		$payment['_index'] = $index;
-		$payment['is_special'] = in_array($payment['payment_comment'], array(
-			'consulation fee', 'Extra Fee For Notes', 'Extra Fee For Books',
-		), true);
+		$special_comments = array('consulation fee', 'Extra Fee For Notes', 'Extra Fee For Books');
+		$payment['is_special'] = in_array($payment['payment_comment'], $special_comments, true)
+			|| (isset($payment['payment_plan']) && $payment['payment_plan'] === 'consulation fee');
+		$payment['is_council_fee'] = (isset($payment['payment_plan']) && $payment['payment_plan'] === 'consulation fee')
+			|| (isset($payment['payment_comment']) && $payment['payment_comment'] === 'consulation fee');
+		$payment['is_college_fee'] = isset($payment['payment_comment']) && $payment['payment_comment'] === 'College Fee';
 		$payment['merged_children'] = array();
-		if (!empty($payment['merged_challan']) && (float)$payment['actual_amount'] > 0 && !empty($payment['paid_challans'])) {
+		// Merge UI only for paid merges — unpaid installments always show as separate rows.
+		if (
+			(int)$payment['paid'] === 1
+			&& !empty($payment['merged_challan'])
+			&& (float)$payment['actual_amount'] > 0
+			&& !empty($payment['paid_challans'])
+		) {
 			$ids = array_filter(array_map('trim', explode(',', rtrim($payment['paid_challans'], ', '))));
 			if (count($ids)) {
 				$this->db->where_in('challan_no', $ids);
@@ -2559,22 +2680,107 @@ class Studentsapi extends CI_Controller {
 		$student_id = (int)$student_id;
 		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
 		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$this->db->order_by('id', 'DESC');
 		$docs = $this->db->get_where('student_documents', array('student_id' => $student_id))->result_array();
 		foreach ($docs as &$d) {
 			$d['url'] = $this->_doc_url($d);
 		}
+		unset($d);
 		$this->_json(array(
 			'success' => true,
 			'data' => array(
 				'student' => $student,
 				'documents' => $docs,
-				'types' => array(
-					'ID Card', 'B - FORM', 'Photo', 'Result Card', 'Signature', 'Thumb',
-					'College Form', 'Rules and Regulation Form', 'Fee Structure Form', 'Other',
-				),
+				'types' => $this->_document_types(),
 			),
+			'permissions' => array(
+				'student_upload_documents' => $this->_perm('student_upload_documents') || $this->_is_admin(),
+			),
+			'asset_base' => $this->_asset_base(),
 			'legacy_base' => $this->_legacy_base(),
 		));
+	}
+
+	/** Upload student document (multipart: type, clock_image). */
+	public function documents_upload($student_id = 0)
+	{
+		$student_id = (int)$student_id;
+		if (!$this->_perm('student_upload_documents') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No permission to upload documents'), 403);
+		}
+		$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$student) $this->_json(array('success' => false, 'message' => 'Student not found'), 404);
+
+		$type = isset($_POST['type']) ? trim((string)$_POST['type']) : '';
+		if ($type === '') $this->_json(array('success' => false, 'message' => 'Document type required'), 422);
+		if (!in_array($type, $this->_document_types(), true)) {
+			$this->_json(array('success' => false, 'message' => 'Invalid document type'), 422);
+		}
+
+		if (empty($_FILES['clock_image']['name']) || !is_uploaded_file($_FILES['clock_image']['tmp_name'])) {
+			$this->_json(array('success' => false, 'message' => 'File required'), 422);
+		}
+
+		$ext = strtolower(pathinfo($_FILES['clock_image']['name'], PATHINFO_EXTENSION));
+		$allowed = array('gif', 'jpg', 'jpeg', 'png', 'webp', 'pdf');
+		if ($ext !== '' && !in_array($ext, $allowed, true)) {
+			$this->_json(array('success' => false, 'message' => 'Invalid file type'), 422);
+		}
+		if ($_FILES['clock_image']['size'] > 8 * 1024 * 1024) {
+			$this->_json(array('success' => false, 'message' => 'File too large (max 8MB)'), 422);
+		}
+
+		$dir = FCPATH . 'uploads/';
+		if (!is_dir($dir)) {
+			@mkdir($dir, 0755, true);
+		}
+		$filename = uniqid('student_doc_', true) . ($ext !== '' ? '.' . $ext : '');
+		if (!move_uploaded_file($_FILES['clock_image']['tmp_name'], $dir . $filename)) {
+			$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
+		}
+
+		$this->db->insert('student_documents', array(
+			'student_id' => $student_id,
+			'image' => $filename,
+			'type' => $type,
+			'last_edit' => $this->_actor_name(),
+		));
+		$id = (int)$this->db->insert_id();
+		$row = $this->db->get_where('student_documents', array('id' => $id))->row_array();
+		if ($row) $row['url'] = $this->_doc_url($row);
+		$this->_json(array('success' => true, 'id' => $id, 'document' => $row));
+	}
+
+	/** Delete a student document by id. */
+	public function documents_delete($student_id = 0, $doc_id = 0)
+	{
+		$student_id = (int)$student_id;
+		$doc_id = (int)$doc_id;
+		if (!$this->_perm('student_upload_documents') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No permission to delete documents'), 403);
+		}
+		if (!$student_id || !$doc_id) $this->_json(array('success' => false, 'message' => 'student_id and doc_id required'), 422);
+		$row = $this->db->get_where('student_documents', array('id' => $doc_id, 'student_id' => $student_id))->row_array();
+		if (!$row) $this->_json(array('success' => false, 'message' => 'Document not found'), 404);
+		$this->db->where('id', $doc_id);
+		$this->db->delete('student_documents');
+		$this->_json(array('success' => true));
+	}
+
+	private function _document_types()
+	{
+		return array(
+			'ID Card',
+			'B - FORM',
+			'Photo',
+			'Result Card',
+			'Student Signature',
+			'Student thumb',
+			'College Form',
+			'Rules and Regulation Form',
+			'Fee Strcuture Form',
+			'Other',
+		);
 	}
 
 	public function purchased($student_id = 0)
@@ -2844,96 +3050,277 @@ class Studentsapi extends CI_Controller {
 
 	public function struckof($student_id = 0)
 	{
+		$this->_require_struckof();
 		$student_id = (int)$student_id;
-		if (!$this->_perm('can_student_struckof') && !$this->_is_admin()) {
-			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
+		$result = $this->_reports_service()->struckof_manage_student_view($this->current_user, $student_id);
+		if (empty($result['success'])) {
+			$this->_json($result, isset($result['message']) && $result['message'] === 'Student not found' ? 404 : 403);
+		}
+		$this->_json(array('success' => true, 'data' => $result['data']));
+	}
+
+	public function struckof_process($student_id = 0, $process_count = 0)
+	{
+		$this->_require_struckof();
+		$result = $this->_reports_service()->struckof_manage_process_detail(
+			$this->current_user,
+			(int)$student_id,
+			(int)$process_count
+		);
+		if (empty($result['success'])) {
+			$this->_json($result, isset($result['message']) && $result['message'] === 'Process not found' ? 404 : 403);
+		}
+		$this->_json(array('success' => true, 'data' => $result['data']));
+	}
+
+	public function struckof_letter($student_id = 0)
+	{
+		$this->_require_struckof();
+		$result = $this->_reports_service()->struckoff_letter_html($this->current_user, (int)$student_id);
+		if (empty($result['success'])) {
+			$this->_json($result, 403);
+		}
+		$this->_json(array('success' => true, 'data' => $result['data']));
+	}
+
+	public function struckof_start_process($student_id = 0)
+	{
+		$this->_require_struckof();
+		$student_id = (int)$student_id;
+		$body = $this->_body();
+		$delete_type = isset($body['delete_type']) ? trim($body['delete_type']) : 'process';
+		$reason_detail = isset($body['reason_detail']) ? trim($body['reason_detail']) : '';
+
+		$last_count = $this->db->order_by('struck_of_id', 'DESC')->limit(1)->get_where('struckof_procedures', array('student_id' => $student_id))->row();
+		if ($last_count) {
+			$last_count = ((int)$last_count->process_count) + 1;
+		} else {
+			$last_count = 1;
 		}
 
-		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-			$body = $this->_body();
-			$reason = isset($body['reason']) ? trim($body['reason']) : '';
-			$from_no = isset($body['from_no']) ? trim($body['from_no']) : '';
-			$to_no = isset($body['to_no']) ? trim($body['to_no']) : '';
-			$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
-			$immediate = !empty($body['immediate']);
-			if ($reason === '') $this->_json(array('success' => false, 'message' => 'Reason required'), 422);
+		$this->db->set('student_id', $student_id);
+		$this->db->set('process_count', $last_count);
+		$this->db->set('action_type', $delete_type);
+		$this->db->set('reason', $reason_detail);
+		$this->db->set('status', 'pending');
+		$this->db->set('created_at', date('Y-m-d H:i:s'));
+		$this->db->set('created_by', $this->_actor_name());
+		$this->db->insert('struckof_procedures');
 
-			$student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
-			if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$this->_json(array('success' => true, 'message' => 'Process started', 'process_count' => $last_count));
+	}
 
-			$process_count = 0;
-			if ($this->db->table_exists('struckof_procedures')) {
-				$existing = $this->db->get_where('struckof_procedures', array('student_id' => $student_id))->result_array();
-				$process_count = count($existing);
-				$this->db->insert('struckof_procedures', array(
-					'student_id' => $student_id,
-					'process_count' => $process_count,
-					'reason' => $reason,
-					'action_type' => $immediate ? 'immediate' : 'process',
-					'status' => $immediate ? 'complete' : 'pending',
-					'created_by' => $this->_actor_name(),
-					'created_at' => date('Y-m-d H:i:s'),
-					'approval_by' => $immediate ? $this->_actor_name() : '',
-				));
-			}
+	public function struckof_add_details($student_id = 0, $index = 0)
+	{
+		$this->_require_struckof();
+		$student_id = (int)$student_id;
+		$index = (int)$index;
+		$body = $this->_body();
 
-			if ($this->db->table_exists('struckofdetails_students')) {
-				$this->db->insert('struckofdetails_students', array(
-					'student_id' => $student_id,
-					'process_count' => $process_count,
-					'contact_from_no' => $from_no,
-					'contact_to_no' => $to_no,
-					'reason' => $reason,
-					'detail' => $reason,
-					'created_by' => (int)$this->current_user['user_id'],
-					'status' => $immediate ? '1' : '0',
-					'proof_image' => '',
-					'post_receipt' => '',
-					'whatsapp_image' => '',
-					'sms_image' => '',
-					'recording' => '',
-				));
-			}
+		$image = $this->_upload_field('image');
+		$post_image = $this->_upload_field('post_image');
+		$whatsapp_image = $this->_upload_field('whatsapp_image');
+		$sms_image = $this->_upload_field('sms_image');
+		$recording = $this->_upload_field_path('recording', 'recording/');
 
-			if ($immediate) {
-				$this->db->insert('deleted_students', array(
-					'delete_type' => 'Struck Of',
-					'student_id' => $student_id,
-					'date' => date('Y-m-d H:i:s'),
-					'deleted_by' => $this->_actor_name(),
-					'reason' => $reason,
-					'reason_detail' => $reason,
-					'refund_amount' => $amount,
-					'image' => '',
-					'status' => '1',
-					'approve_by' => $this->_actor_name(),
-				));
-				$this->db->where('student_id', $student_id)->update('students', array('status' => 0));
-			}
+		$fromno = isset($body['fromno']) ? $body['fromno'] : (isset($_POST['fromno']) ? $_POST['fromno'] : '');
+		$tono = isset($body['tono']) ? $body['tono'] : (isset($_POST['tono']) ? $_POST['tono'] : '');
+		$delete_type = isset($body['delete_type']) ? $body['delete_type'] : (isset($_POST['delete_type']) ? $_POST['delete_type'] : 'process');
+		$reason = isset($body['reason']) ? $body['reason'] : (isset($_POST['reason']) ? $_POST['reason'] : '');
+		$reason_detail = isset($body['reason_detail']) ? $body['reason_detail'] : (isset($_POST['reason_detail']) ? $_POST['reason_detail'] : '');
+		$process_id = isset($body['process_id']) ? (int)$body['process_id'] : (isset($_POST['process_id']) ? (int)$_POST['process_id'] : 0);
+		$action_type = isset($body['action_type']) ? $body['action_type'] : (isset($_POST['action_type']) ? $_POST['action_type'] : 'process');
+		$from_date = isset($body['from_date']) ? $body['from_date'] : (isset($_POST['from_date']) ? $_POST['from_date'] : date('Y-m-d'));
+		$amount = isset($body['amount']) ? $body['amount'] : (isset($_POST['amount']) ? $_POST['amount'] : '');
 
-			$this->_json(array(
-				'success' => true,
-				'message' => $immediate ? 'Student struck off immediately' : 'Struck-off process started',
-			));
+		$this->db->set('student_id', $student_id);
+		$this->db->set('contact_from_no', $fromno);
+		$this->db->set('contact_to_no', $tono);
+		$this->db->set('action_type', $delete_type);
+		$this->db->set('reason', $reason);
+		$this->db->set('detail', $reason_detail);
+		$this->db->set('process_count', $process_id);
+		$this->db->set('created_by', (int)$this->current_user['user_id']);
+		$this->db->set('status', '0');
+		$this->db->set('proof_image', $image);
+		$this->db->set('post_receipt', $post_image);
+		$this->db->set('whatsapp_image', $whatsapp_image);
+		$this->db->set('sms_image', $sms_image);
+		$this->db->set('recording', $recording);
+		$this->db->insert('struckofdetails_students');
+
+		if (($action_type == 'process' && $index == 2) || ($action_type == 'immediate' && $index == 0)) {
+			$this->db->set('need_approval', '1');
+			$this->db->where(array('student_id' => $student_id, 'process_count' => $process_id));
+			$this->db->update('struckof_procedures');
 		}
 
-		$student = $this->_student_profile($student_id);
-		if (!$student) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
-		$fee = $this->_fee_summary($student_id);
-		$history = array();
-		if ($this->db->table_exists('struckof_procedures')) {
-			$history = $this->db->order_by('process_count', 'DESC')
-				->get_where('struckof_procedures', array('student_id' => $student_id))
-				->result_array();
+		if ($amount !== '' && $amount !== null) {
+			$std_st = $this->db->join('classes', 'classes.class_id = students.class_id')->get_where('students', array('student_id' => $student_id))->row();
+			if ($std_st) {
+				$this->db->set('title', 'Expense For Struck of Letter No ' . ($index + 1));
+				$this->db->set('date', $from_date);
+				$this->db->set('amount', $amount);
+				$this->db->set('purpose', 'Expense for Struck of Letter post to ' . $std_st->first_name . ' ' . $std_st->last_name . ' - ' . $std_st->roll_no . ' - ' . $std_st->mobile);
+				$this->db->set('actual_date', date('Y-m-d H:i:s'));
+				$this->db->set('image', $post_image);
+				$this->db->set('expense_category_id', '32');
+				$this->db->set('add_by_id', (int)$this->current_user['user_id']);
+				$this->db->set('campus_id', $std_st->campus_id);
+				$this->db->set('approved_status', 1);
+				$this->db->set('add_by', $this->_actor_name());
+				$this->db->insert('expenses');
+
+				$this->db->set('remaining_amount', 'remaining_amount -' . $amount, false);
+				$this->db->where('assign_to', (int)$this->current_user['user_id']);
+				$this->db->update('petty_cash_college_wise');
+			}
 		}
-		$this->_json(array(
-			'success' => true,
-			'data' => array(
-				'student' => $student,
-				'fee' => $fee,
-				'history' => $history,
-			),
-		));
+
+		$this->_json(array('success' => true, 'message' => 'Detail added'));
+	}
+
+	public function struckof_finalize($student_id = 0, $process_id = 0)
+	{
+		$this->_require_struckof();
+		if (!$this->_perm('student_delete') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No permission to finalize struck-off'), 403);
+		}
+
+		$student_id = (int)$student_id;
+		$process_id = (int)$process_id;
+		$body = $this->_body();
+		$this->load->model('student');
+
+		$student = $this->db->get_where('students', array('student_id' => $student_id))->result_array();
+		if (!count($student)) {
+			$this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		}
+
+		$data = array(
+			'course_id' => $student[0]['course_id'],
+			'first_name' => $student[0]['first_name'],
+			'last_name' => $student[0]['last_name'],
+			'father_name' => $student[0]['father_name'],
+			'gender' => $student[0]['gender'],
+			'class_id' => $student[0]['class_id'],
+			'roll_no' => $student[0]['roll_no'],
+			'email' => $student[0]['email'],
+			'cnic' => $student[0]['cnic'],
+			'date_of_birth' => $student[0]['date_of_birth'],
+			'registration_date' => $student[0]['registration_date'],
+			'total_fee' => $student[0]['total_fee'],
+			'blood_group' => $student[0]['blood_group'],
+			'city' => $student[0]['city'],
+			'address' => $student[0]['address'],
+			'mobile' => $student[0]['mobile'],
+			'emergency_no' => $student[0]['emergency_no'],
+			'status' => 0,
+			'contractor_id' => $student[0]['contractor_id'],
+			'board' => $student[0]['board'],
+			'section' => $student[0]['section'],
+			'shift' => $student[0]['shift'],
+			'study_type' => $student[0]['study_type'],
+			'books_1' => $student[0]['books_1'],
+			'books_2' => $student[0]['books_2'],
+			'student_card' => $student[0]['student_card'],
+			'password' => $student[0]['password'],
+			'notes' => $student[0]['notes'],
+			'last_edit' => $student[0]['last_edit'],
+		);
+		$this->student->updateDeleteStudent($data, $student_id);
+
+		$this->db->set('status', '1');
+		$this->db->set('updated_by', $this->_actor_name());
+		$this->db->where(array('student_id' => $student_id, 'process_count' => $process_id));
+		$this->db->update('struckofdetails_students');
+
+		$this->db->set('status', 'complete');
+		$this->db->set('approval_by', $this->_actor_name());
+		$this->db->where(array('student_id' => $student_id, 'process_count' => $process_id));
+		$this->db->update('struckof_procedures');
+
+		$resultstruckdetails = $this->db->get_where('struckofdetails_students', array(
+			'student_id' => $student_id,
+			'process_count' => $process_id,
+		))->result_array();
+
+		$procedures = $this->db->get_where('struckof_procedures', array(
+			'student_id' => $student_id,
+			'process_count' => $process_id,
+		))->result_array();
+
+		$this->db->set('delete_type', 'Struck Of');
+		$this->db->set('student_id', $student_id);
+		$this->db->set('date', date('Y-m-d H:i:s'));
+		$this->db->set('deleted_by', $this->_actor_name());
+		$this->db->set('reason', $procedures[0]['reason']);
+		$this->db->set('reason_detail', $procedures[0]['reason']);
+		if ($procedures[0]['action_type'] == 'immediate') {
+			if (isset($body['refund_amount']) && $body['refund_amount'] !== '') {
+				$this->db->set('refund_amount', $body['refund_amount']);
+			}
+			$this->db->set('image', isset($resultstruckdetails[0]['proof_image']) ? $resultstruckdetails[0]['proof_image'] : '');
+		} else {
+			$this->db->set('image', isset($resultstruckdetails[2]['proof_image']) ? $resultstruckdetails[2]['proof_image'] : '');
+		}
+		$this->db->set('status', '1');
+		$this->db->set('approve_by', $this->_actor_name());
+		$this->db->insert('deleted_students');
+
+		$this->db->set('status', '0');
+		$this->db->where('student_id', $student_id);
+		$this->db->update('students');
+
+		if (@$resultstruckdetails[0]['refund_amount'] != 0) {
+			$this->db->set('date', date('Y-m-d'));
+			$this->db->set('actual_date', date('Y-m-d'));
+			$this->db->set('purpose', 'Refund issue and approved by ' . $this->_actor_name());
+			$this->db->set('title', 'Student Refund');
+			$this->db->set('amount', $resultstruckdetails[0]['refund_amount']);
+			$this->db->set('add_by', $this->_actor_name());
+			$this->db->set('last_edit', $this->_actor_name());
+			$this->db->set('campus_id', $resultstruckdetails[0]['campus_id']);
+			$this->db->set('expense_category_id', 7);
+			$this->db->insert('expenses');
+		}
+		if (@$resultstruckdetails[1]['refund_amount'] != 0) {
+			$this->db->set('date', date('Y-m-d'));
+			$this->db->set('actual_date', date('Y-m-d'));
+			$this->db->set('purpose', 'Refund issue and approved by ' . $this->_actor_name());
+			$this->db->set('title', 'Student Refund');
+			$this->db->set('amount', $resultstruckdetails[1]['refund_amount']);
+			$this->db->set('add_by', $this->_actor_name());
+			$this->db->set('last_edit', $this->_actor_name());
+			$this->db->set('campus_id', $resultstruckdetails[0]['campus_id']);
+			$this->db->set('expense_category_id', 7);
+			$this->db->insert('expenses');
+		}
+
+		$this->_json(array('success' => true, 'message' => 'Student delete request submitted successfully!'));
+	}
+
+	public function struckof_reject($student_id = 0, $process_id = 0)
+	{
+		$this->_require_struckof();
+		if (!$this->_perm('student_delete') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No permission to reject struck-off'), 403);
+		}
+
+		$student_id = (int)$student_id;
+		$process_id = (int)$process_id;
+
+		$this->db->set('status', 'reject');
+		$this->db->set('approval_by', $this->_actor_name());
+		$this->db->where(array('student_id' => $student_id, 'process_count' => $process_id));
+		$this->db->update('struckof_procedures');
+
+		$this->db->set('status', '2');
+		$this->db->set('updated_by', $this->_actor_name());
+		$this->db->where(array('student_id' => $student_id, 'process_count' => $process_id));
+		$this->db->update('struckofdetails_students');
+
+		$this->_json(array('success' => true, 'message' => 'Student Rejected request successfully!'));
 	}
 
 	public function restore($student_id = 0)
@@ -3212,6 +3599,33 @@ class Studentsapi extends CI_Controller {
 		$newfeeshifted = 0;
 		$actor = $this->_actor_name();
 		$i = 0;
+		$challans = isset($body['challans']) ? $body['challans'] : '';
+		$actual_amount = isset($body['actual_amount']) ? $body['actual_amount'] : 0;
+		$bill_url = '';
+
+		// Legacy: PayPro creates bill first; paid=1 only after PayPro IPN (Paypro controller).
+		if ($pay_through === 'pay_pro') {
+			$student = $this->db->get_where('students', array('student_id' => $student_id))->row();
+			if (!$student) {
+				$this->_json(array('success' => false, 'message' => 'Student not found'), 404);
+			}
+			$number = ($student->mobile != '' && $student->mobile != null) ? $student->mobile : $student->emergency_no;
+			if ($number == '' || $number == null) {
+				$number = '03168042977';
+			}
+			$paypro_challan = $this->_get_paypro_id();
+			$bill_url = $this->_generate_paypro(
+				$actual_amount,
+				trim($student->first_name . ' ' . $student->last_name),
+				$number,
+				$paypro_challan,
+				$student_id,
+				$challans
+			);
+			if ($bill_url === '' || $bill_url === null) {
+				$this->_json(array('success' => false, 'message' => 'PayPro bill creation failed'), 502);
+			}
+		}
 
 		foreach ($payment_ids as $payment_id) {
 			$next_payment_id = $this->student->getNextPaymentId($payment_id, $student_id);
@@ -3249,61 +3663,89 @@ class Studentsapi extends CI_Controller {
 				if (@$body['late_fee_fine_status'] === 'new') $new_fine = (float)@$body['remove_fine_amount'];
 			}
 
-			$data = array(
-				'scan_challan' => $scan_challan,
-				'merged_challan' => $merged_challan,
-				'paid_challans' => isset($body['challans']) ? $body['challans'] : '',
-				'fine_application' => $fine_application,
-				'actual_amount' => isset($body['actual_amount']) ? $body['actual_amount'] : 0,
-				'discount' => isset($body['discount']) ? $body['discount'] : 0,
-				'id' => $payment_id,
-				'paid_date' => isset($body['paid_date']) ? $body['paid_date'] : date('Y-m-d'),
-				'paid' => 1,
-				'actual_paid_date' => date('Y-m-d'),
-				'college_fee' => 0,
-				'last_edit' => $actor,
-				'paid_by' => $actor,
-				'fee_pay_through' => $pay_through,
-				'fine_amount' => isset($body['fine_amount']) ? $body['fine_amount'] : 0,
-				'shifted_installment' => $shifted_installment + $new_installment,
-				'removed_previous_fine' => $removed_previous_fine,
-				'shifted_previous_fine' => $shifted_previous_fine + $new_previous_fine,
-				'removed_fine' => $removed_fine,
-				'submitted_fee_campus_id' => isset($body['submitted_fee_campus_id']) ? $body['submitted_fee_campus_id'] : 0,
-				'shifted_fine' => $shifted_fine + $new_fine,
-				'closing_id' => NULL,
-			);
+			if ($pay_through === 'pay_pro') {
+				// Legacy pay_pro path: do NOT set paid=1 / paid_challans / merged_challan.
+				// Paypro IPN marks paid when customer completes payment.
+				$data = array(
+					'scan_challan' => $scan_challan,
+					'fine_application' => $fine_application,
+					'actual_amount' => $actual_amount,
+					'discount' => isset($body['discount']) ? $body['discount'] : 0,
+					'id' => $payment_id,
+					'paid_date' => isset($body['paid_date']) ? $body['paid_date'] : date('Y-m-d'),
+					'actual_paid_date' => date('Y-m-d'),
+					'college_fee' => 0,
+					'last_edit' => $actor,
+					'paid_by' => $actor,
+					'fee_pay_through' => $pay_through,
+					'bank_details' => @$body['bank_details'],
+					'tid_no' => @$body['tid_no'],
+					'fine_amount' => isset($body['fine_amount']) ? $body['fine_amount'] : 0,
+					'shifted_installment' => $shifted_installment + $new_installment,
+					'removed_previous_fine' => $removed_previous_fine,
+					'shifted_previous_fine' => $shifted_previous_fine + $new_previous_fine,
+					'removed_fine' => $removed_fine,
+					'submitted_fee_campus_id' => isset($body['submitted_fee_campus_id']) ? $body['submitted_fee_campus_id'] : 0,
+					'shifted_fine' => $shifted_fine + $new_fine,
+					'closing_id' => NULL,
+				);
+			} else {
+				$data = array(
+					'scan_challan' => $scan_challan,
+					'merged_challan' => $merged_challan,
+					'paid_challans' => $challans,
+					'fine_application' => $fine_application,
+					'actual_amount' => $actual_amount,
+					'discount' => isset($body['discount']) ? $body['discount'] : 0,
+					'id' => $payment_id,
+					'paid_date' => isset($body['paid_date']) ? $body['paid_date'] : date('Y-m-d'),
+					'paid' => 1,
+					'actual_paid_date' => date('Y-m-d'),
+					'college_fee' => 0,
+					'last_edit' => $actor,
+					'paid_by' => $actor,
+					'fee_pay_through' => $pay_through,
+					'fine_amount' => isset($body['fine_amount']) ? $body['fine_amount'] : 0,
+					'shifted_installment' => $shifted_installment + $new_installment,
+					'removed_previous_fine' => $removed_previous_fine,
+					'shifted_previous_fine' => $shifted_previous_fine + $new_previous_fine,
+					'removed_fine' => $removed_fine,
+					'submitted_fee_campus_id' => isset($body['submitted_fee_campus_id']) ? $body['submitted_fee_campus_id'] : 0,
+					'shifted_fine' => $shifted_fine + $new_fine,
+					'closing_id' => NULL,
+				);
 
-			if ($pay_through === 'bank') {
-				$account = $this->db->get_where('accounts', array('account_name' => @$body['bank_details']))->row_array();
-				$statement_id = null;
-				if ($account && $i === 0) {
-					$acountid = $account['id'];
-					$this->db->select('*');
-					$this->db->from('bank_reconciliation_statement');
-					$this->db->where('account_id', $acountid);
-					$this->db->where('trans_date', $body['paid_date']);
-					$this->db->group_start();
-					$this->db->like('description', @$body['tid_no']);
-					$this->db->or_like('reference_no', @$body['tid_no']);
-					$this->db->group_end();
-					$this->db->group_by('description');
-					$concile = $this->db->get()->result_array();
-					if (count($concile)) {
-						$statement_id = $concile[0]['id'];
-						$this->db->set('tagged_amount', 'tagged_amount +' . (float)$body['actual_amount'], false);
-						$this->db->where('id', $statement_id);
-						$this->db->update('bank_reconciliation_statement');
+				if ($pay_through === 'bank') {
+					$account = $this->db->get_where('accounts', array('account_name' => @$body['bank_details']))->row_array();
+					$statement_id = null;
+					if ($account && $i === 0) {
+						$acountid = $account['id'];
+						$this->db->select('*');
+						$this->db->from('bank_reconciliation_statement');
+						$this->db->where('account_id', $acountid);
+						$this->db->where('trans_date', $body['paid_date']);
+						$this->db->group_start();
+						$this->db->like('description', @$body['tid_no']);
+						$this->db->or_like('reference_no', @$body['tid_no']);
+						$this->db->group_end();
+						$this->db->group_by('description');
+						$concile = $this->db->get()->result_array();
+						if (count($concile)) {
+							$statement_id = $concile[0]['id'];
+							$this->db->set('tagged_amount', 'tagged_amount +' . (float)$body['actual_amount'], false);
+							$this->db->where('id', $statement_id);
+							$this->db->update('bank_reconciliation_statement');
+						}
 					}
-				}
-				$data['bank_details'] = @$body['bank_details'];
-				$data['tid_no'] = @$body['tid_no'];
-				$data['statement_id'] = $statement_id;
-			} elseif ($pay_through === 'college') {
-				$data['fee_submit_type'] = isset($body['fee_submit_type']) ? $body['fee_submit_type'] : 'computer_challan';
-				if ($data['fee_submit_type'] === 'receipt_book') {
-					$data['book_no'] = @$body['book_no'];
-					$data['receipt_no'] = @$body['receipt_no'];
+					$data['bank_details'] = @$body['bank_details'];
+					$data['tid_no'] = @$body['tid_no'];
+					$data['statement_id'] = $statement_id;
+				} elseif ($pay_through === 'college') {
+					$data['fee_submit_type'] = isset($body['fee_submit_type']) ? $body['fee_submit_type'] : 'computer_challan';
+					if ($data['fee_submit_type'] === 'receipt_book') {
+						$data['book_no'] = @$body['book_no'];
+						$data['receipt_no'] = @$body['receipt_no'];
+					}
 				}
 			}
 
@@ -3335,7 +3777,97 @@ class Studentsapi extends CI_Controller {
 			$i++;
 		}
 
+		if ($pay_through === 'pay_pro') {
+			$this->_json(array(
+				'success' => true,
+				'message' => 'Redirecting to PayPro',
+				'bill_url' => $bill_url,
+			));
+		}
+
 		$this->_json(array('success' => true, 'message' => 'Fee submitted successfully'));
+	}
+
+	private function _get_paypro_id()
+	{
+		$random_number = rand(1000, 999999999);
+		$check = $this->db->get_where('students_payments', array('order_number' => $random_number))->result_array();
+		if (count($check) > 0) {
+			return $this->_get_paypro_id();
+		}
+		return $random_number;
+	}
+
+	/**
+	 * Legacy Students::generate_paypro — creates PayPro order and returns Click2Pay URL.
+	 */
+	private function _generate_paypro($amount, $name, $mobile, $order_no, $student_id, $challans)
+	{
+		$date = date('d-m-Y');
+		$total_order = array();
+		$merchant = array('MerchantId' => 'SCOP', 'MerchantPassword' => 'Live@shahbaz21');
+		$order = array(
+			'OrderNumber' => "$order_no",
+			'OrderAmount' => "$amount",
+			'OrderDueDate' => "$date",
+			'OrderAmountWithinDueDate' => "$amount",
+			'OrderAmountAfterDueDate' => "$amount",
+			'OrderType' => 'Service',
+			'OrderTypeId' => 'Service',
+			'IssueDate' => "$date",
+			'OrderExpireAfterSeconds' => '0',
+			'CustomerName' => "$name",
+			'CustomerMobile' => "$mobile",
+			'CustomerEmail' => '',
+			'CustomerAddress' => '',
+		);
+		array_push($total_order, $merchant);
+		array_push($total_order, $order);
+
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_URL, 'https://api.paypro.com.pk/cpay/co?');
+		curl_setopt($ch, CURLOPT_POST, true);
+		curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type:application/json'));
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+		curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+		curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($total_order));
+		$result = curl_exec($ch);
+		if ($result === false) {
+			curl_close($ch);
+			return '';
+		}
+		curl_close($ch);
+
+		$response = array_values(json_decode($result, true));
+		if (!is_array($response) || !isset($response[0]['Status']) || $response[0]['Status'] != '00') {
+			return '';
+		}
+
+		$ipg_list = $response[1]['IPGList'];
+		$this->db->set(array(
+			'application_id' => '',
+			'student_id' => $student_id,
+			'ipg_list' => json_encode($ipg_list),
+			'transaction_status' => $response[1]['TransactionStatus'],
+			'order_amount' => $amount,
+			'description' => $response[1]['TransactionStatus'],
+			'BAF_charge' => $response[1]['BAFCharge'],
+			'one_link_charge' => $response[1]['1LinkCharge'],
+			'created_on' => date('Y-m-d'),
+			'consumer_code' => $response[1]['ConsumerCode'],
+			'click2pay' => $response[1]['Click2Pay'],
+			'connect_pay_id' => $response[1]['ConnectPayId'],
+			'order_type' => $response[1]['FetchOrderType'],
+			'connect_pay_fee' => $response[1]['ConnectPayFee'],
+			'bill_url' => $response[1]['BillUrl'],
+			'order_number' => $response[1]['OrderNumber'],
+			'is_fee_applied' => $response[1]['IsFeeApplied'],
+			'challan_ids' => $challans,
+		));
+		$this->db->insert('students_payments');
+
+		return $response[1]['Click2Pay'];
 	}
 
 	private function _upload_field($field)
@@ -3351,6 +3883,33 @@ class Studentsapi extends CI_Controller {
 		if (!$this->upload->do_upload($field)) return '';
 		$d = $this->upload->data();
 		return $d['file_name'];
+	}
+
+	private function _upload_field_path($field, $path)
+	{
+		if (empty($_FILES[$field]['name'])) return '';
+		$this->load->library('upload');
+		$config = array(
+			'upload_path' => $path,
+			'allowed_types' => '*',
+		);
+		$this->upload->initialize($config);
+		if (!$this->upload->do_upload($field)) return '';
+		$d = $this->upload->data();
+		return $d['file_name'];
+	}
+
+	private function _require_struckof()
+	{
+		if (!$this->_perm('can_student_struckof') && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
+		}
+	}
+
+	private function _reports_service()
+	{
+		$this->load->library('reports_service');
+		return $this->reports_service;
 	}
 
 	public function payments_split($student_id = 0)
@@ -3807,10 +4366,26 @@ class Studentsapi extends CI_Controller {
 	{
 		if (!$this->_is_admin()) $this->_json(array('success' => false, 'message' => 'Admin only'), 403);
 		$body = $this->_body();
-		$fee = isset($body['current_session_fee']) ? (float)$body['current_session_fee'] : -1;
-		if ($fee < 0) $this->_json(array('success' => false, 'message' => 'current_session_fee required'), 422);
-		$this->db->where('student_id', (int)$student_id)->update('students', array('current_session_fee' => $fee));
-		$this->_json(array('success' => true, 'message' => 'Session fee updated'));
+		// Legacy Students::update_current_session_fee — posted value is the desired
+		// session fee figure; we only adjust extra_added_fee = posted - current_session_fee.
+		// current_session_fee column itself is NOT overwritten.
+		$posted = isset($body['current_session_fee']) ? $body['current_session_fee'] : '';
+		if ($posted === '' || $posted === null) {
+			$this->_json(array('success' => false, 'message' => 'Invalid fee amount.'), 422);
+		}
+
+		$student_id = (int) $student_id;
+		$this_student = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$this_student) {
+			$this->_json(array('success' => false, 'message' => 'Student not found'), 404);
+		}
+
+		$posted_fee = (float) $posted;
+		$base = (float) (isset($this_student['current_session_fee']) ? $this_student['current_session_fee'] : 0);
+		$this->db->where('student_id', $student_id)->update('students', array(
+			'extra_added_fee' => $posted_fee - $base,
+		));
+		$this->_json(array('success' => true, 'message' => 'Current session fee updated successfully.'));
 	}
 
 	public function payments_discount($student_id = 0)
@@ -3925,11 +4500,8 @@ class Studentsapi extends CI_Controller {
 			$insert['exam_sequence_id'] = (int)$body['exam_sequence_id'];
 		}
 		$this->db->insert('payments', $insert);
-		if ($fee_type !== 'consulation fee' && strpos($comment, 'consulation') === false) {
-			$this->db->set('extra_added_fee', 'extra_added_fee + ' . $amount, false);
-			$this->db->where('student_id', $student_id);
-			$this->db->update('students');
-		}
+		// Legacy Students::add_extra_fee only inserts a payment row — it does not change
+		// students.total_fee, current_session_fee, or extra_added_fee.
 		$this->_json(array('success' => true, 'message' => 'Extra fee added', 'challan_no' => $challan));
 	}
 
@@ -4071,14 +4643,13 @@ class Studentsapi extends CI_Controller {
 			$months = array(date('Y-m'));
 		}
 		$count = max(1, count($months));
-		$each = round($remaining / $count, 2);
+		$amounts = $this->_installment_amounts($remaining, $count);
 		$rows = array();
 		foreach ($months as $i => $ym) {
-			$amt = ($i === $count - 1) ? ($remaining - $each * ($count - 1)) : $each;
 			$d = min($day, 28);
 			$rows[] = array(
 				'dead_line' => $ym . '-' . str_pad((string)$d, 2, '0', STR_PAD_LEFT),
-				'amount' => $amt,
+				'amount' => isset($amounts[$i]) ? $amounts[$i] : 0,
 				'payment_comment' => 'College Fee',
 			);
 		}
@@ -4111,13 +4682,12 @@ class Studentsapi extends CI_Controller {
 				$months = array(date('Y-m'));
 			}
 			$count = max(1, count($months));
-			$each = round($remaining / $count, 2);
+			$amounts = $this->_installment_amounts($remaining, $count);
 			foreach ($months as $i => $ym) {
-				$amt = ($i === $count - 1) ? ($remaining - $each * ($count - 1)) : $each;
 				$d = min($day, 28);
 				$preview[] = array(
 					'dead_line' => $ym . '-' . str_pad((string)$d, 2, '0', STR_PAD_LEFT),
-					'amount' => $amt,
+					'amount' => isset($amounts[$i]) ? $amounts[$i] : 0,
 				);
 			}
 		}
@@ -4138,6 +4708,28 @@ class Studentsapi extends CI_Controller {
 		$this->_json(array('success' => true, 'message' => count($preview) . ' installment(s) added'));
 	}
 
+	private function _installment_amounts($remaining, $months_count)
+	{
+		$remaining = max(0, (float)$remaining);
+		$total_months = max(1, (int)$months_count);
+		if ($remaining <= 0) {
+			return array();
+		}
+		$installment_amount = $remaining / $total_months;
+		$amounts = array();
+		$left = $remaining;
+		for ($i = 0; $i < $total_months; $i++) {
+			if ($total_months === ($i + 1)) {
+				$amounts[] = $left;
+			} else {
+				$amount = floor($installment_amount / 100) * 100;
+				$amounts[] = $amount;
+				$left -= $amount;
+			}
+		}
+		return $amounts;
+	}
+
 	public function payments_reversal($student_id = 0)
 	{
 		if (!$this->_is_admin() && !$this->_perm('student_issue_refund')) {
@@ -4146,20 +4738,27 @@ class Studentsapi extends CI_Controller {
 		$body = $this->_body();
 		$payment_id = isset($body['payment_id']) ? (int)$body['payment_id'] : 0;
 		$amount = isset($body['reversal_amount']) ? (float)$body['reversal_amount'] : 0;
-		$reason = isset($body['reason']) ? $body['reason'] : '';
+		$reason = isset($body['reversal_reason']) ? trim($body['reversal_reason']) : '';
+		if ($reason === '' && isset($body['reason'])) {
+			$reason = trim($body['reason']);
+		}
 		$row = $this->db->get_where('payments', array('id' => $payment_id, 'student_id' => (int)$student_id, 'paid' => 1))->row_array();
 		if (!$row) $this->_json(array('success' => false, 'message' => 'Paid installment required'), 422);
 		if ($amount <= 0 || $amount > (float)$row['actual_amount']) {
 			$this->_json(array('success' => false, 'message' => 'Invalid reversal amount'), 422);
 		}
+		$existing = $this->db->get_where('payments_reversal_requests', array('payment_id' => $payment_id))->row_array();
+		if ($existing) {
+			$this->_json(array('success' => false, 'message' => 'Reversal request already exists for this payment'), 422);
+		}
+		$reversal_application = $this->_upload_field('reversal_application');
 		$this->db->insert('payments_reversal_requests', array(
 			'student_id' => (int)$student_id,
 			'payment_id' => $payment_id,
 			'reversal_amount' => $amount,
-			'reason' => $reason,
-			'done' => 0,
-			'add_by' => $this->_actor_name(),
-			'created_at' => date('Y-m-d H:i:s'),
+			'reversal_reason' => $reason,
+			'created_by' => $this->_actor_name(),
+			'reversal_application' => $reversal_application,
 		));
 		$this->_json(array('success' => true, 'message' => 'Reversal request submitted'));
 	}
@@ -4171,17 +4770,62 @@ class Studentsapi extends CI_Controller {
 		}
 		$body = $this->_body();
 		$req_id = isset($body['request_id']) ? (int)$body['request_id'] : 0;
-		$req = $this->db->get_where('payments_reversal_requests', array(
-			'id' => $req_id,
-			'student_id' => (int)$student_id,
-			'done' => 0,
-		))->row_array();
+		$payment_id = isset($body['payment_id']) ? (int)$body['payment_id'] : 0;
+		$where = array('student_id' => (int)$student_id, 'done' => 0);
+		if ($req_id > 0) {
+			$where['payments_reversal_request_id'] = $req_id;
+		} elseif ($payment_id > 0) {
+			$where['payment_id'] = $payment_id;
+		} else {
+			$this->_json(array('success' => false, 'message' => 'request_id or payment_id required'), 422);
+		}
+		$req = $this->db->get_where('payments_reversal_requests', $where)->row_array();
 		if (!$req) $this->_json(array('success' => false, 'message' => 'Request not found'), 404);
-		$this->db->where('id', $req_id)->update('payments_reversal_requests', array(
-			'done' => 1,
-			'approved_by' => $this->_actor_name(),
-			'approved_at' => date('Y-m-d H:i:s'),
-		));
+		if ((int)$req['approve_status'] !== 1 || (int)$req['status'] !== 1) {
+			$this->_json(array('success' => false, 'message' => 'Reversal not approved yet'), 422);
+		}
+		$user_id = (int)$this->current_user['user_id'];
+		$this->load->helper('custom');
+		$cash = $this->db->get_where('petty_cash_college_wise', array('assign_to' => $user_id))->row_array();
+		$balance = ($cash && isset($cash['id'])) ? pettycash_statement($cash['id']) : 0;
+		if ((float)$req['reversal_amount'] > (float)$balance) {
+			$this->_json(array('success' => false, 'message' => 'Not enough petty cash for this reversal'), 422);
+		}
+		$proof_image = $this->_upload_field('proof');
+		if ($proof_image === '') {
+			$proof_image = $this->_upload_field('proof_image');
+		}
+		$this->db->where('payments_reversal_request_id', (int)$req['payments_reversal_request_id'])
+			->update('payments_reversal_requests', array(
+				'proof_image' => $proof_image,
+				'done' => 1,
+				'paid_by' => $this->_actor_name(),
+			));
+		$this->db->select('payments.*, classes.campus_id');
+		$this->db->from('payments');
+		$this->db->join('students', 'payments.student_id=students.student_id', 'inner');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'inner');
+		$this->db->where('payments.id', (int)$req['payment_id']);
+		$payment_details = $this->db->get()->row_array();
+		if ($payment_details) {
+			$this->db->insert('expenses', array(
+				'date' => date('Y-m-d'),
+				'actual_date' => date('Y-m-d H:i:s'),
+				'title' => 'Payment Reversal Against Challan # ' . $payment_details['paid_challans'],
+				'amount' => $req['reversal_amount'],
+				'add_by' => $this->_actor_name(),
+				'add_by_id' => $user_id,
+				'last_edit' => $this->_actor_name(),
+				'payment_type' => 'cash',
+				'paid_type' => 'cash',
+				'approved_status' => 1,
+				'campus_id' => $payment_details['campus_id'],
+				'expense_category_id' => 26,
+			));
+			$this->db->set('remaining_amount', 'remaining_amount -' . (float)$req['reversal_amount'], false);
+			$this->db->where('assign_to', $user_id);
+			$this->db->update('petty_cash_college_wise');
+		}
 		$this->_json(array('success' => true, 'message' => 'Reversal completed'));
 	}
 
@@ -4269,8 +4913,14 @@ class Studentsapi extends CI_Controller {
 		$removals = $this->db->get_where('discount_removals', array('student_id' => $student_id))->result_array();
 		$removal_rows = array();
 		foreach ($removals as $removal) {
+			$rid = 0;
+			if (isset($removal['discount_removal_id'])) {
+				$rid = (int) $removal['discount_removal_id'];
+			} elseif (isset($removal['id'])) {
+				$rid = (int) $removal['id'];
+			}
 			$removal_rows[] = array(
-				'id' => (int) $removal['id'],
+				'id' => $rid,
 				'amount' => (float) (isset($removal['amount']) ? $removal['amount'] : 0),
 				'type' => isset($removal['type']) ? $removal['type'] : '',
 				'comment' => isset($removal['comment']) ? $removal['comment'] : '',
@@ -4300,9 +4950,10 @@ class Studentsapi extends CI_Controller {
 		}
 
 		$student_id = (int) $student_id;
-		$rev_id = (int) $this->input->post('rev_id');
-		$rev_amount = (float) $this->input->post('rev_amount');
-		$comment = trim((string) $this->input->post('comment'));
+		$body = $this->_body();
+		$rev_id = (int) (isset($body['rev_id']) ? $body['rev_id'] : $this->input->post('rev_id'));
+		$rev_amount = (float) (isset($body['rev_amount']) ? $body['rev_amount'] : $this->input->post('rev_amount'));
+		$comment = trim((string) (isset($body['comment']) ? $body['comment'] : $this->input->post('comment')));
 		if ($student_id <= 0 || $rev_id <= 0 || $rev_amount <= 0 || $comment === '') {
 			$this->_json(array('success' => false, 'message' => 'Invalid reversal request'), 422);
 		}
@@ -4325,11 +4976,19 @@ class Studentsapi extends CI_Controller {
 		$this->db->where('student_id', $student_id);
 		$this->db->update('students');
 
+		$removed_by = trim(
+			(isset($this->current_user['first_name']) ? $this->current_user['first_name'] : '') . ' '
+			. (isset($this->current_user['last_name']) ? $this->current_user['last_name'] : '')
+		);
+		if ($removed_by === '') {
+			$removed_by = isset($this->current_user['username']) ? $this->current_user['username'] : 'POS';
+		}
+
 		$this->db->set('amount', $rev_amount);
 		$this->db->set('student_id', $student_id);
 		$this->db->set('type', 'Special Discount');
 		$this->db->set('comment', $comment);
-		$this->db->set('removed_by', isset($this->current_user['name']) ? $this->current_user['name'] : 'POS');
+		$this->db->set('removed_by', $removed_by);
 		$this->db->insert('discount_removals');
 
 		$this->_json(array('success' => true, 'message' => 'Special discount reversed'));
@@ -4343,8 +5002,9 @@ class Studentsapi extends CI_Controller {
 		}
 
 		$student_id = (int) $student_id;
-		$rev_amount = (float) $this->input->post('rev_amount');
-		$comment = trim((string) $this->input->post('comment'));
+		$body = $this->_body();
+		$rev_amount = (float) (isset($body['rev_amount']) ? $body['rev_amount'] : $this->input->post('rev_amount'));
+		$comment = trim((string) (isset($body['comment']) ? $body['comment'] : $this->input->post('comment')));
 		if ($student_id <= 0 || $rev_amount <= 0 || $comment === '') {
 			$this->_json(array('success' => false, 'message' => 'Invalid reversal request'), 422);
 		}
@@ -4359,11 +5019,19 @@ class Studentsapi extends CI_Controller {
 		$this->db->where('student_id', $student_id);
 		$this->db->update('students');
 
+		$removed_by = trim(
+			(isset($this->current_user['first_name']) ? $this->current_user['first_name'] : '') . ' '
+			. (isset($this->current_user['last_name']) ? $this->current_user['last_name'] : '')
+		);
+		if ($removed_by === '') {
+			$removed_by = isset($this->current_user['username']) ? $this->current_user['username'] : 'POS';
+		}
+
 		$this->db->set('amount', $rev_amount);
 		$this->db->set('student_id', $student_id);
 		$this->db->set('type', 'Disount on Admission');
 		$this->db->set('comment', $comment);
-		$this->db->set('removed_by', isset($this->current_user['name']) ? $this->current_user['name'] : 'POS');
+		$this->db->set('removed_by', $removed_by);
 		$this->db->insert('discount_removals');
 
 		$this->_json(array('success' => true, 'message' => 'Admission discount reversed'));
@@ -4656,45 +5324,138 @@ class Studentsapi extends CI_Controller {
 		$this->_require_student_payments();
 		$student_id = (int)$student_id;
 		$body = $this->_body();
-		$plan_id = isset($body['plan_id']) ? (int)$body['plan_id'] : 0;
-		$discount = isset($body['discount']) ? (float)$body['discount'] : 0;
-		$instdate = isset($body['instdate']) ? (int)$body['instdate'] : 1;
-		if (!$plan_id) $this->_json(array('success' => false, 'message' => 'plan_id required'), 422);
-		$plan = $this->db->get_where('fee_rules', array('fee_rule_id' => $plan_id))->row_array();
-		if (!$plan) $this->_json(array('success' => false, 'message' => 'Plan not found'), 404);
 
-		$total = (float)$plan['total_fee'] - $discount;
-		$this->db->where('student_id', $student_id)->update('students', array(
-			'total_fee' => $total,
-			'plan_id' => $plan_id,
-			'current_session_fee' => (float)$plan['total_fee'],
-		));
-
-		// Create installments from fee_rules schedule fields if present
-		$installments = isset($body['installments']) ? (int)$body['installments'] : (isset($plan['no_of_installments']) ? (int)$plan['no_of_installments'] : 0);
-		if ($installments < 1) $installments = 1;
-		$each = round($total / $installments, 2);
-		$start = isset($body['start_date']) ? $body['start_date'] : date('Y-m-d');
-		for ($i = 0; $i < $installments; $i++) {
-			$amt = ($i === $installments - 1) ? ($total - $each * ($installments - 1)) : $each;
-			$dl = date('Y-m-d', strtotime($start . ' +' . $i . ' month'));
-			if ($instdate >= 1 && $instdate <= 28) {
-				$dl = date('Y-m-', strtotime($dl)) . str_pad((string)$instdate, 2, '0', STR_PAD_LEFT);
-			}
-			$this->db->insert('payments', array(
-				'student_id' => $student_id,
-				'challan_no' => $this->_new_challan_no(),
-				'amount' => $amt,
-				'dead_line' => $dl,
-				'payment_plan' => isset($plan['payment_plan']) ? $plan['payment_plan'] : 'Custom Plan',
-				'payment_comment' => 'College Fee',
-				'paid' => 0,
-				'contract_id' => 0,
-				'add_by' => $this->_actor_name(),
-				'last_edit' => $this->_actor_name(),
-			));
+		$payment_plan = isset($body['plan_id']) ? (int)$body['plan_id'] : 0;
+		if (!$payment_plan) {
+			$this->_json(array('success' => false, 'message' => 'Please select payment plan.'), 422);
 		}
-		$this->_json(array('success' => true, 'message' => 'Payment plan created'));
+
+		$instdate = isset($body['instdate']) ? $body['instdate'] : 10;
+		$extendinstallments = isset($body['installments']) ? (int)$body['installments'] : 0;
+		$discount = isset($body['discount']) ? (float)$body['discount'] : 0;
+		$actor = $this->_actor_name();
+
+		$this->db->trans_start();
+
+		$plan_rows = $this->db->get_where('fee_rules', array('fee_rule_id' => $payment_plan))->result_array();
+		if (!count($plan_rows)) {
+			$this->db->trans_complete();
+			$this->_json(array('success' => false, 'message' => 'Plan not found'), 404);
+		}
+		$plan = $plan_rows[0];
+
+		$session = $this->db->get_where('course_sessions', array(
+			'session_name' => $plan['session'],
+			'course_id' => $plan['course_id'],
+		))->row_array();
+
+		$this->db->set('total_fee', $plan['total_fee'] - $discount);
+		$this->db->set('plan_id', $payment_plan);
+		$this->db->set('current_session_fee', $plan['total_fee']);
+		$this->db->where('student_id', $student_id);
+		$this->db->update('students');
+
+		$studentDetails = $this->db->get_where('students', array('student_id' => $student_id))->result_array();
+		$class_id = $studentDetails[0]['class_id'];
+		$classDeatils = $this->db->get_where('classes', array('class_id' => $class_id))->result_array();
+		$exam_no = $classDeatils[0]['exam_no'];
+
+		if ($session) {
+			$exam_sequence_row = $this->db->get_where('exam_sequence', array(
+				'course_id' => $plan['course_id'],
+				'first_year' => $session['first_council_exam_no'],
+				'class' => 1,
+			))->row_array();
+
+			$exam_sequence_id = $exam_sequence_row['id'];
+
+			$this->db->select('*');
+			$this->db->from('council_sequence');
+			$this->db->where('course_id', $plan['course_id']);
+			$this->db->where('has_fee', 1);
+			$this->db->where('action_type', 'fee');
+			$this->db->where_in('recurring', array('One Time', 'Each Exam', 'Every Semester'));
+			$sequences = $this->db->get()->result_array();
+			$today = date('Y-m-d');
+			$errors = array();
+
+			foreach ($sequences as $sequence) {
+				$fee = $this->db
+					->where('sequence_fee_id', $sequence['council_sequence_id'])
+					->where('exam_sequence_id', $exam_sequence_id)
+					->where('to_date >=', $today)
+					->order_by('from_date', 'ASC')
+					->get('council_sequence_fee_rules')
+					->row_array();
+				if ($fee) {
+					$dead_line = $fee['from_date'];
+					$challan_no = $this->_new_challan_no();
+
+					$this->db->set('amount', $fee['exam_fee']);
+					$this->db->set('disc_per_inst', $plan['disc_per_inst']);
+					$this->db->set('dead_line', $dead_line);
+					$this->db->set('student_id', $student_id);
+					$this->db->set('payment_plan', 'consulation fee');
+					$this->db->set('payment_comment', 'This fee for next exam # ' . $exam_no . ' 1st Year');
+					$this->db->set('challan_no', $challan_no);
+					$this->db->set('add_by', $actor);
+					$this->db->set('last_edit', $actor);
+					$this->db->set('exam_sequence_id', $exam_sequence_id);
+					$this->db->set('council_sequence_id', $sequence['council_sequence_id']);
+
+					$this->db->insert('payments');
+				} else {
+					$errors[] = 'Please Generate Fee For ' . $sequence['type_name'];
+				}
+			}
+		}
+
+		if (!empty($errors)) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => implode("\n", $errors)), 422);
+		}
+
+		if ($extendinstallments < $plan['no_of_installments']) {
+			$extendinstallments = $plan['no_of_installments'];
+		}
+
+		$dead_line = date('Y-m-d');
+		$challan_no = $this->_new_challan_no();
+		$this->db->set('amount', $plan['installment_on_admission']);
+		$this->db->set('dead_line', $dead_line);
+		$this->db->set('student_id', $student_id);
+		$this->db->set('payment_plan', 'Auto');
+		$this->db->set('disc_per_inst', $plan['disc_per_inst']);
+		$this->db->set('challan_no', $challan_no);
+		$this->db->set('payment_comment', 'College Fee');
+		$this->db->set('add_by', $actor);
+		$this->db->set('last_edit', $actor);
+		$this->db->insert('payments');
+
+		$totalamount = $plan['total_fee'] - $discount - $plan['installment_on_admission'];
+		$permonth = $extendinstallments > 0 ? ($totalamount / $extendinstallments) : $totalamount;
+		for ($i = 1; $i <= $extendinstallments; $i++) {
+			$dead_line = date('Y-m-' . $instdate, strtotime('first day of +' . $i . ' month'));
+			$challan_no = $this->_new_challan_no();
+			$this->db->set('amount', $permonth);
+			$this->db->set('dead_line', $dead_line);
+			$this->db->set('student_id', $student_id);
+			$this->db->set('payment_plan', 'Auto');
+			$this->db->set('disc_per_inst', $plan['disc_per_inst']);
+			$this->db->set('challan_no', $challan_no);
+			$this->db->set('payment_comment', 'College Fee');
+			$this->db->set('add_by', $actor);
+			$this->db->set('last_edit', $actor);
+			$this->db->insert('payments');
+		}
+
+		$this->db->trans_complete();
+
+		if ($this->db->trans_status() === FALSE) {
+			$this->_json(array('success' => false, 'message' => 'Failed to create payment plan'), 500);
+		}
+
+		$this->_json(array('success' => true, 'message' => 'Payment plan created successfully'));
 	}
 
 	public function payments_council_date($student_id = 0, $fee_id = 0)

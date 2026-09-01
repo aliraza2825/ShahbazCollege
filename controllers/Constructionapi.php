@@ -126,6 +126,27 @@ class Constructionapi extends CI_Controller {
 		$this->_json(array('success' => false, 'message' => 'Construction manage access required'), 403);
 	}
 
+	/** Construction rail tab permissions — mirrors legacy access checkboxes. */
+	public function meta()
+	{
+		$admin = $this->_is_admin();
+		$this->_json(array(
+			'success' => true,
+			'permissions' => array(
+				'is_admin' => $admin,
+				'dashboard' => $admin || $this->_access_flag('construction_dashboard') || $this->_access_flag('construction_sidebar'),
+				'projects' => $admin || $this->_access_flag('construction_projects'),
+				'expenses' => $admin || $this->_access_flag('construction_site_expense'),
+				'closing' => $admin || $this->_access_flag('construction_expense_verify'),
+				'labour' => $admin
+					|| $this->_access_flag('construction_add_labour')
+					|| $this->_access_flag('construction_labour_attendance')
+					|| $this->_access_flag('construction_work'),
+				'contractors' => $admin || $this->_access_flag('construction_contractors'),
+			),
+		));
+	}
+
 	private function _user_name()
 	{
 		return trim($this->current_user['first_name'] . ' ' . $this->current_user['last_name']);
@@ -470,25 +491,19 @@ class Constructionapi extends CI_Controller {
 	}
 
 	/**
-	 * Closing-day match for construction expenses.
-	 * Bank: DATE(actual_date) = tag/statement day; cash/legacy: date = expense day.
-	 * Returns SQL fragment; bind $date twice when using.
+	 * Closing-day match for construction expenses (by actual_date = when saved).
+	 * Returns SQL fragment; bind $date once when using.
 	 */
 	private function _expense_closing_day_sql($alias = 'e')
 	{
 		$a = $alias !== '' ? rtrim($alias, '.') . '.' : '';
-		return "(
-			(LOWER(COALESCE({$a}paid_type,'')) = 'bank' AND DATE({$a}actual_date) = ?)
-			OR
-			(LOWER(COALESCE({$a}paid_type,'')) <> 'bank' AND {$a}date = ?)
-		)";
+		return "DATE({$a}actual_date) = ?";
 	}
 
 	/** Calendar day used for closing lock checks on an existing expense row. */
 	private function _expense_closing_day_for_row($row)
 	{
-		$paid = isset($row['paid_type']) ? strtolower(trim((string)$row['paid_type'])) : '';
-		if ($paid === 'bank' && !empty($row['actual_date'])) {
+		if (!empty($row['actual_date'])) {
 			return date('Y-m-d', strtotime($row['actual_date']));
 		}
 		return !empty($row['date']) ? $row['date'] : date('Y-m-d');
@@ -589,7 +604,7 @@ class Constructionapi extends CI_Controller {
 				$actual_date .= ' 00:00:00';
 			}
 		} else {
-			$actual_date = $expense_date . (strlen($expense_date) === 10 ? ' 00:00:00' : '');
+			$actual_date = date('Y-m-d H:i:s');
 		}
 
 		$row = array(
@@ -1018,6 +1033,25 @@ class Constructionapi extends CI_Controller {
 		return $l;
 	}
 
+	private function _category_name($expense_category_id)
+	{
+		static $cache = null;
+		$id = (int) $expense_category_id;
+		if ($id <= 0) {
+			return '';
+		}
+		if ($cache === null) {
+			$cache = array();
+			if ($this->db->table_exists('expense_category')) {
+				$rows = $this->db->select('expense_category_id, name')->get('expense_category')->result_array();
+				foreach ($rows as $row) {
+					$cache[(int) $row['expense_category_id']] = $row['name'];
+				}
+			}
+		}
+		return isset($cache[$id]) ? $cache[$id] : '';
+	}
+
 	private function _decorate_expense_row(&$r)
 	{
 		if (!empty($r['construction_source_resolved'])) {
@@ -1026,6 +1060,8 @@ class Constructionapi extends CI_Controller {
 		if (empty($r['construction_project_id']) && !empty($r['linked_project_id'])) {
 			$r['construction_project_id'] = (int)$r['linked_project_id'];
 		}
+		$cat_name = $this->_category_name(isset($r['expense_category_id']) ? $r['expense_category_id'] : 0);
+		$r['category_name'] = $cat_name;
 		$src = isset($r['construction_source']) ? $r['construction_source'] : 'misc';
 		if ($src === 'contractor') {
 			$r['party_name'] = !empty($r['contractor_name']) ? $r['contractor_name'] : 'Contractor';
@@ -1034,7 +1070,7 @@ class Constructionapi extends CI_Controller {
 		} elseif ($src === 'purchase') {
 			$r['party_name'] = !empty($r['vendor_name']) ? $r['vendor_name'] : 'Purchase';
 		} else {
-			$r['party_name'] = 'Misc';
+			$r['party_name'] = $cat_name !== '' ? $cat_name : 'Misc';
 		}
 		$r['image_url'] = $this->_expense_image_url(isset($r['image']) ? $r['image'] : '');
 		$closing_id = isset($r['construction_closing_id']) ? (int)$r['construction_closing_id'] : 0;
@@ -1126,7 +1162,7 @@ class Constructionapi extends CI_Controller {
 					OR (pr.project_id IS NOT NULL AND pr.project_id > 0)
 				  )
 			) x GROUP BY src";
-			$rows = $this->db->query($sql, array($date, $date))->result_array();
+			$rows = $this->db->query($sql, array($date))->result_array();
 		} elseif ($this->db->field_exists('construction_project_id', 'expenses')) {
 			$day_sql_plain = $this->_expense_closing_day_sql('');
 			$rows = $this->db->query(
@@ -1135,7 +1171,7 @@ class Constructionapi extends CI_Controller {
 				 WHERE construction_project_id IS NOT NULL AND construction_project_id > 0
 				   AND {$day_sql_plain}
 				 GROUP BY construction_source",
-				array($date, $date)
+				array($date)
 			)->result_array();
 		} else {
 			return $totals;
@@ -1187,7 +1223,7 @@ class Constructionapi extends CI_Controller {
 					OR (pr.project_id IS NOT NULL AND pr.project_id > 0)
 				  )
 				ORDER BY e.expense_id DESC";
-			$rows = $this->db->query($sql, array($date, $date))->result_array();
+			$rows = $this->db->query($sql, array($date))->result_array();
 		} elseif ($this->db->field_exists('construction_project_id', 'expenses')) {
 			$day_sql_e = $this->_expense_closing_day_sql('expenses');
 			$sql = "SELECT expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name
@@ -1198,7 +1234,7 @@ class Constructionapi extends CI_Controller {
 				WHERE expenses.construction_project_id IS NOT NULL AND expenses.construction_project_id > 0
 				  AND {$day_sql_e}
 				ORDER BY expenses.expense_id DESC";
-			$rows = $this->db->query($sql, array($date, $date))->result_array();
+			$rows = $this->db->query($sql, array($date))->result_array();
 		} else {
 			return array();
 		}
@@ -2136,9 +2172,6 @@ class Constructionapi extends CI_Controller {
 			$date = !empty($body['date']) ? $body['date'] : $row['date'];
 			$description = array_key_exists('description', $body) ? trim($body['description']) : null;
 			if ($amount <= 0) $this->_json(array('success' => false, 'message' => 'amount required'), 422);
-			if ($date !== $row['date'] && !$is_bank) {
-				$this->_assert_expense_day_open($date);
-			}
 			if ($is_bank && isset($body['amount']) && abs((float)$body['amount'] - (float)$row['amount']) > 0.0001) {
 				$this->_json(array('success' => false, 'message' => 'Bank expense amount is locked to the statement entry'), 422);
 			}
@@ -2187,10 +2220,6 @@ class Constructionapi extends CI_Controller {
 				'purpose' => $purpose,
 				'last_edit' => $name,
 			);
-			// Cash: keep actual_date aligned with expense date for closing.
-			if (!$is_bank && $this->db->field_exists('actual_date', 'expenses')) {
-				$exp_update['actual_date'] = $date . ' 00:00:00';
-			}
 			$this->db->where('expense_id', $id)->update('expenses', $exp_update);
 
 			if ($src === 'contractor' && $ref_id > 0) {
@@ -2302,7 +2331,7 @@ class Constructionapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'project_id required'), 422);
 		}
 
-		$actual_date = $date;
+		$actual_date = date('Y-m-d H:i:s');
 		$brs = null;
 		if ($paid_type === 'bank') {
 			if ($bank_trans_id <= 0) {
@@ -2323,16 +2352,12 @@ class Constructionapi extends CI_Controller {
 				$this->_json(array('success' => false, 'message' => 'Statement entry has no debit amount'), 422);
 			}
 			$amount = $debit;
-			$actual_date = !empty($brs['trans_date'])
-				? date('Y-m-d', strtotime($brs['trans_date']))
-				: $date;
-			$this->_assert_expense_day_open($actual_date);
 		} else {
 			if ($amount <= 0) {
 				$this->_json(array('success' => false, 'message' => 'project_id and amount required'), 422);
 			}
-			$this->_assert_expense_day_open($date);
 		}
+		$this->_assert_expense_day_open(date('Y-m-d'));
 
 		$project = $this->_project($project_id);
 		if (!$project) $this->_json(array('success' => false, 'message' => 'Project not found'), 404);

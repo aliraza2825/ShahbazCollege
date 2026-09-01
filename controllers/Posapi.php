@@ -12,6 +12,7 @@ class Posapi extends CI_Controller {
 	public function __construct()
 	{
 		parent::__construct();
+		$this->_ensure_local_timezone();
 		$this->_cors();
 
 		if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -242,16 +243,7 @@ class Posapi extends CI_Controller {
 
 	private function _auth_user()
 	{
-		$token = $this->_token_from_request();
-		if (!$token) {
-			return null;
-		}
-		$row = $this->db->get_where('pos_api_tokens', array('token' => $token))->row_array();
-		if (!$row || strtotime($row['expires_at']) < time()) {
-			return null;
-		}
-		$user = $this->db->get_where('users', array('user_id' => $row['user_id'], 'status' => '1'))->row_array();
-		return $user ? $user : null;
+		return pos_api_auth_user($this->db, $this->input);
 	}
 
 	private function _is_admin($user = null)
@@ -260,32 +252,10 @@ class Posapi extends CI_Controller {
 		return $user && isset($user['role']) && $user['role'] === 'Admin';
 	}
 
-	/** Login allowed for Admin, any access-table grant, or active staff (legacy login parity). */
+	/** New SPA login: any active staff; portal choice depends on where they sign in. */
 	private function _can_app_login($user)
 	{
-		if ($this->_is_admin($user)) {
-			return true;
-		}
-
-		$acc = $this->_pos_access_row($user);
-		if (!$acc) {
-			return true;
-		}
-
-		$skip = array('access_id', 'user_id', 'designation_id', 'created_at', 'updated_at', 'created_by', 'updated_by');
-		foreach ($acc as $key => $val) {
-			if (in_array($key, $skip, true)) {
-				continue;
-			}
-			if ($val === 1 || $val === '1') {
-				return true;
-			}
-			if (is_string($val) && trim($val) !== '' && trim($val) !== '0') {
-				return true;
-			}
-		}
-
-		return true;
+		return is_array($user) && isset($user['status']) && $user['status'] === '1';
 	}
 
 	private function _pos_access_row($user = null)
@@ -305,10 +275,47 @@ class Posapi extends CI_Controller {
 		return false;
 	}
 
+	private function _access_perm($key, $user = null)
+	{
+		$user = $user ? $user : $this->current_user;
+		if ($this->_is_admin($user)) return true;
+		$row = $this->_pos_access_row($user);
+		return $row && !empty($row[$key]);
+	}
+
+	/** Student action buttons in Any Query / student detail popup (legacy anyquery_student.php). */
+	private function _student_action_permissions($user = null)
+	{
+		$user = $user ? $user : $this->current_user;
+		$is_admin = $this->_is_admin($user);
+		return array(
+			'is_admin' => $is_admin,
+			'student_sidebar' => $is_admin || $this->_access_perm('student_sidebar', $user),
+			'student_add' => $is_admin || $this->_access_perm('student_add', $user),
+			'student_all' => $is_admin || $this->_access_perm('student_all', $user),
+			'student_edit' => $is_admin || $this->_access_perm('student_edit', $user),
+			'student_upload_documents' => $is_admin || $this->_access_perm('student_upload_documents', $user),
+			'student_payments' => $is_admin || $this->_access_perm('student_payments', $user),
+			'student_payment_reset' => $is_admin || $this->_access_perm('student_payment_reset', $user),
+			'student_payment_edit' => $is_admin || $this->_access_perm('student_payment_edit', $user),
+			'can_student_struckof' => $is_admin || $this->_access_perm('can_student_struckof', $user),
+			'student_issue_refund' => $is_admin || $this->_access_perm('student_issue_refund', $user),
+			'council_list_report' => $is_admin || $this->_access_perm('council_list_report', $user),
+			'extra_fee_access' => $is_admin || $this->_access_perm('extra_fee_access', $user),
+			'fee_by_bank' => $is_admin || $this->_access_perm('fee_by_bank', $user),
+			'fee_by_cash' => $is_admin || $this->_access_perm('fee_by_cash', $user),
+			'fee_by_paypro' => $is_admin || $this->_access_perm('fee_by_paypro', $user),
+			'fine_remove' => $is_admin || $this->_access_perm('fine_remove', $user) || $this->_access_perm('remove_fine', $user),
+			'remove_fine' => $is_admin || $this->_access_perm('remove_fine', $user) || $this->_access_perm('fine_remove', $user),
+			'change_exam_no_in_payments' => $is_admin || $this->_access_perm('change_exam_no_in_payments', $user),
+		);
+	}
+
 	private function _user_has_incentive_portal($user)
 	{
 		if (!$user || empty($user['user_id'])) return false;
-		if ($this->_any_access_flag($this->_pos_access_row($user), array('recovery_portal', 'all_users_recovery'))) {
+		$row = $this->_pos_access_row($user);
+		if ($this->_any_access_flag($row, array('all_users_recovery'))) {
 			return true;
 		}
 		if (empty($user['designation_id'])) return false;
@@ -318,17 +325,20 @@ class Posapi extends CI_Controller {
 			if ($id > 0) $desigs[] = $id;
 		}
 		if (!count($desigs)) return false;
+		$has_recovery_portal = $this->_any_access_flag($row, array('recovery_portal'));
 		foreach ($desigs as $desig) {
-			$recovery = $this->db->query(
-				'SELECT recovery_management_id FROM recovery_management WHERE FIND_IN_SET(?, designation_id) LIMIT 1',
-				array($desig)
-			)->row_array();
-			if ($recovery) return true;
 			$admission = $this->db->query(
 				'SELECT incentive_id FROM admission_management_incentives WHERE FIND_IN_SET(?, designation_id) LIMIT 1',
 				array($desig)
 			)->row_array();
 			if ($admission) return true;
+			if ($has_recovery_portal) {
+				$recovery = $this->db->query(
+					'SELECT recovery_management_id FROM recovery_management WHERE FIND_IN_SET(?, designation_id) LIMIT 1',
+					array($desig)
+				)->row_array();
+				if ($recovery) return true;
+			}
 		}
 		return false;
 	}
@@ -341,7 +351,7 @@ class Posapi extends CI_Controller {
 			'courses-management', 'course-sessions', 'schedule-management', 'papers-results',
 			'councils', 'reports', 'punjab-council', 'council-list', 'accounts', 'fees',
 			'expenses', 'tax', 'inventory', 'construction', 'incentive', 'complaints',
-			'chats', 'reminders', 'website', 'mobile-app', 'setup', 'access', 'campuses', 'documents',
+			'chats', 'reminders', 'rules', 'website', 'mobile-app', 'setup', 'access', 'campuses', 'documents',
 		);
 		if ($is_admin) {
 			$out = array();
@@ -359,18 +369,15 @@ class Posapi extends CI_Controller {
 			'closing_reconcile', 'misc_income', 'bank_reconciliation',
 			'how_to_use', 'view_campus_closings',
 		);
-		$hr_keys = array(
-			'hr_sidebar', 'attendence_sidebar', 'leave_approval', 'holidays_sidebar',
-			'department_sidebar', 'designation_sidebar', 'staff_type_sidebar', 'staff_sidebar',
-			'salary', 'define_allownces', 'payroll_statutory_rules', 'payroll_income_tax_rules',
-		);
 
 		return array(
 			'dashboard' => true,
 			'pos' => !empty($row['pos']),
 			'students' => $this->_any_access_flag($row, array('student_sidebar', 'student_add', 'student_all')),
 			'online-applications' => !empty($row['online_application_access']),
-			'hr' => $this->_any_access_flag($row, $hr_keys),
+			// Legacy always shows Loans + My Attendence for every staff user;
+			// finer HR tabs are gated in Hrapi::meta / Sidebar.
+			'hr' => true,
 			'classes' => $this->_any_access_flag($row, array('class_sidebar', 'class_add', 'class_all')),
 			'courses-management' => $this->_any_access_flag($row, array('course_management_access', 'test_engine_sidebar')),
 			'course-sessions' => false,
@@ -378,7 +385,7 @@ class Posapi extends CI_Controller {
 			'papers-results' => !empty($row['papers_results_sidebar']),
 			'councils' => !empty($row['council_report']),
 			'reports' => !empty($row['reports_sidebar']),
-			'punjab-council' => $this->_any_access_flag($row, array('punjab_pharmacy_council_access', 'next_council_admission_access')),
+			'punjab-council' => !empty($row['punjab_pharmacy_council_access']),
 			'council-list' => !empty($row['council_list_sidebar']),
 			'accounts' => $this->_any_access_flag($row, $accounts_keys),
 			'fees' => !empty($row['fee_due_sidebar']),
@@ -386,17 +393,20 @@ class Posapi extends CI_Controller {
 			'tax' => false,
 			'inventory' => !empty($row['inventory']),
 			'construction' => $this->_any_access_flag($row, array('construction_sidebar', 'construction_site_expense', 'construction_projects')),
-			'incentive' => $this->_any_access_flag($row, array('recovery_portal', 'all_users_recovery'))
+			'incentive' => $this->_any_access_flag($row, array('all_users_recovery'))
 				|| $this->_user_has_incentive_portal($user),
 			'complaints' => false,
 			'chats' => false,
 			'reminders' => !empty($row['reminders_sidebar']),
-			'website' => false,
+			// Legacy: Rules menu is Admin-sidebar only (staff branch has no Rules).
+			'rules' => false,
+			'website' => $this->_any_access_flag($row, array('event_images', 'slider_images', 'news_updates')),
 			'mobile-app' => false,
 			'setup' => !empty($row['sms']),
 			'access' => false,
 			'campuses' => !empty($row['campuses']),
-			'documents' => $this->_any_access_flag($row, array('documents_access', 'download_documents')),
+			// download_documents is a separate legacy menu — not Documents tabs.
+			'documents' => $this->_any_access_flag($row, array('documents_access', 'documents_diploma', 'documents_students')),
 		);
 	}
 
@@ -464,6 +474,12 @@ class Posapi extends CI_Controller {
 			'can_verify_construction_expense' => $is_admin
 				|| ($row && !empty($row['construction_expense_verify'])),
 			'modules' => $this->_module_permissions($user, $row, $is_admin),
+			/** Fine-grained Website CMS flags (legacy access checkboxes). */
+			'website' => array(
+				'event_images' => $is_admin || ($row && !empty($row['event_images'])),
+				'slider_images' => $is_admin || ($row && !empty($row['slider_images'])),
+				'news_updates' => $is_admin || ($row && !empty($row['news_updates'])),
+			),
 		);
 	}
 
@@ -488,6 +504,49 @@ class Posapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'No access to this campus'), 403);
 		}
 		return $perms;
+	}
+
+	private function _user_image_url($user)
+	{
+		$user_id = isset($user['user_id']) ? (int) $user['user_id'] : 0;
+		if ($user_id <= 0 || !$this->db->table_exists('teacher_documents')) {
+			return null;
+		}
+
+		$rows = $this->db
+			->select('image, type')
+			->from('teacher_documents')
+			->where('teacher_id', $user_id)
+			->order_by('id', 'DESC')
+			->get()
+			->result_array();
+		if (!$rows) {
+			return null;
+		}
+
+		$pick = null;
+		foreach ($rows as $row) {
+			$image = isset($row['image']) ? trim((string) $row['image']) : '';
+			if ($image === '') {
+				continue;
+			}
+			$type = strtolower(trim(isset($row['type']) ? (string) $row['type'] : ''));
+			if ($type === 'sign' || $type === 'signature') {
+				continue;
+			}
+			$ext = strtolower(pathinfo($image, PATHINFO_EXTENSION));
+			if ($ext !== '' && !in_array($ext, array('jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'), true)) {
+				continue;
+			}
+			$pick = $image;
+			break;
+		}
+
+		if ($pick === null) {
+			return null;
+		}
+
+		return rtrim(base_url(), '/') . '/uploads/' . rawurlencode($pick);
 	}
 
 	private function _user_payload($user)
@@ -518,6 +577,7 @@ class Posapi extends CI_Controller {
 			'campus_name' => $campus ? $campus['campus_name'] : '',
 			'closing_campus_id' => $closing_campus_id > 0 ? $closing_campus_id : null,
 			'closing_campus_name' => $closing_campus ? $closing_campus['campus_name'] : '',
+			'image_url' => $this->_user_image_url($user),
 			'permissions' => $perms,
 		);
 	}
@@ -588,6 +648,26 @@ class Posapi extends CI_Controller {
 		return false;
 	}
 
+	/** Pakistan local time — MySQL DEFAULT CURRENT_TIMESTAMP uses server UTC otherwise. */
+	private function _ensure_local_timezone()
+	{
+		static $done = false;
+		if ($done) {
+			return;
+		}
+		date_default_timezone_set('Asia/Karachi');
+		if (isset($this->db)) {
+			@$this->db->query("SET time_zone = '+05:00'");
+		}
+		$done = true;
+	}
+
+	private function _local_now()
+	{
+		$this->_ensure_local_timezone();
+		return date('Y-m-d H:i:s');
+	}
+
 	public function ping()
 	{
 		$this->_json(array('success' => true, 'message' => 'POS API OK', 'time' => date('c')));
@@ -609,9 +689,8 @@ class Posapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Invalid username or password'), 401);
 		}
 
-		// Any active staff may log in (legacy parity). POS and other modules stay gated by permissions.
 		if (!$this->_can_app_login($user)) {
-			$this->_json(array('success' => false, 'message' => 'No system access. Ask admin to grant permissions in Access.'), 403);
+			$this->_json(array('success' => false, 'message' => 'Account inactive.'), 403);
 		}
 
 		$token = bin2hex(openssl_random_pseudo_bytes(32));
@@ -631,6 +710,61 @@ class Posapi extends CI_Controller {
 			'token' => $token,
 			'expires_at' => $expires,
 			'user' => $this->_user_payload($user),
+		));
+	}
+
+	/**
+	 * Admin-only: mint a POS session token for another active user (Login as).
+	 * Does not replace the admin's own token.
+	 */
+	public function login_as()
+	{
+		if (!$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'Admin only'), 403);
+		}
+
+		$body = $this->_body();
+		$user_id = isset($body['user_id']) ? (int)$body['user_id'] : 0;
+		if ($user_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'user_id required'), 422);
+		}
+
+		$target = $this->db->get_where('users', array(
+			'user_id' => $user_id,
+			'status' => '1',
+		))->row_array();
+
+		if (!$target) {
+			$this->_json(array('success' => false, 'message' => 'User not found or inactive'), 404);
+		}
+
+		if ((int)$target['user_id'] === (int)$this->current_user['user_id']) {
+			$this->_json(array('success' => false, 'message' => 'Already logged in as this user'), 422);
+		}
+
+		if (!$this->_can_app_login($target)) {
+			$this->_json(array('success' => false, 'message' => 'Target account cannot use the app'), 403);
+		}
+
+		$token = bin2hex(openssl_random_pseudo_bytes(32));
+		$expires = date('Y-m-d H:i:s', strtotime('+12 hours'));
+
+		// Replace only the target user's tokens — leave the admin session intact.
+		$this->db->where('user_id', $user_id);
+		$this->db->delete('pos_api_tokens');
+
+		$this->db->insert('pos_api_tokens', array(
+			'user_id' => $user_id,
+			'token' => $token,
+			'expires_at' => $expires,
+		));
+
+		$this->_json(array(
+			'success' => true,
+			'token' => $token,
+			'expires_at' => $expires,
+			'user' => $this->_user_payload($target),
+			'message' => 'Login-as session created',
 		));
 	}
 
@@ -746,6 +880,91 @@ class Posapi extends CI_Controller {
 		));
 	}
 
+	/** Legacy Profile::index — current staff profile for Edit Profile screen */
+	public function profile()
+	{
+		$user = $this->current_user;
+		$designations = array();
+		if (!empty($user['designation_id'])) {
+			$ids = array();
+			foreach (explode(',', (string) $user['designation_id']) as $id) {
+				$id = (int) trim($id);
+				if ($id > 0) {
+					$ids[] = $id;
+				}
+			}
+			if (count($ids)) {
+				$rows = $this->db->where_in('designation_id', $ids)->get('designations')->result_array();
+				foreach ($rows as $row) {
+					$label = trim(
+						(isset($row['designation_name']) ? $row['designation_name'] : '')
+						. ' '
+						. (isset($row['description']) ? $row['description'] : '')
+					);
+					if ($label !== '') {
+						$designations[] = $label;
+					}
+				}
+			}
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'user_id' => (int) $user['user_id'],
+				'first_name' => isset($user['first_name']) ? $user['first_name'] : '',
+				'last_name' => isset($user['last_name']) ? $user['last_name'] : '',
+				'email' => isset($user['email']) ? $user['email'] : '',
+				'username' => isset($user['username']) ? $user['username'] : '',
+				'role' => isset($user['role']) ? $user['role'] : '',
+				'designations' => $designations,
+			),
+		));
+	}
+
+	/** Legacy Profile::update — first/last name + password (email/username locked) */
+	public function update_profile()
+	{
+		$body = $this->_body();
+		$first_name = isset($body['first_name']) ? trim((string) $body['first_name']) : '';
+		$last_name = isset($body['last_name']) ? trim((string) $body['last_name']) : '';
+		$password = isset($body['password']) ? (string) $body['password'] : '';
+		$confirm = isset($body['password_confirm'])
+			? (string) $body['password_confirm']
+			: (isset($body['r-password']) ? (string) $body['r-password'] : '');
+
+		if ($first_name === '' || $last_name === '') {
+			$this->_json(array('success' => false, 'message' => 'First name and last name are required'), 422);
+		}
+		if ($password === '') {
+			$this->_json(array('success' => false, 'message' => 'Password is required'), 422);
+		}
+		if ($password !== $confirm) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Your password and retype password didn\'t match!',
+			), 422);
+		}
+
+		$user_id = (int) $this->current_user['user_id'];
+		$this->db->where('user_id', $user_id)->update('users', array(
+			'first_name' => $first_name,
+			'last_name' => $last_name,
+			'password' => md5($password),
+		));
+
+		$row = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+		if ($row) {
+			$this->current_user = $row;
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Your profile update successfully!',
+			'user' => $this->_user_payload($this->current_user),
+		));
+	}
+
 	/** Legacy top bar: designations, petty cash, quick-menu permissions */
 	public function header_meta()
 	{
@@ -846,10 +1065,12 @@ class Posapi extends CI_Controller {
 			'petty_status' => 1,
 		))->result_array();
 		if (count($petty_rows) > 0) {
-			$this->load->helper('custom');
+			// Same active float the header links to — live balance must match
+			// Accounts petty statement closing (not my_pettycash()'s first/any row).
+			$petty_id = (int)$petty_rows[0]['id'];
 			$petty_cash = array(
-				'id' => (int)$petty_rows[0]['id'],
-				'amount' => (float)pettycash_statement($petty_rows[0]['id']),
+				'id' => $petty_id,
+				'amount' => $this->_petty_live_balance($petty_id),
 			);
 		}
 
@@ -2047,6 +2268,7 @@ class Posapi extends CI_Controller {
 
 		$this->_json(array(
 			'success' => true,
+			'permissions' => $this->_student_action_permissions(),
 			'data' => array(
 				'student_id' => (int)$student['student_id'],
 				'roll_no' => $student['roll_no'],
@@ -2416,6 +2638,7 @@ class Posapi extends CI_Controller {
 				'payment_method' => $payment_method,
 				'payment_status' => 'paid',
 				'sold_by' => $this->current_user['user_id'],
+				'created_at' => $this->_local_now(),
 			));
 			$order_id = $this->db->insert_id();
 
@@ -2797,6 +3020,24 @@ class Posapi extends CI_Controller {
 			unset($r);
 		}
 
+		if (count($rows)) {
+			$invoice_nos = array();
+			foreach ($rows as $r) {
+				if (!empty($r['invoice_no'])) {
+					$invoice_nos[] = (string)$r['invoice_no'];
+				}
+			}
+			$return_by_invoice = $this->_orders_return_meta_batch($invoice_nos);
+			foreach ($rows as &$r) {
+				$inv = isset($r['invoice_no']) ? (string)$r['invoice_no'] : '';
+				$meta = isset($return_by_invoice[$inv])
+					? $return_by_invoice[$inv]
+					: $this->_empty_order_return_meta();
+				$r = array_merge($r, $meta);
+			}
+			unset($r);
+		}
+
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
@@ -2840,6 +3081,7 @@ class Posapi extends CI_Controller {
 			? trim((isset($seller['first_name']) ? $seller['first_name'] : '') . ' ' . (isset($seller['last_name']) ? $seller['last_name'] : ''))
 			: '';
 		$order['student_roll'] = $student && isset($student['roll_no']) ? $student['roll_no'] : '';
+		$order = array_merge($order, $this->_order_return_meta(isset($order['invoice_no']) ? $order['invoice_no'] : ''));
 
 		$this->_json(array(
 			'success' => true,
@@ -2864,20 +3106,94 @@ class Posapi extends CI_Controller {
 		return !($closing_id === null || $closing_id === '' || $closing_id === '0' || (int)$closing_id === 0);
 	}
 
+	/**
+	 * Live petty balance for a float — same formula as Accountsapi::_petty_live_balance
+	 * / statement closing as of end of today (not DB remaining_amount).
+	 */
+	private function _petty_live_balance($pettyId)
+	{
+		$pettyId = (int)$pettyId;
+		if ($pettyId <= 0 || !$this->db->table_exists('petty_cash_college_wise')) {
+			return 0.0;
+		}
+		$petty = $this->db->query(
+			'SELECT * FROM petty_cash_college_wise WHERE id = ? LIMIT 1',
+			array($pettyId)
+		)->row_array();
+		if (!$petty) {
+			return 0.0;
+		}
+
+		$asOf = date('Y-m-d') . ' 23:59:59';
+		$open = (float)$petty['opening_balance'];
+		$assignTo = (int)$petty['assign_to'];
+		$givenDate = !empty($petty['given_date']) ? $petty['given_date'] : '1970-01-01';
+
+		$expenseAmt = 0.0;
+		if ($this->db->table_exists('expenses')) {
+			$expenseRow = $this->db->query(
+				"SELECT SUM(amount) as amount FROM expenses
+				 WHERE add_by_id = ?
+				   AND actual_date >= ?
+				   AND actual_date <= ?
+				   AND paid_type = 'cash'
+				   AND expense_id NOT IN (SELECT expense_id FROM bank_reconciliation_statement WHERE expense_id IS NOT NULL)",
+				array($assignTo, $givenDate, $asOf)
+			)->row_array();
+			$expenseAmt = (float)(isset($expenseRow['amount']) ? $expenseRow['amount'] : 0);
+		}
+
+		$revAmt = 0.0;
+		if ($this->db->table_exists('cash_reversal')) {
+			$revRow = $this->db->query(
+				"SELECT SUM(cash_reversal.amount) as amount
+				 FROM cash_reversal
+				 INNER JOIN expenses ON expenses.expense_id = cash_reversal.expense_id
+				 WHERE expenses.add_by_id = ?
+				   AND cash_reversal.created_at >= ?
+				   AND cash_reversal.created_at <= ?",
+				array($assignTo, $givenDate . ' 00:00:00', $asOf)
+			)->row_array();
+			$revAmt = (float)(isset($revRow['amount']) ? $revRow['amount'] : 0);
+		}
+
+		$debit = 0.0;
+		$credit = 0.0;
+		if ($this->db->table_exists('petty_cash_history')) {
+			$hist = $this->db->query(
+				"SELECT
+					SUM(CASE WHEN debit_credit = 'D' THEN amount_given ELSE 0 END) as debit_amount,
+					SUM(CASE WHEN debit_credit = 'C' THEN amount_given ELSE 0 END) as credit_amount
+				 FROM petty_cash_history
+				 WHERE transaction_pettycash_account = ?
+				   AND created_at <= ?",
+				array($pettyId, $asOf)
+			)->row_array();
+			$debit = (float)(isset($hist['debit_amount']) ? $hist['debit_amount'] : 0);
+			$credit = (float)(isset($hist['credit_amount']) ? $hist['credit_amount'] : 0);
+		}
+
+		return round(($open + $debit + $revAmt) - $credit - $expenseAmt, 2);
+	}
+
 	private function _my_pettycash_balance()
 	{
 		$user_id = (int)$this->current_user['user_id'];
 		if ($user_id <= 0 || !$this->db->table_exists('petty_cash_college_wise')) {
 			return 0.0;
 		}
-		$cash = $this->db->get_where('petty_cash_college_wise', array('assign_to' => $user_id))->row_array();
+		// Prefer active float (matches top-bar / statement link).
+		$cash = $this->db->get_where('petty_cash_college_wise', array(
+			'assign_to' => $user_id,
+			'petty_status' => 1,
+		))->row_array();
+		if (!$cash || empty($cash['id'])) {
+			$cash = $this->db->get_where('petty_cash_college_wise', array('assign_to' => $user_id))->row_array();
+		}
 		if (!$cash || empty($cash['id'])) {
 			return 0.0;
 		}
-		if (!function_exists('pettycash_statement')) {
-			$this->load->helper('custom_helper');
-		}
-		return (float)pettycash_statement((int)$cash['id']);
+		return $this->_petty_live_balance((int)$cash['id']);
 	}
 
 	private function _return_expense_category_id()
@@ -2896,6 +3212,96 @@ class Posapi extends CI_Controller {
 			return null;
 		}
 		return $this->db->get_where('pos_orders', array('invoice_no' => $invoice_no))->row_array();
+	}
+
+	private function _empty_order_return_meta()
+	{
+		return array(
+			'return_status' => 'none',
+			'returned_units' => 0,
+			'returnable_units' => 0,
+			'total_sold_units' => 0,
+			'can_return' => false,
+		);
+	}
+
+	private function _order_return_meta_from_counts($returned, $returnable, $total)
+	{
+		$returned = (int)$returned;
+		$returnable = (int)$returnable;
+		$total = (int)$total;
+		$status = 'none';
+		if ($returned > 0 && $returnable <= 0) {
+			$status = 'full';
+		} elseif ($returned > 0 && $returnable > 0) {
+			$status = 'partial';
+		}
+		return array(
+			'return_status' => $status,
+			'returned_units' => $returned,
+			'returnable_units' => $returnable,
+			'total_sold_units' => $total,
+			'can_return' => $returnable > 0,
+		);
+	}
+
+	private function _order_return_meta($invoice_no)
+	{
+		$invoice_no = trim((string)$invoice_no);
+		if ($invoice_no === '' || !$this->db->table_exists('products')) {
+			return $this->_empty_order_return_meta();
+		}
+		$row = $this->db->query(
+			"SELECT COUNT(*) AS total_sold_units,
+				SUM(CASE WHEN return_status = 1 THEN 1 ELSE 0 END) AS returned_units,
+				SUM(CASE WHEN return_status = 0 AND sold = 1 THEN 1 ELSE 0 END) AS returnable_units
+			 FROM products WHERE invoice_no = ? AND sold = 1",
+			array($invoice_no)
+		)->row_array();
+		if (!$row) {
+			return $this->_empty_order_return_meta();
+		}
+		return $this->_order_return_meta_from_counts(
+			isset($row['returned_units']) ? $row['returned_units'] : 0,
+			isset($row['returnable_units']) ? $row['returnable_units'] : 0,
+			isset($row['total_sold_units']) ? $row['total_sold_units'] : 0
+		);
+	}
+
+	private function _orders_return_meta_batch($invoice_nos)
+	{
+		$out = array();
+		$invoice_nos = array_values(array_filter(array_unique(array_map('strval', $invoice_nos))));
+		if (!count($invoice_nos)) {
+			return $out;
+		}
+		foreach ($invoice_nos as $inv) {
+			$out[$inv] = $this->_empty_order_return_meta();
+		}
+		if (!$this->db->table_exists('products')) {
+			return $out;
+		}
+		$this->db->select(
+			'products.invoice_no,
+			 COUNT(*) AS total_sold_units,
+			 SUM(CASE WHEN return_status = 1 THEN 1 ELSE 0 END) AS returned_units,
+			 SUM(CASE WHEN return_status = 0 AND sold = 1 THEN 1 ELSE 0 END) AS returnable_units',
+			false
+		);
+		$this->db->from('products');
+		$this->db->where('sold', 1);
+		$this->db->where_in('invoice_no', $invoice_nos);
+		$this->db->group_by('products.invoice_no');
+		$rows = $this->db->get()->result_array();
+		foreach ($rows as $row) {
+			$inv = (string)$row['invoice_no'];
+			$out[$inv] = $this->_order_return_meta_from_counts(
+				isset($row['returned_units']) ? $row['returned_units'] : 0,
+				isset($row['returnable_units']) ? $row['returnable_units'] : 0,
+				isset($row['total_sold_units']) ? $row['total_sold_units'] : 0
+			);
+		}
+		return $out;
 	}
 
 	private function _assert_return_invoice_access($invoice_no)
@@ -3100,9 +3506,10 @@ class Posapi extends CI_Controller {
 		}
 		list($order,) = $this->_assert_return_invoice_access($invoice_no);
 		list($lines, $closing_status, $total_units, $closed_units) = $this->_return_preview_lines($invoice_no);
+		$return_meta = $this->_order_return_meta($invoice_no);
 		$this->_json(array(
 			'success' => true,
-			'data' => array(
+			'data' => array_merge(array(
 				'invoice_no' => $invoice_no,
 				'order_id' => (int)$order['order_id'],
 				'purchaser_name' => isset($order['purchaser_name']) ? $order['purchaser_name'] : '',
@@ -3113,7 +3520,7 @@ class Posapi extends CI_Controller {
 				'petty_cash_balance' => $this->_my_pettycash_balance(),
 				'total_returnable_units' => $total_units,
 				'closed_units' => $closed_units,
-			),
+			), $return_meta),
 		));
 	}
 

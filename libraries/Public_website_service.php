@@ -272,10 +272,13 @@ class Public_website_service {
 		if (!$this->ci->db->table_exists('courses')) {
 			return $out;
 		}
+		// Active courses whose campus_ids CSV includes this campus (same as slider/news).
+		if ($this->ci->db->field_exists('status', 'courses')) {
+			$this->ci->db->where('status', 1);
+		}
 		$rows = $this->ci->db->order_by('course_name', 'ASC')->get('courses')->result_array();
-		$has_campus = $this->ci->db->field_exists('campus_ids', 'courses');
 		foreach ($rows as $row) {
-			if ($has_campus && !empty($row['campus_ids']) && !$this->campus_in_csv($campus_id, $row['campus_ids'])) {
+			if (!$this->campus_in_csv($campus_id, isset($row['campus_ids']) ? $row['campus_ids'] : '')) {
 				continue;
 			}
 			$out[] = array(

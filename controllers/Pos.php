@@ -30,26 +30,12 @@ class Pos extends CI_Controller {
 			return;
 		}
 
-		if ($user['role'] !== 'Admin') {
-			$acc = $this->db->get_where('access', array('user_id' => $user_id))->row_array();
-			if (!$acc || empty($acc['pos'])) {
-				$this->session->set_flashdata('error', 'No POS access. Ask admin to enable POS in Access.');
-				redirect('dashboard');
-				return;
-			}
+		$pos_url = pos_issue_sso_login_url($this->db, $user_id);
+		if (!$pos_url) {
+			$this->session->set_flashdata('error', 'Could not open new system.');
+			redirect('dashboard');
+			return;
 		}
-
-		$token = bin2hex(openssl_random_pseudo_bytes(32));
-		$expires = date('Y-m-d H:i:s', strtotime('+12 hours'));
-
-		$this->db->where('user_id', $user_id)->delete('pos_api_tokens');
-		$this->db->insert('pos_api_tokens', array(
-			'user_id' => $user_id,
-			'token' => $token,
-			'expires_at' => $expires,
-		));
-
-		$pos_url = 'https://pos.shahbazcollegeofpharmacy.edu.pk/login?sso=' . rawurlencode($token);
 		redirect($pos_url);
 	}
 

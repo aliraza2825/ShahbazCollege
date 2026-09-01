@@ -24,7 +24,7 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Unauthorized'), 401);
 		}
 		$this->_access();
-		if (!$this->_can_accounts()) {
+		if (!$this->_can_accounts() && !$this->_allows_own_petty_statement()) {
 			$this->_json(array('success' => false, 'message' => 'No accounts access'), 403);
 		}
 	}
@@ -114,6 +114,37 @@ class Accountsapi extends CI_Controller {
 			if (!empty($row[$k])) return true;
 		}
 		return false;
+	}
+
+	/** Header petty-cash link: allow statement API without full accounts module access. */
+	private function _allows_own_petty_statement()
+	{
+		if ($this->router->method !== 'petty_cash_statement') {
+			return false;
+		}
+		$id = (int)$this->input->get('id');
+		if ($id <= 0 || !$this->_table_exists('petty_cash_college_wise')) {
+			return false;
+		}
+		$row = $this->db->query(
+			'SELECT assign_to FROM petty_cash_college_wise WHERE id = ? LIMIT 1',
+			array($id)
+		)->row_array();
+		return $row && (int)$row['assign_to'] === (int)$this->current_user['user_id'];
+	}
+
+	private function _can_view_petty_cash_statement($id, $assign_to)
+	{
+		if ($this->_is_admin()) {
+			return true;
+		}
+		if ((int)$assign_to === (int)$this->current_user['user_id']) {
+			return true;
+		}
+		if (!$this->_section_allowed('campus_petty_cash')) {
+			return false;
+		}
+		return $this->_can_access_account_id($id, 'petty_cash_users');
 	}
 
 	/** True if user may open a section (Admin always). Pass access column or array of OR columns. */
@@ -442,7 +473,7 @@ class Accountsapi extends CI_Controller {
 		return $activity;
 	}
 
-	/** Live balance matching helper pettycash_statement() */
+	/** Live balance as of end of today — matches petty statement closing for to_date=today. */
 	private function _petty_live_balance($pettyId)
 	{
 		$petty = $this->db->query(
@@ -451,48 +482,7 @@ class Accountsapi extends CI_Controller {
 		)->row_array();
 		if (!$petty) return 0;
 
-		$fromDate = date('Y-m-d');
-		$open = (float)$petty['opening_balance'];
-		$assignTo = (int)$petty['assign_to'];
-		$givenDate = !empty($petty['given_date']) ? $petty['given_date'] : '1970-01-01';
-
-		$expenseRow = $this->db->query(
-			"SELECT SUM(amount) as amount FROM expenses
-			 WHERE add_by_id = ?
-			   AND actual_date >= ?
-			   AND actual_date < ?
-			   AND paid_type = 'cash'
-			   AND expense_id NOT IN (SELECT expense_id FROM bank_reconciliation_statement WHERE expense_id IS NOT NULL)",
-			array($assignTo, $givenDate, $fromDate . ' 23:59:59')
-		)->row_array();
-		$expenseAmt = (float)(isset($expenseRow['amount']) ? $expenseRow['amount'] : 0);
-
-		$revRow = $this->db->query(
-			"SELECT SUM(cash_reversal.amount) as amount
-			 FROM cash_reversal
-			 INNER JOIN expenses ON expenses.expense_id = cash_reversal.expense_id
-			 WHERE expenses.add_by_id = ?
-			   AND cash_reversal.created_at >= ?
-			   AND cash_reversal.created_at < ?",
-			array($assignTo, $givenDate, $fromDate . ' 23:59:59')
-		)->row_array();
-		$revAmt = (float)(isset($revRow['amount']) ? $revRow['amount'] : 0);
-
-		$hist = $this->db->query(
-			"SELECT debit_credit, amount_given as amount
-			 FROM petty_cash_history
-			 WHERE transaction_pettycash_account = ?
-			   AND created_at <= ?",
-			array((int)$pettyId, $fromDate . ' 23:59:59')
-		)->result_array();
-		$debit = 0;
-		$credit = 0;
-		foreach ($hist as $tran) {
-			if ($tran['debit_credit'] === 'C') $credit += (float)$tran['amount'];
-			else $debit += (float)$tran['amount'];
-		}
-
-		return ($open + $debit + $revAmt) - $credit - $expenseAmt;
+		return round($this->_petty_cash_balance_as_of($petty, date('Y-m-d')), 2);
 	}
 
 	/** True when assign_to already has a different active petty cash float. */
@@ -569,6 +559,66 @@ class Accountsapi extends CI_Controller {
 		$reason = isset($tran['reason']) ? trim((string)$tran['reason']) : '';
 		if ($reason !== '') {
 			$text .= ' - ' . $reason;
+		}
+
+		return $text;
+	}
+
+	/** Legacy cashaccount_statement.php detail text for transactions_history rows. */
+	private function _cash_transaction_detail($tran)
+	{
+		$text = '';
+		$dc = isset($tran['debit_credit']) ? $tran['debit_credit'] : '';
+		$reason = isset($tran['reason']) ? trim((string)$tran['reason']) : '';
+
+		if ($dc === 'C' && !empty($tran['to_pettycash_id'])) {
+			$text = 'Sent to Petty cash account ';
+			$to = $this->db->query(
+				"SELECT users.first_name, users.last_name
+				 FROM petty_cash_college_wise
+				 INNER JOIN users ON users.user_id = petty_cash_college_wise.assign_to
+				 WHERE petty_cash_college_wise.id = ? LIMIT 1",
+				array((int)$tran['to_pettycash_id'])
+			)->row_array();
+			if ($to) {
+				$text .= trim($to['first_name'] . ' ' . $to['last_name']);
+			}
+			$text .= '  ' . $reason;
+		} elseif ($dc === 'C' && !empty($tran['to_account_id'])) {
+			$text = 'Sent to main account ';
+			$acc = $this->db->query(
+				'SELECT account_title, account_name FROM accounts WHERE id = ? LIMIT 1',
+				array((int)$tran['to_account_id'])
+			)->row_array();
+			if ($acc) {
+				$text .= trim($acc['account_title'] . ' ' . $acc['account_name']);
+			}
+			$text .= '  ' . $reason;
+		} elseif ($dc === 'D' && !empty($tran['from_pettycash_id'])) {
+			$text = 'Receive from Petty cash account ';
+			$from = $this->db->query(
+				"SELECT users.first_name, users.last_name
+				 FROM petty_cash_college_wise
+				 INNER JOIN users ON users.user_id = petty_cash_college_wise.assign_to
+				 WHERE petty_cash_college_wise.id = ? LIMIT 1",
+				array((int)$tran['from_pettycash_id'])
+			)->row_array();
+			if ($from) {
+				$text .= trim($from['first_name'] . ' ' . $from['last_name']);
+			}
+			$text .= '  ' . $reason;
+		} elseif ($dc === 'D' && !empty($tran['from_account_id'])) {
+			$text = 'Receive from main account ';
+			$acc = $this->db->query(
+				'SELECT account_title, account_name FROM accounts WHERE id = ? LIMIT 1',
+				array((int)$tran['from_account_id'])
+			)->row_array();
+			if ($acc) {
+				$text .= trim($acc['account_title'] . ' ' . $acc['account_name']);
+			}
+			$text .= '  ' . $reason;
+		} else {
+			return $reason;
 		}
 
 		return $text;
@@ -752,6 +802,8 @@ class Accountsapi extends CI_Controller {
 		$verified_today = 0;
 		$unverified_today = 0;
 		$open_amount = 0.0;
+		$partial_amount = 0.0;
+		$verified_today_amount = 0.0;
 		$closed_amount = 0.0;
 		$can_close_count = 0;
 		$campus_closings = array();
@@ -775,6 +827,7 @@ class Accountsapi extends CI_Controller {
 				$closed_amount += $amt;
 				if ($status_label === 'PARTIALLY_CLOSED') {
 					$partial_count++;
+					$partial_amount += $amt;
 					if (count($attention_partial) < $limit) {
 						$attention_partial[] = array(
 							'campus_id' => $campus_id,
@@ -791,6 +844,7 @@ class Accountsapi extends CI_Controller {
 				}
 				if ($accounts_status === 'Verified') {
 					$verified_today++;
+					$verified_today_amount += $amt;
 				} else {
 					$unverified_today++;
 				}
@@ -1057,10 +1111,14 @@ class Accountsapi extends CI_Controller {
 					'petty_active_count' => $petty_active,
 					'open_closings_count' => $open_count,
 					'open_closings_amount' => $open_amount,
+					'partial_closings_count' => $partial_count,
+					'partial_closings_amount' => $partial_amount,
 					'closed_today_count' => $closed_count + $partial_count,
 					'closed_today_amount' => $closed_amount,
 					'pending_verify_count' => $pending_verify_count,
 					'pending_verify_amount' => $pending_verify_amount,
+					'verified_today_count' => $verified_today,
+					'verified_today_amount' => $verified_today_amount,
 					'loans_pending_count' => $loans_pending,
 					'untagged_bank_count' => $untagged_bank,
 					'untagged_paypro_count' => $untagged_paypro,
@@ -1078,6 +1136,12 @@ class Accountsapi extends CI_Controller {
 					'untagged_bank' => $untagged_bank,
 					'untagged_paypro' => $untagged_paypro,
 					'low_petty' => count($low_petty),
+				),
+				'amounts' => array(
+					'open' => $open_amount,
+					'partial' => $partial_amount,
+					'pending_verify' => $pending_verify_amount,
+					'verified_today' => $verified_today_amount,
 				),
 				'campus_closings' => $campus_closings,
 				'cash_accounts' => $cash_accounts,
@@ -1375,6 +1439,7 @@ class Accountsapi extends CI_Controller {
 			$tran['running_balance'] = $balance;
 			$tran['debit'] = $tran['debit_credit'] === 'D' ? $amt : 0;
 			$tran['credit'] = $tran['debit_credit'] === 'C' ? $amt : 0;
+			$tran['detail'] = $this->_cash_transaction_detail($tran);
 			$out[] = $tran;
 		}
 
@@ -1845,7 +1910,6 @@ class Accountsapi extends CI_Controller {
 
 	public function petty_cash_statement()
 	{
-		$this->_assert_section('campus_petty_cash');
 		$id = (int)$this->input->get('id');
 		$from_date = $this->input->get('from_date');
 		$to_date = $this->input->get('to_date');
@@ -1855,16 +1919,16 @@ class Accountsapi extends CI_Controller {
 		if (!$from_date) $from_date = date('Y-m-01');
 		if (!$to_date) $to_date = date('Y-m-d');
 
-		if (!$this->_is_admin() && !$this->_can_access_account_id($id, 'petty_cash_users')) {
-			$this->_json(array('success' => false, 'message' => 'No access to this petty cash'), 403);
-		}
-
 		$check = $this->db->query(
 			'SELECT * FROM petty_cash_college_wise WHERE id = ? LIMIT 1',
 			array($id)
 		)->row_array();
 		if (!$check) {
 			$this->_json(array('success' => false, 'message' => 'Petty cash not found'), 404);
+		}
+
+		if (!$this->_can_view_petty_cash_statement($id, (int)$check['assign_to'])) {
+			$this->_json(array('success' => false, 'message' => 'No access to this petty cash'), 403);
 		}
 
 		$assignTo = (int)$check['assign_to'];
@@ -2051,6 +2115,14 @@ class Accountsapi extends CI_Controller {
 		))->row_array();
 	}
 
+	private function _pos_sales_active_sql()
+	{
+		if ($this->_field_exists('products', 'return_status')) {
+			return ' AND (return_status = 0 OR return_status IS NULL)';
+		}
+		return '';
+	}
+
 	private function _pos_sales_sum($campus_id, $sold_date, $only_unclosed = true)
 	{
 		if (!$this->_table_exists('products') || !$this->_field_exists('products', 'sold_amount')) {
@@ -2058,6 +2130,7 @@ class Accountsapi extends CI_Controller {
 		}
 		$sql = "SELECT COALESCE(SUM(sold_amount),0) AS total FROM products
 				WHERE sold = 1 AND campus_id = ? AND sold_date = ?";
+		$sql .= $this->_pos_sales_active_sql();
 		$params = array((int)$campus_id, $sold_date);
 		if ($only_unclosed && $this->_field_exists('products', 'closing_id')) {
 			$sql .= " AND (closing_id IS NULL OR closing_id = '' OR closing_id = '0')";
@@ -2084,6 +2157,7 @@ class Accountsapi extends CI_Controller {
 			$sql .= " LEFT JOIN users ON users.user_id = products.sold_by";
 		}
 		$sql .= " WHERE products.sold = 1 AND products.campus_id = ? AND products.sold_date = ?";
+		$sql .= str_replace('return_status', 'products.return_status', $this->_pos_sales_active_sql());
 		$params = array((int)$campus_id, $sold_date);
 		if ($only_unclosed && $this->_field_exists('products', 'closing_id')) {
 			$sql .= " AND (products.closing_id IS NULL OR products.closing_id = '' OR products.closing_id = '0')";
@@ -2111,8 +2185,9 @@ class Accountsapi extends CI_Controller {
 		if ($this->_table_exists('users') && $this->_field_exists('products', 'sold_by')) {
 			$sql .= " LEFT JOIN users ON users.user_id = products.sold_by";
 		}
-		$sql .= " WHERE products.sold = 1 AND products.campus_id = ? AND products.closing_id = ?
-				 ORDER BY products.invoice_no DESC";
+		$sql .= " WHERE products.sold = 1 AND products.campus_id = ? AND products.closing_id = ?";
+		$sql .= str_replace('return_status', 'products.return_status', $this->_pos_sales_active_sql());
+		$sql .= " ORDER BY products.invoice_no DESC";
 		return $this->db->query($sql, array((int)$campus_id, $campus_closing_id))->result_array();
 	}
 
@@ -2778,6 +2853,12 @@ class Accountsapi extends CI_Controller {
 			$this->db->where('sold', 1);
 			$this->db->where('campus_id', $campus_id);
 			$this->db->where_in('sold_date', $pos_dates);
+			if ($this->_field_exists('products', 'return_status')) {
+				$this->db->group_start();
+				$this->db->where('return_status', 0);
+				$this->db->or_where('return_status IS NULL', null, false);
+				$this->db->group_end();
+			}
 			$this->db->group_start();
 			$this->db->where('closing_id IS NULL', null, false);
 			$this->db->or_where('closing_id', '');
@@ -5843,14 +5924,69 @@ class Accountsapi extends CI_Controller {
 		}
 		$rows = array();
 		foreach ($this->_profit_share_campus_ids($campus_id) as $cid) {
-			if (function_exists('gettotalExpense')) {
-				try {
-					$part = gettotalExpense($cid, $from, $to);
-					if (is_array($part)) $rows = array_merge($rows, $part);
-				} catch (Exception $e) { /* skip */ }
+			$part = $this->_profit_total_expense_rows((int)$cid, $from, $to);
+			if (is_array($part) && count($part)) {
+				$rows = array_merge($rows, $part);
 			}
 		}
 		$this->_json(array('success' => true, 'rows' => $rows, 'from' => $from, 'to' => $to));
+	}
+
+	/**
+	 * Approved expenses for profit total drill-down (excludes special categories).
+	 */
+	private function _profit_total_expense_rows($campus_id, $from, $to)
+	{
+		if (!$this->_table_exists('expenses')) return array();
+
+		$special_ids = array();
+		if ($this->_table_exists('campus_partners')) {
+			$partner = $this->db->get_where('campus_partners', array('campus_id' => $campus_id))->row_array();
+			if ($partner && !empty($partner['special_expense_ids'])) {
+				$decoded = json_decode($partner['special_expense_ids'], true);
+				if (is_array($decoded)) {
+					$special_ids = array_map('intval', $decoded);
+				}
+			}
+		}
+
+		$this->db->select(
+			'expenses.*, campuses.campus_name, expense_category.name AS category_name, expense_category.name AS name',
+			false
+		);
+		$this->db->from('expenses');
+		$this->db->join('campuses', 'campuses.campus_id = expenses.campus_id', 'inner');
+		$this->db->join(
+			'expense_category',
+			'expense_category.expense_category_id = expenses.expense_category_id',
+			'left'
+		);
+		$this->db->where('expenses.campus_id', (int)$campus_id);
+		$this->db->where('expenses.actual_date >=', $from);
+		$this->db->where('expenses.actual_date <=', $to);
+		$this->db->where('expenses.approved_status', '1');
+		if (!empty($special_ids)) {
+			$this->db->where_not_in('expenses.expense_category_id', $special_ids);
+		}
+		$this->db->order_by('expenses.actual_date', 'DESC');
+		$this->db->order_by('expenses.expense_id', 'DESC');
+		$rows = $this->db->get()->result_array();
+		foreach ($rows as &$r) {
+			$this->_enrich_profit_expense_row($r);
+		}
+		unset($r);
+		return $rows;
+	}
+
+	private function _enrich_profit_expense_row(array &$r)
+	{
+		if (empty($r['category_name']) && !empty($r['name'])) {
+			$r['category_name'] = $r['name'];
+		} elseif (empty($r['name']) && !empty($r['category_name'])) {
+			$r['name'] = $r['category_name'];
+		}
+		$img = isset($r['image']) ? $r['image'] : '';
+		$r['image_url'] = $img ? $this->_upload_url($img) : null;
 	}
 
 	/**
@@ -5874,6 +6010,10 @@ class Accountsapi extends CI_Controller {
 			$rows = $this->account->getExpenses($from, $to, $campus_id);
 			if (!is_array($rows)) $rows = array();
 		}
+		foreach ($rows as &$r) {
+			$this->_enrich_profit_expense_row($r);
+		}
+		unset($r);
 		$this->_json(array('success' => true, 'rows' => $rows, 'from' => $from, 'to' => $to));
 	}
 
@@ -6001,8 +6141,7 @@ class Accountsapi extends CI_Controller {
 		$total = 0.0;
 		foreach ($rows as &$r) {
 			$total += (float)$r['amount'];
-			$img = isset($r['image']) ? $r['image'] : '';
-			$r['image_url'] = $img ? $this->_upload_url($img) : null;
+			$this->_enrich_profit_expense_row($r);
 		}
 		unset($r);
 		$this->_json(array(

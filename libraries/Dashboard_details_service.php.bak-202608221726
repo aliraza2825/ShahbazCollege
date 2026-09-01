@@ -463,121 +463,6 @@ class Dashboard_details_service {
         return array('success' => true, 'message' => 'Expense cleared');
     }
 
-    private function _fee_update_display_value($key, $value)
-    {
-        if ($key === 'paid') {
-            return !empty($value) ? 'Paid' : 'Unpaid';
-        }
-        if ($key === 'college_fee') {
-            return !empty($value) ? 'College Fee' : 'Bank Fee';
-        }
-        if ($key === 'scan_challan') {
-            return $value !== '' && $value !== null ? (string) $value : '—';
-        }
-        if ($value === null || $value === '') {
-            return '—';
-        }
-        return (string) $value;
-    }
-
-    private function _fee_update_changes($request, $original)
-    {
-        $fields = array(
-            array('key' => 'amount', 'label' => 'Fee amount'),
-            array('key' => 'actual_amount', 'label' => 'Paid amount'),
-            array('key' => 'remaining_installment_amount', 'label' => 'Previous installment'),
-            array('key' => 'extra_amount', 'label' => 'Fine amount'),
-            array('key' => 'dead_line', 'label' => 'Deadline'),
-            array('key' => 'paid_date', 'label' => 'Paid date'),
-            array('key' => 'paid', 'label' => 'Status'),
-            array('key' => 'college_fee', 'label' => 'Fee type'),
-            array('key' => 'scan_challan', 'label' => 'Challan scan'),
-        );
-        $changes = array();
-        foreach ($fields as $field) {
-            $key = $field['key'];
-            $requested = isset($request[$key]) ? $request[$key] : '';
-            $current = isset($original[$key]) ? $original[$key] : '';
-            $req_display = $this->_fee_update_display_value($key, $requested);
-            $cur_display = $this->_fee_update_display_value($key, $current);
-            $changed = (string) $requested !== (string) $current;
-            if ($changed) {
-                $changes[] = array(
-                    'field' => $field['label'],
-                    'key' => $key,
-                    'requested' => $req_display,
-                    'current' => $cur_display,
-                );
-            }
-        }
-        if (!empty($request['del'])) {
-            $changes[] = array(
-                'field' => 'Action',
-                'key' => 'del',
-                'requested' => 'Delete payment',
-                'current' => 'Keep payment',
-            );
-        }
-        return $changes;
-    }
-
-    private function _fee_update_row($r)
-    {
-        $original = function_exists('getOriginalPayemntDetails') ? getOriginalPayemntDetails($r['id']) : array();
-        $orig = count($original) ? $original[0] : array();
-        $party = '';
-        if (!empty($r['first_name'])) {
-            $party = trim($r['first_name'].' '.$r['last_name']).(isset($r['roll_no']) ? ' ('.$r['roll_no'].')' : '');
-        } elseif (!empty($r['name'])) {
-            $party = $r['name'].(isset($r['contract_name']) ? ' — '.$r['contract_name'] : '');
-        }
-
-        $upload_base = rtrim(base_url(), '/').'/uploads/';
-        $scan = isset($r['scan_challan']) ? $r['scan_challan'] : '';
-        $orig_scan = isset($orig['scan_challan']) ? $orig['scan_challan'] : '';
-
-        return array(
-            'request_id' => (int) $r['id'],
-            'payment_id' => (int) $r['id'],
-            'student_id' => isset($r['student_id']) ? (int) $r['student_id'] : 0,
-            'update_date' => isset($r['update_date']) ? $r['update_date'] : '',
-            'challan_no' => isset($r['challan_no']) ? $r['challan_no'] : '',
-            'amount' => isset($r['amount']) ? $r['amount'] : '',
-            'actual_amount' => isset($r['actual_amount']) ? $r['actual_amount'] : '',
-            'remaining_installment_amount' => isset($r['remaining_installment_amount']) ? $r['remaining_installment_amount'] : '',
-            'extra_amount' => isset($r['extra_amount']) ? $r['extra_amount'] : '',
-            'paid' => !empty($r['paid']),
-            'dead_line' => isset($r['dead_line']) ? $r['dead_line'] : '',
-            'paid_date' => isset($r['paid_date']) ? $r['paid_date'] : '',
-            'college_fee' => !empty($r['college_fee']),
-            'del' => !empty($r['del']),
-            'party_label' => $party,
-            'campus_name' => isset($r['campus_name']) ? $r['campus_name'] : '',
-            'reason' => isset($r['reason']) ? $r['reason'] : '',
-            'system_comment' => !empty($r['del']) ? 'Delete Payment' : (isset($r['system_comment']) ? $r['system_comment'] : ''),
-            'scan_challan' => $scan,
-            'scan_challan_url' => $scan !== '' ? $upload_base.$scan : '',
-            'add_by' => isset($r['add_by']) ? $r['add_by'] : '',
-            'last_edit' => isset($r['last_edit']) ? $r['last_edit'] : '',
-            'requested_by' => isset($r['last_edit']) && $r['last_edit'] !== ''
-                ? $r['last_edit']
-                : (isset($r['add_by']) ? $r['add_by'] : ''),
-            'changes' => $this->_fee_update_changes($r, $orig),
-            'original' => array(
-                'amount' => isset($orig['amount']) ? $orig['amount'] : '',
-                'actual_amount' => isset($orig['actual_amount']) ? $orig['actual_amount'] : '',
-                'remaining_installment_amount' => isset($orig['remaining_installment_amount']) ? $orig['remaining_installment_amount'] : '',
-                'extra_amount' => isset($orig['extra_amount']) ? $orig['extra_amount'] : '',
-                'paid' => !empty($orig['paid']),
-                'dead_line' => isset($orig['dead_line']) ? $orig['dead_line'] : '',
-                'paid_date' => isset($orig['paid_date']) ? $orig['paid_date'] : '',
-                'college_fee' => !empty($orig['college_fee']),
-                'scan_challan' => $orig_scan,
-                'scan_challan_url' => $orig_scan !== '' ? $upload_base.$orig_scan : '',
-            ),
-        );
-    }
-
     public function update_fee_requests($user, $campus_id = null, $kind = 'student')
     {
         $this->_boot($user);
@@ -585,9 +470,6 @@ class Dashboard_details_service {
         if ($kind === 'contractor') {
             $rows = $this->ci->dashboards->getContractsFeeRequest($cid);
         } else {
-            // Resolve campus scope BEFORE building the list query — get_where() resets CI QB.
-            $campus_scope = $this->_campus_scope_for_user($user);
-
             $this->ci->db->select('update_payment_requests.*, students.first_name, students.last_name, students.roll_no, campuses.campus_name');
             $this->ci->db->from('update_payment_requests');
             $this->ci->db->join('students', 'students.student_id=update_payment_requests.student_id', 'left');
@@ -596,11 +478,11 @@ class Dashboard_details_service {
             if ($cid) {
                 $this->ci->db->where('campuses.campus_id', $cid);
             }
-            if ($campus_scope !== null) {
-                if (!count($campus_scope)) {
-                    $this->ci->db->where('1 = 0', null, false);
-                } else {
-                    $this->ci->db->where_in('campuses.campus_id', $campus_scope);
+            if ($user['role'] !== 'Admin') {
+                $acc = $this->ci->db->get_where('access', array('user_id' => $user['user_id']))->row_array();
+                $campuses = ($acc && !empty($acc['campus_ids'])) ? explode(',', $acc['campus_ids']) : array();
+                if (count($campuses)) {
+                    $this->ci->db->where_in('campuses.campus_id', $campuses);
                 }
             }
             $this->ci->db->where('update_payment_requests.ok_by_admin', '0');
@@ -608,7 +490,42 @@ class Dashboard_details_service {
         }
         $out = array();
         foreach ($rows as $r) {
-            $out[] = $this->_fee_update_row($r);
+            $original = function_exists('getOriginalPayemntDetails') ? getOriginalPayemntDetails($r['id']) : array();
+            $orig = count($original) ? $original[0] : array();
+            $party = '';
+            if (!empty($r['first_name'])) {
+                $party = trim($r['first_name'].' '.$r['last_name']).(isset($r['roll_no']) ? ' ('.$r['roll_no'].')' : '');
+            } elseif (!empty($r['name'])) {
+                $party = $r['name'].(isset($r['contract_name']) ? ' — '.$r['contract_name'] : '');
+            }
+            $out[] = array(
+                'request_id' => (int) $r['id'],
+                'payment_id' => (int) $r['id'],
+                'update_date' => isset($r['update_date']) ? $r['update_date'] : '',
+                'challan_no' => isset($r['challan_no']) ? $r['challan_no'] : '',
+                'amount' => isset($r['amount']) ? $r['amount'] : '',
+                'actual_amount' => isset($r['actual_amount']) ? $r['actual_amount'] : '',
+                'paid' => !empty($r['paid']),
+                'dead_line' => isset($r['dead_line']) ? $r['dead_line'] : '',
+                'paid_date' => isset($r['paid_date']) ? $r['paid_date'] : '',
+                'party_label' => $party,
+                'campus_name' => isset($r['campus_name']) ? $r['campus_name'] : '',
+                'reason' => isset($r['reason']) ? $r['reason'] : '',
+                'system_comment' => isset($r['system_comment']) ? $r['system_comment'] : '',
+                'scan_challan' => isset($r['scan_challan']) ? $r['scan_challan'] : '',
+                'add_by' => isset($r['add_by']) ? $r['add_by'] : '',
+                'last_edit' => isset($r['last_edit']) ? $r['last_edit'] : '',
+                'requested_by' => isset($r['last_edit']) && $r['last_edit'] !== ''
+                    ? $r['last_edit']
+                    : (isset($r['add_by']) ? $r['add_by'] : ''),
+                'original' => array(
+                    'amount' => isset($orig['amount']) ? $orig['amount'] : '',
+                    'actual_amount' => isset($orig['actual_amount']) ? $orig['actual_amount'] : '',
+                    'paid' => !empty($orig['paid']),
+                    'dead_line' => isset($orig['dead_line']) ? $orig['dead_line'] : '',
+                    'paid_date' => isset($orig['paid_date']) ? $orig['paid_date'] : '',
+                ),
+            );
         }
         return array('kind' => $kind, 'rows' => $out);
     }
@@ -620,29 +537,8 @@ class Dashboard_details_service {
         if (!count($update_request)) {
             return array('success' => false, 'message' => 'Request not found');
         }
-
-        // Fee approval must not change the student profile audit fields (legacy parity).
-        $student_id = isset($update_request[0]['student_id']) ? (int) $update_request[0]['student_id'] : 0;
-        $student_snapshot = null;
-        if ($student_id > 0) {
-            $student_snapshot = $this->ci->db->get_where('students', array('student_id' => $student_id))->row_array();
-        }
-
         $this->ci->dashboards->updatePayment($update_request);
-        $this->ci->db->set('ok_by_admin', '1');
-        $this->ci->db->set('clear_by', $this->_name($user));
-        $this->ci->db->where(array('id' => (int) $request_id, 'ok_by_admin' => 0));
-        $this->ci->db->update('update_payment_requests');
-
-        if ($student_snapshot) {
-            $restore = array('last_edit' => $student_snapshot['last_edit']);
-            if (array_key_exists('add_by', $student_snapshot)) {
-                $restore['add_by'] = $student_snapshot['add_by'];
-            }
-            $this->ci->db->where('student_id', $student_id);
-            $this->ci->db->update('students', $restore);
-        }
-
+        $this->ci->dashboards->updateClearPayment($update_request[0]['id']);
         return array('success' => true, 'message' => 'Fee update approved');
     }
 

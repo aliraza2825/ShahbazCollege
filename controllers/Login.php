@@ -12,6 +12,12 @@ class Login extends CI_Controller {
 	public function index()
     {
 	    if(isset($_SESSION['logged_in'])){
+			$sso = pos_issue_sso_login_url($this->db, $this->session->userdata('user_id'), true);
+			if ($sso) {
+				pos_clear_legacy_session_for_spa_handoff($this);
+				redirect($sso);
+				return;
+			}
 			redirect('dashboard');
 		}
 		else{
@@ -107,7 +113,65 @@ class Login extends CI_Controller {
 		$this->db->set('url',$url);
 		$this->db->insert('locations');
 		
+		$sso = pos_issue_sso_login_url($this->db, $user_id, true);
+		if ($sso) {
+			// Drop CI session so bookmarked legacy URLs cannot reuse this login.
+			pos_clear_legacy_session_for_spa_handoff($this);
+			echo $sso;
+			return;
+		}
 		echo site_url().'/dashboard';
+	}
+
+	/** Cross-portal handoff: Admin → old dashboard session; staff → new portal SSO. */
+	public function pos_entry()
+	{
+		$token = $this->input->get('sso');
+		if (!$token) {
+			redirect('login');
+			return;
+		}
+
+		$row = $this->db->get_where('pos_api_tokens', array('token' => $token))->row_array();
+		if (!$row || strtotime($row['expires_at']) < time()) {
+			$this->session->set_flashdata('error', 'Login link expired. Please sign in again.');
+			redirect('login');
+			return;
+		}
+
+		$user = $this->db->get_where('users', array(
+			'user_id' => $row['user_id'],
+			'status' => '1',
+		))->row_array();
+		if (!$user) {
+			redirect('login');
+			return;
+		}
+
+		$this->db->where('token', $token)->delete('pos_api_tokens');
+
+		if (pos_user_can_use_spa($user)) {
+			$sso = pos_issue_sso_login_url($this->db, $user['user_id']);
+			if ($sso) {
+				redirect($sso);
+				return;
+			}
+			redirect('login');
+			return;
+		}
+
+		$this->session->set_userdata(array(
+			'user_id' => $user['user_id'],
+			'name' => trim($user['first_name'] . ' ' . $user['last_name']),
+			'username' => $user['username'],
+			'designation_id' => $user['designation_id'],
+			'role' => $user['role'],
+			'cnic' => $user['cnic'],
+			'type' => $user['type'],
+			'user_campus_id' => $user['campus_id'],
+			'logged_in' => TRUE,
+		));
+		redirect('dashboard');
 	}
 
 	/** Redirect /reset-password on CI host → modern POS SPA (fixes emailed links). */

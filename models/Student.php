@@ -186,43 +186,50 @@ class Student extends CI_Model {
 	
 	public function payment_paid($id)
 	{
+		// Paid merges only: one row per merged_challan (legacy intent: PAID = 1).
 		$this->db->select('*');
 		$this->db->from('payments');
 		$this->db->where('student_id', $id);
-		$this->db->where('merged_challan IS NOT NULL and actual_amount > 0');
-		$this->db->group_by("CASE WHEN merged_challan IS NOT NULL AND PAID = 1 THEN merged_challan else '' end",false);
+		$this->db->where('merged_challan IS NOT NULL');
+		$this->db->where('actual_amount >', 0);
+		$this->db->where('paid', 1);
+		$this->db->group_by('merged_challan');
 		$query = $this->db->get()->result_array();
 
-        $this->db->select('*');
-        $this->db->from('payments');
-        $this->db->where('student_id', $id);
-        $this->db->where('merged_challan is null');
+		// Singles + unpaid (never collapse unpaid, even if merged_challan was set) + zero-amount merge satellites.
+		$this->db->select('*');
+		$this->db->from('payments');
+		$this->db->where('student_id', $id);
+		$this->db->where('merged_challan is null');
 		$this->db->or_where('student_id = "'.$id.'" and merged_challan IS not NULL and actual_amount = 0');
-        $query2 = $this->db->get()->result_array();
-		
-		$arr=array_merge($query,$query2);
+		$this->db->or_where('student_id = "'.$id.'" and merged_challan IS not NULL and paid = 0');
+		$query2 = $this->db->get()->result_array();
 
-        function paid_status($a, $b)
-        {
-            
-            return $b['paid']-$a['paid'];
-        }
+		$arr = array_merge($query, $query2);
 
-        usort($arr, 'paid_status');
-        
-        function date_compare($a, $b)
-        {
-            $t1 = strtotime($a['dead_line']);
-            $t2 = strtotime($b['dead_line']);
-            return $t1 - $t2;
-        }
+		// Deduplicate by payment id (unpaid+merge can match both or_where branches).
+		$by_id = array();
+		foreach ($arr as $row) {
+			$by_id[$row['id']] = $row;
+		}
+		$arr = array_values($by_id);
+
+		function paid_status($a, $b)
+		{
+			return $b['paid'] - $a['paid'];
+		}
+
+		usort($arr, 'paid_status');
+
+		function date_compare($a, $b)
+		{
+			$t1 = strtotime($a['dead_line']);
+			$t2 = strtotime($b['dead_line']);
+			return $t1 - $t2;
+		}
 
 		usort($arr, 'date_compare');
-        // echo '<pre>';
-        // print_r($arr);
-        // echo '</pre>';
-        // exit;
-        return $arr;
+		return $arr;
 	}
 	
 	public function deleted_payment_paid($id)

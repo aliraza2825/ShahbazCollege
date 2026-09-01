@@ -31,7 +31,6 @@ class Reports_service {
                 $this->ci->db->query("ALTER TABLE `$table` ADD `reports_discount_report` TINYINT(1) NULL DEFAULT NULL");
             }
         }
-        $this->ci->db->reset_query();
     }
 
     private function _access_row($user)
@@ -601,42 +600,6 @@ class Reports_service {
         );
     }
 
-    private function _struckoff_scope_filters($user)
-    {
-        if ($this->_is_admin($user)) {
-            return array('allowed' => true);
-        }
-
-        $acc = $this->_access_row($user);
-        $class_ids = array();
-        if ($acc && !empty($acc['class_ids'])) {
-            foreach (explode(',', $acc['class_ids']) as $id) {
-                $id = trim($id);
-                if ($id !== '') {
-                    $class_ids[] = $id;
-                }
-            }
-        }
-        if (count($class_ids)) {
-            return array('allowed' => true, 'class_ids' => $class_ids);
-        }
-
-        $campus_ids = array();
-        if ($acc && !empty($acc['campus_ids'])) {
-            foreach (explode(',', $acc['campus_ids']) as $id) {
-                $id = (int) trim($id);
-                if ($id > 0) {
-                    $campus_ids[] = $id;
-                }
-            }
-        }
-        if (count($campus_ids)) {
-            return array('allowed' => true, 'campus_ids' => $campus_ids);
-        }
-
-        return array('allowed' => false);
-    }
-
     /**
      * Legacy Students::struckofstudentview parity for React reports drill-down.
      */
@@ -647,24 +610,19 @@ class Reports_service {
             return array('success' => false, 'message' => 'Invalid student');
         }
 
-        $scope = $this->_struckoff_scope_filters($user);
-        if (empty($scope['allowed'])) {
-            return array('success' => false, 'message' => 'Access denied');
-        }
-
-        $this->ci->db->reset_query();
         $this->ci->db->select('students.*, campuses.campus_name, courses.course_name, classes.name as class_name, machine_data.machine_id');
         $this->ci->db->from('students');
-        $this->ci->db->join('classes', 'classes.class_id=students.class_id', 'left');
-        $this->ci->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id AND machine_data.type="student"', 'left');
+        $this->ci->db->join('classes', 'classes.class_id=students.class_id', 'inner');
+        $this->ci->db->join('machine_data', 'machine_data.teacher_student_id=students.student_id', 'inner');
         $this->ci->db->join('campuses', 'classes.campus_id=campuses.campus_id', 'left');
         $this->ci->db->join('courses', 'courses.course_id=students.course_id', 'left');
         $this->ci->db->where('students.student_id', $student_id);
 
-        if (!empty($scope['class_ids'])) {
-            $this->ci->db->where_in('students.class_id', $scope['class_ids']);
-        } elseif (!empty($scope['campus_ids'])) {
-            $this->ci->db->where_in('campuses.campus_id', $scope['campus_ids']);
+        if (!$this->_is_admin($user)) {
+            $class_ids = $this->_class_ids($user);
+            if (count($class_ids)) {
+                $this->ci->db->where_in('classes.class_id', $class_ids);
+            }
         }
 
         $student = $this->ci->db->get()->row_array();

@@ -74,6 +74,23 @@ class Inventoryapi extends CI_Controller {
 		return $name !== '' ? $name : 'POS';
 	}
 
+	/** Extend product_history with destination + batch for move audit. */
+	private function _ensure_product_history_move_columns()
+	{
+		if (!$this->db->table_exists('product_history')) return;
+		$cols = array(
+			'to_campus_id' => "ALTER TABLE `product_history` ADD `to_campus_id` INT(11) NULL DEFAULT NULL",
+			'to_room_id' => "ALTER TABLE `product_history` ADD `to_room_id` INT(11) NULL DEFAULT NULL",
+			'to_subroom_id' => "ALTER TABLE `product_history` ADD `to_subroom_id` INT(11) NULL DEFAULT NULL",
+			'move_batch_id' => "ALTER TABLE `product_history` ADD `move_batch_id` VARCHAR(64) NULL DEFAULT NULL",
+		);
+		foreach ($cols as $col => $sql) {
+			if (!$this->db->field_exists($col, 'product_history')) {
+				$this->db->query($sql);
+			}
+		}
+	}
+
 	/**
 	 * Ensure who/when columns exist for journey approval steps.
 	 * payment_aggrements + purchase_requests audit fields.
@@ -720,6 +737,275 @@ class Inventoryapi extends CI_Controller {
 		$this->_json(array('success' => true, 'updated' => $this->db->affected_rows(), 'bulk' => $bulk ? 1 : 0));
 	}
 
+	/** Match room_id / subroom_id with 0 and NULL equivalent (legacy inventory). */
+	private function _location_room_sub_where($alias, $room_id, $subroom_id)
+	{
+		$a = $alias !== '' ? rtrim($alias, '.') . '.' : '';
+		$room_id = (int)$room_id;
+		$subroom_id = (int)$subroom_id;
+		if ($room_id > 0) {
+			$this->db->where($a . 'room_id', $room_id);
+		} else {
+			$this->db->group_start();
+			$this->db->where($a . 'room_id', 0);
+			$this->db->or_where($a . 'room_id IS NULL', null, false);
+			$this->db->group_end();
+		}
+		if ($subroom_id > 0) {
+			$this->db->where($a . 'subroom_id', $subroom_id);
+		} else {
+			$this->db->group_start();
+			$this->db->where($a . 'subroom_id', 0);
+			$this->db->or_where($a . 'subroom_id IS NULL', null, false);
+			$this->db->group_end();
+		}
+	}
+
+	/**
+	 * Move history for a stock card: includes sibling units at the same location
+	 * and from-location snapshots for the product name (bulk/cross-campus moves).
+	 * Returns grouped rows with quantity, from/to campus-room-subroom.
+	 */
+	private function _move_history_rows($seed_product_id)
+	{
+		$this->_ensure_product_history_move_columns();
+		$id = (int)$seed_product_id;
+		$seed = $this->db->get_where('products', array('product_id' => $id))->row_array();
+		if (!$seed) return null;
+
+		$unit_ids = array($id);
+		$this->db->select('product_id');
+		$this->db->from('products');
+		$this->db->where('product_name_id', (int)$seed['product_name_id']);
+		$this->db->where('campus_id', (int)$seed['campus_id']);
+		$this->_location_room_sub_where('products', (int)$seed['room_id'], (int)$seed['subroom_id']);
+		foreach ($this->db->get()->result_array() as $row) {
+			$unit_ids[] = (int)$row['product_id'];
+		}
+		$unit_ids = array_values(array_unique(array_filter($unit_ids)));
+
+		$this->db->select(
+			'product_history.*,
+			fc.campus_name AS from_campus_name,
+			fr.room_name AS from_room_name,
+			fs.subroom_name AS from_subroom_name,
+			tc.campus_name AS to_campus_name,
+			tr.room_name AS to_room_name,
+			ts.subroom_name AS to_subroom_name',
+			false
+		);
+		$this->db->from('product_history');
+		$this->db->join('campuses fc', 'fc.campus_id = product_history.campus_id', 'left');
+		$this->db->join('rooms fr', 'fr.room_id = product_history.room_id', 'left');
+		$this->db->join('subrooms fs', 'fs.subroom_id = product_history.subroom_id', 'left');
+		if ($this->db->field_exists('to_campus_id', 'product_history')) {
+			$this->db->join('campuses tc', 'tc.campus_id = product_history.to_campus_id', 'left');
+			$this->db->join('rooms tr', 'tr.room_id = product_history.to_room_id', 'left');
+			$this->db->join('subrooms ts', 'ts.subroom_id = product_history.to_subroom_id', 'left');
+		}
+		$this->db->group_start();
+		$this->db->where_in('product_history.product_id', $unit_ids);
+		$this->db->or_group_start();
+		$this->db->where('product_history.product_name_id', (int)$seed['product_name_id']);
+		$this->db->where('product_history.campus_id', (int)$seed['campus_id']);
+		$this->_location_room_sub_where('product_history', (int)$seed['room_id'], (int)$seed['subroom_id']);
+		$this->db->group_end();
+		$this->db->group_end();
+		$this->db->order_by('product_history.created_at', 'DESC');
+		$rows = $this->db->get()->result_array();
+
+		$rows = $this->_enrich_move_history_rows($rows);
+		return $this->_group_move_history_rows($rows);
+	}
+
+	/** Load id => name maps for campuses, rooms, subrooms. */
+	private function _inventory_location_name_maps()
+	{
+		$maps = array('campus' => array(), 'room' => array(), 'subroom' => array());
+		foreach ($this->db->get('campuses')->result_array() as $c) {
+			$maps['campus'][(int)$c['campus_id']] = $c['campus_name'];
+		}
+		foreach ($this->db->get('rooms')->result_array() as $r) {
+			$maps['room'][(int)$r['room_id']] = $r['room_name'];
+		}
+		foreach ($this->db->get('subrooms')->result_array() as $s) {
+			$maps['subroom'][(int)$s['subroom_id']] = $s['subroom_name'];
+		}
+		return $maps;
+	}
+
+	private function _location_name_from_maps($maps, $campus_id, $room_id, $subroom_id)
+	{
+		$campus_id = (int)$campus_id;
+		$room_id = (int)$room_id;
+		$subroom_id = (int)$subroom_id;
+		return array(
+			'campus_name' => isset($maps['campus'][$campus_id]) ? $maps['campus'][$campus_id] : '',
+			'room_name' => $room_id > 0 && isset($maps['room'][$room_id]) ? $maps['room'][$room_id] : '',
+			'subroom_name' => $subroom_id > 0 && isset($maps['subroom'][$subroom_id]) ? $maps['subroom'][$subroom_id] : '',
+		);
+	}
+
+	/**
+	 * Legacy rows only stored from-location. Infer to-location by chaining per product_id,
+	 * then persist to_* columns when missing.
+	 */
+	private function _enrich_move_history_rows($rows)
+	{
+		if (!count($rows)) return $rows;
+		$this->_ensure_product_history_move_columns();
+
+		$product_ids = array();
+		foreach ($rows as $r) {
+			if (!empty($r['product_id'])) $product_ids[] = (int)$r['product_id'];
+		}
+		$product_ids = array_values(array_unique($product_ids));
+		if (!count($product_ids)) return $rows;
+
+		$chains = array();
+		$this->db->from('product_history');
+		$this->db->where_in('product_id', $product_ids);
+		$this->db->order_by('created_at', 'ASC');
+		if ($this->db->field_exists('product_history_id', 'product_history')) {
+			$this->db->order_by('product_history_id', 'ASC');
+		} elseif ($this->db->field_exists('id', 'product_history')) {
+			$this->db->order_by('id', 'ASC');
+		}
+		foreach ($this->db->get()->result_array() as $ev) {
+			$pid = (int)$ev['product_id'];
+			if (!isset($chains[$pid])) $chains[$pid] = array();
+			$chains[$pid][] = $ev;
+		}
+
+		$products = array();
+		$this->db->select('product_id, campus_id, room_id, subroom_id');
+		$this->db->where_in('product_id', $product_ids);
+		foreach ($this->db->get('products')->result_array() as $p) {
+			$products[(int)$p['product_id']] = $p;
+		}
+
+		$maps = $this->_inventory_location_name_maps();
+		$pk_col = $this->db->field_exists('product_history_id', 'product_history') ? 'product_history_id' : 'id';
+		$updates = array();
+
+		foreach ($rows as &$row) {
+			$pid = (int)$row['product_id'];
+			$has_to = !empty($row['to_campus_id']);
+			if (!$has_to && isset($chains[$pid])) {
+				$to_campus = 0;
+				$to_room = 0;
+				$to_sub = 0;
+				$events = $chains[$pid];
+				$idx = -1;
+				$row_pk = isset($row[$pk_col]) ? (int)$row[$pk_col] : 0;
+				foreach ($events as $i => $ev) {
+					$ev_pk = isset($ev[$pk_col]) ? (int)$ev[$pk_col] : 0;
+					if ($row_pk > 0 && $ev_pk === $row_pk) {
+						$idx = $i;
+						break;
+					}
+					if ($row_pk <= 0 && isset($row['created_at']) && $row['created_at'] === $ev['created_at']
+						&& (int)$row['campus_id'] === (int)$ev['campus_id']) {
+						$idx = $i;
+						break;
+					}
+				}
+				if ($idx >= 0) {
+					if ($idx + 1 < count($events)) {
+						$next = $events[$idx + 1];
+						$to_campus = (int)$next['campus_id'];
+						$to_room = (int)$next['room_id'];
+						$to_sub = (int)$next['subroom_id'];
+					} elseif (isset($products[$pid])) {
+						$to_campus = (int)$products[$pid]['campus_id'];
+						$to_room = (int)$products[$pid]['room_id'];
+						$to_sub = (int)$products[$pid]['subroom_id'];
+					}
+				}
+				if ($to_campus > 0) {
+					$row['to_campus_id'] = $to_campus;
+					$row['to_room_id'] = $to_room;
+					$row['to_subroom_id'] = $to_sub;
+					if ($row_pk > 0) {
+						$updates[$row_pk] = array(
+							'to_campus_id' => $to_campus,
+							'to_room_id' => $to_room,
+							'to_subroom_id' => $to_sub,
+						);
+					}
+				}
+			}
+			if (!empty($row['to_campus_id'])) {
+				$names = $this->_location_name_from_maps(
+					$maps,
+					$row['to_campus_id'],
+					isset($row['to_room_id']) ? $row['to_room_id'] : 0,
+					isset($row['to_subroom_id']) ? $row['to_subroom_id'] : 0
+				);
+				$row['to_campus_name'] = $names['campus_name'];
+				$row['to_room_name'] = $names['room_name'];
+				$row['to_subroom_name'] = $names['subroom_name'];
+			}
+		}
+		unset($row);
+
+		if (count($updates) && $this->db->field_exists('to_campus_id', 'product_history')) {
+			foreach ($updates as $pk => $upd) {
+				$this->db->where($pk_col, (int)$pk)->update('product_history', $upd);
+			}
+		}
+
+		return $rows;
+	}
+
+	/** Build grouping key for move history rows (batch id or legacy snapshot). */
+	private function _move_history_group_key($r)
+	{
+		$batch = isset($r['move_batch_id']) ? trim((string)$r['move_batch_id']) : '';
+		if ($batch !== '') return 'batch_' . $batch;
+		return 'grp_' . md5(
+			(isset($r['created_at']) ? $r['created_at'] : '') . '|'
+			. (int)(isset($r['campus_id']) ? $r['campus_id'] : 0) . '|'
+			. (int)(isset($r['room_id']) ? $r['room_id'] : 0) . '|'
+			. (int)(isset($r['subroom_id']) ? $r['subroom_id'] : 0) . '|'
+			. (int)(isset($r['to_campus_id']) ? $r['to_campus_id'] : 0) . '|'
+			. (int)(isset($r['to_room_id']) ? $r['to_room_id'] : 0) . '|'
+			. (int)(isset($r['to_subroom_id']) ? $r['to_subroom_id'] : 0) . '|'
+			. (isset($r['added_by']) ? $r['added_by'] : '')
+		);
+	}
+
+	/** Collapse per-unit history into batch rows with quantity. */
+	private function _group_move_history_rows($rows)
+	{
+		$groups = array();
+		foreach ($rows as $r) {
+			$batch = $this->_move_history_group_key($r);
+			if (!isset($groups[$batch])) {
+				$groups[$batch] = array(
+					'quantity' => 0,
+					'from_campus_name' => isset($r['from_campus_name']) ? $r['from_campus_name'] : (isset($r['campus_name']) ? $r['campus_name'] : ''),
+					'from_room_name' => isset($r['from_room_name']) ? $r['from_room_name'] : (isset($r['room_name']) ? $r['room_name'] : ''),
+					'from_subroom_name' => isset($r['from_subroom_name']) ? $r['from_subroom_name'] : (isset($r['subroom_name']) ? $r['subroom_name'] : ''),
+					'to_campus_name' => isset($r['to_campus_name']) ? $r['to_campus_name'] : '',
+					'to_room_name' => isset($r['to_room_name']) ? $r['to_room_name'] : '',
+					'to_subroom_name' => isset($r['to_subroom_name']) ? $r['to_subroom_name'] : '',
+					'added_by' => isset($r['added_by']) ? $r['added_by'] : '',
+					'created_at' => isset($r['created_at']) ? $r['created_at'] : '',
+					'campus_name' => isset($r['from_campus_name']) ? $r['from_campus_name'] : (isset($r['campus_name']) ? $r['campus_name'] : ''),
+					'room_name' => isset($r['from_room_name']) ? $r['from_room_name'] : (isset($r['room_name']) ? $r['room_name'] : ''),
+					'subroom_name' => isset($r['from_subroom_name']) ? $r['from_subroom_name'] : (isset($r['subroom_name']) ? $r['subroom_name'] : ''),
+				);
+			}
+			$groups[$batch]['quantity']++;
+		}
+		$out = array_values($groups);
+		usort($out, function ($a, $b) {
+			return strcmp((string)$b['created_at'], (string)$a['created_at']);
+		});
+		return $out;
+	}
+
 	/** Move history for a unit (legacy getProductHistory) */
 	public function move_history()
 	{
@@ -728,14 +1014,9 @@ class Inventoryapi extends CI_Controller {
 		if (!$this->db->table_exists('product_history')) {
 			$this->_json(array('success' => true, 'data' => array()));
 		}
-		$this->db->select('product_history.*, campuses.campus_name, rooms.room_name, subrooms.subroom_name');
-		$this->db->from('product_history');
-		$this->db->join('campuses', 'campuses.campus_id = product_history.campus_id', 'left');
-		$this->db->join('rooms', 'rooms.room_id = product_history.room_id', 'left');
-		$this->db->join('subrooms', 'subrooms.subroom_id = product_history.subroom_id', 'left');
-		$this->db->where('product_history.product_id', $id);
-		$this->db->order_by('product_history.created_at', 'ASC');
-		$this->_json(array('success' => true, 'data' => $this->db->get()->result_array()));
+		$rows = $this->_move_history_rows($id);
+		if ($rows === null) $this->_json(array('success' => false, 'message' => 'Product not found'), 404);
+		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
 	/** Recent consume history for same product name + campus (legacy getProductConsumeHistory) */
@@ -2928,9 +3209,11 @@ class Inventoryapi extends CI_Controller {
 	 */
 	public function move_stock()
 	{
+		$this->_ensure_product_history_move_columns();
 		$body = $this->_body();
 		$qty = max(1, (int)(isset($body['quantity']) ? $body['quantity'] : 1));
 		$seed_id = (int)(isset($body['product_id']) ? $body['product_id'] : 0);
+		$move_batch_id = 'mv_' . date('YmdHis') . '_' . mt_rand(1000, 9999);
 
 		// Products modal: { product_id, campus_id, room_id, subroom_id?, quantity }
 		if ($seed_id > 0) {
@@ -2952,7 +3235,8 @@ class Inventoryapi extends CI_Controller {
 				$to_campus,
 				$to_room,
 				$to_sub,
-				$qty
+				$qty,
+				$move_batch_id
 			);
 			if ($moved < 1) $this->_json(array('success' => false, 'message' => 'No stock to move'), 409);
 			$this->_json(array('success' => true, 'moved' => $moved));
@@ -2981,18 +3265,20 @@ class Inventoryapi extends CI_Controller {
 			$to_campus,
 			$to_room,
 			$to_sub,
-			$qty
+			$qty,
+			$move_batch_id
 		);
 		if ($moved < 1) $this->_json(array('success' => false, 'message' => 'No stock to move'), 409);
 		$this->_json(array('success' => true, 'moved' => $moved));
 	}
 
 	/**
-	 * Move N available units; write legacy product_history (from-location) before each update.
+	 * Move N available units; write product_history (from + to location) before each update.
 	 * Pass exact from_room / from_sub from the seed row when moving a card/group.
 	 */
-	private function _move_units_from_location($product_name_id, $from_campus, $from_room, $from_sub, $to_campus, $to_room, $to_sub, $qty)
+	private function _move_units_from_location($product_name_id, $from_campus, $from_room, $from_sub, $to_campus, $to_room, $to_sub, $qty, $move_batch_id = '')
 	{
+		$this->_ensure_product_history_move_columns();
 		$moved = 0;
 		for ($i = 0; $i < $qty; $i++) {
 			$this->db->from('products');
@@ -3003,36 +3289,33 @@ class Inventoryapi extends CI_Controller {
 				'consume' => 0,
 				'status' => 1,
 			));
-			// Exact location match (0 / NULL treated the same, like legacy)
-			if ($from_room > 0) {
-				$this->db->where('room_id', (int)$from_room);
-			} else {
-				$this->db->group_start();
-				$this->db->where('room_id', 0);
-				$this->db->or_where('room_id IS NULL', null, false);
-				$this->db->group_end();
-			}
-			if ($from_sub > 0) {
-				$this->db->where('subroom_id', (int)$from_sub);
-			} else {
-				$this->db->group_start();
-				$this->db->where('subroom_id', 0);
-				$this->db->or_where('subroom_id IS NULL', null, false);
-				$this->db->group_end();
-			}
+			$this->_location_room_sub_where('', (int)$from_room, (int)$from_sub);
+			$this->db->order_by('product_id', 'ASC');
 			$this->db->limit(1);
 			$unit = $this->db->get()->row_array();
 			if (!$unit) break;
 
 			if ($this->db->table_exists('product_history')) {
-				$this->db->insert('product_history', array(
+				$hist = array(
 					'product_id' => $unit['product_id'],
 					'campus_id' => $unit['campus_id'],
 					'room_id' => $unit['room_id'] ? $unit['room_id'] : 0,
 					'subroom_id' => $unit['subroom_id'] ? $unit['subroom_id'] : 0,
 					'product_name_id' => $unit['product_name_id'],
 					'added_by' => $this->_actor_name(),
-				));
+				);
+				if ($this->db->field_exists('created_at', 'product_history')) {
+					$hist['created_at'] = date('Y-m-d H:i:s');
+				}
+				if ($this->db->field_exists('to_campus_id', 'product_history')) {
+					$hist['to_campus_id'] = (int)$to_campus;
+					$hist['to_room_id'] = $to_room ? (int)$to_room : 0;
+					$hist['to_subroom_id'] = $to_sub ? (int)$to_sub : 0;
+				}
+				if ($move_batch_id !== '' && $this->db->field_exists('move_batch_id', 'product_history')) {
+					$hist['move_batch_id'] = $move_batch_id;
+				}
+				$this->db->insert('product_history', $hist);
 			}
 			$this->db->where('product_id', $unit['product_id'])->update('products', array(
 				'campus_id' => (int)$to_campus,
@@ -3192,6 +3475,51 @@ class Inventoryapi extends CI_Controller {
 			));
 		}
 		$this->_json(array('success' => true));
+	}
+
+	private function _access_flag($key)
+	{
+		if ($this->_is_admin()) return true;
+		$row = $this->_access();
+		return $row && !empty($row[$key]);
+	}
+
+	/**
+	 * Inventory rail tab permissions — mirrors legacy sidebar.php inventory submenus.
+	 * GET inventoryapi/meta
+	 */
+	public function meta()
+	{
+		$admin = $this->_is_admin();
+		$flag = function ($key) use ($admin) {
+			return $admin || $this->_access_flag($key);
+		};
+		$permissions = array(
+			'is_admin' => $admin,
+			'inventory' => $admin || $this->_can_inventory(),
+			'board' => $admin || $this->_can_inventory(),
+			'products' => $flag('add_product') || $flag('all_product'),
+			'names' => $flag('manage_product_names') || $flag('manage_document_names'),
+			'rooms' => $flag('add_room') || $flag('all_room') || $flag('add_subroom') || $flag('all_subroom'),
+			'vendors' => $flag('add_vendor') || $flag('manage_vendor'),
+			'requests' => $flag('add_purchase_request') || $flag('all_purchase_request'),
+			'quotes' => $flag('add_qoutation') || $flag('approve_qoutation') || $flag('all_purchase_request'),
+			'orders' => $flag('purchase_orders'),
+			'payments' => $flag('purchase_orders'),
+			'gate' => $flag('grn_gate_approval'),
+			'grn' => $flag('grn_approval') || $flag('manage_grn'),
+			'issue' => $flag('add_product_issue_request') || $flag('all_product_issue_request'),
+			'gin' => $flag('manage_gin'),
+			'move' => $flag('all_product') || $flag('manage_grn'),
+			'returns' => $flag('product_return_request') || $flag('approve_product_return_request') || $flag('grn_approval'),
+			'qr' => $flag('generate_qrs'),
+			// Inventory expense/category rules live under Admin Rules in legacy.
+			'rules' => $admin,
+		);
+		$this->_json(array(
+			'success' => true,
+			'permissions' => $permissions,
+		));
 	}
 
 	public function campuses()

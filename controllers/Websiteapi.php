@@ -29,6 +29,20 @@ class Websiteapi extends CI_Controller {
 		}
 	}
 
+	private function _require_flag($flag)
+	{
+		if (!$this->service->can_perm($this->current_user, $flag)) {
+			$this->_json(array('success' => false, 'message' => 'Permission denied'), 403);
+		}
+	}
+
+	private function _require_admin_website()
+	{
+		if (!$this->current_user || empty($this->current_user['role']) || $this->current_user['role'] !== 'Admin') {
+			$this->_json(array('success' => false, 'message' => 'Admin only'), 403);
+		}
+	}
+
 	private function _cors()
 	{
 		$origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '*';
@@ -98,6 +112,7 @@ class Websiteapi extends CI_Controller {
 
 	public function how_to_use()
 	{
+		$this->_require_admin_website();
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->how_to_use_add($this->current_user);
 			if (empty($result['success'])) {
@@ -110,6 +125,7 @@ class Websiteapi extends CI_Controller {
 
 	public function how_to_use_delete($id = null)
 	{
+		$this->_require_admin_website();
 		$result = $this->service->how_to_use_delete($id);
 		if (empty($result['success'])) {
 			$this->_fail($result);
@@ -119,6 +135,7 @@ class Websiteapi extends CI_Controller {
 
 	public function downloads()
 	{
+		$this->_require_admin_website();
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->download_add($this->_body());
 			if (empty($result['success'])) {
@@ -131,6 +148,7 @@ class Websiteapi extends CI_Controller {
 
 	public function download_delete($id = null)
 	{
+		$this->_require_admin_website();
 		$result = $this->service->download_delete($id, $this->current_user);
 		if (empty($result['success'])) {
 			$this->_fail($result);
@@ -140,7 +158,12 @@ class Websiteapi extends CI_Controller {
 
 	public function events()
 	{
+		// Event Images staff need events list for the add form dropdown.
+		if (!$this->service->can_perm($this->current_user, 'event_images')) {
+			$this->_require_admin_website();
+		}
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+			$this->_require_admin_website();
 			$result = $this->service->event_save($this->_body());
 			if (empty($result['success'])) {
 				$this->_fail($result);
@@ -152,6 +175,7 @@ class Websiteapi extends CI_Controller {
 
 	public function event($id = null)
 	{
+		$this->_require_admin_website();
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->event_save($this->_body(), (int) $id);
 			if (empty($result['success'])) {
@@ -168,6 +192,7 @@ class Websiteapi extends CI_Controller {
 
 	public function event_delete($id = null)
 	{
+		$this->_require_admin_website();
 		$result = $this->service->event_delete($id, $this->current_user);
 		if (empty($result['success'])) {
 			$this->_fail($result);
@@ -177,6 +202,7 @@ class Websiteapi extends CI_Controller {
 
 	public function event_images()
 	{
+		$this->_require_flag('event_images');
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->event_image_add($this->_body());
 			if (empty($result['success'])) {
@@ -189,6 +215,7 @@ class Websiteapi extends CI_Controller {
 
 	public function event_image_delete($id = null)
 	{
+		$this->_require_flag('event_images');
 		$result = $this->service->event_image_delete($id);
 		if (empty($result['success'])) {
 			$this->_fail($result);
@@ -198,6 +225,7 @@ class Websiteapi extends CI_Controller {
 
 	public function slider_images()
 	{
+		$this->_require_flag('slider_images');
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->slider_save($this->_body());
 			if (empty($result['success'])) {
@@ -210,6 +238,7 @@ class Websiteapi extends CI_Controller {
 
 	public function slider($id = null)
 	{
+		$this->_require_flag('slider_images');
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->slider_save($this->_body(), (int) $id);
 			if (empty($result['success'])) {
@@ -226,6 +255,7 @@ class Websiteapi extends CI_Controller {
 
 	public function slider_delete($id = null)
 	{
+		$this->_require_flag('slider_images');
 		$result = $this->service->slider_delete($id, $this->current_user);
 		if (empty($result['success'])) {
 			$this->_fail($result);
@@ -235,6 +265,7 @@ class Websiteapi extends CI_Controller {
 
 	public function website_news()
 	{
+		$this->_require_flag('news_updates');
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->website_news_add($this->_body());
 			if (empty($result['success'])) {
@@ -247,6 +278,7 @@ class Websiteapi extends CI_Controller {
 
 	public function website_news_delete($id = null)
 	{
+		$this->_require_flag('news_updates');
 		$result = $this->service->website_news_delete($id, $this->current_user);
 		if (empty($result['success'])) {
 			$this->_fail($result);
@@ -256,6 +288,7 @@ class Websiteapi extends CI_Controller {
 
 	public function faqs()
 	{
+		$this->_require_admin_website();
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->faq_add($this->_body());
 			if (empty($result['success'])) {
@@ -268,6 +301,7 @@ class Websiteapi extends CI_Controller {
 
 	public function videos()
 	{
+		$this->_require_admin_website();
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->video_add($this->_body());
 			if (empty($result['success'])) {
@@ -280,6 +314,7 @@ class Websiteapi extends CI_Controller {
 
 	public function video_delete($id = null)
 	{
+		$this->_require_admin_website();
 		$result = $this->service->video_delete($id);
 		if (empty($result['success'])) {
 			$this->_fail($result);
@@ -289,6 +324,7 @@ class Websiteapi extends CI_Controller {
 
 	public function home_page()
 	{
+		$this->_require_admin_website();
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->home_page_save($this->_body());
 			if (empty($result['success'])) {
@@ -301,6 +337,7 @@ class Websiteapi extends CI_Controller {
 
 	public function home_page_item($id = null)
 	{
+		$this->_require_admin_website();
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->home_page_save($this->_body(), (int) $id);
 			if (empty($result['success'])) {
@@ -317,6 +354,7 @@ class Websiteapi extends CI_Controller {
 
 	public function zoom()
 	{
+		$this->_require_admin_website();
 		if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 			$result = $this->service->zoom_update($this->_body());
 			if (empty($result['success'])) {

@@ -2,6 +2,10 @@
 	if($this->session->has_userdata('logged_in')==''){
 		redirect (base_url());
 		}
+	// Non-Admin staff: never render legacy UI (bookmarked deep links).
+	if (function_exists('pos_force_non_admin_to_spa')) {
+		pos_force_non_admin_to_spa($this);
+	}
 ?>
 <!DOCTYPE html>
 <!--[if IE 8]> <html lang="en" class="ie8 no-js"> <![endif]-->

@@ -23,11 +23,27 @@ class Documents_service {
             || !empty($acc['download_documents']);
     }
 
-    public function meta()
+    public function permissions($user)
+    {
+        $is_admin = $user && isset($user['role']) && $user['role'] === 'Admin';
+        $acc = $is_admin ? array() : ($this->ci->db->get_where('access', array('user_id' => $user['user_id']))->row_array() ?: array());
+        return array(
+            'is_admin' => $is_admin,
+            'documents_access' => $is_admin || !empty($acc['documents_access']),
+            'documents_diploma' => $is_admin || !empty($acc['documents_diploma']),
+            'documents_students' => $is_admin || !empty($acc['documents_students']),
+            'how_to_use' => $is_admin,
+            'print_view' => $is_admin,
+            'receipt_pads' => $is_admin,
+        );
+    }
+
+    public function meta($user = null)
     {
         $campuses = $this->ci->db->order_by('campus_name', 'ASC')->get('campuses')->result_array();
         $courses = $this->ci->db->order_by('course_name', 'ASC')->get('courses')->result_array();
         return array(
+            'permissions' => $this->permissions($user),
             'campuses' => $campuses,
             'courses' => $courses,
         );
@@ -130,7 +146,78 @@ class Documents_service {
         if ($campus_id) {
             $this->ci->db->where('campuses.campus_id', (int) $campus_id);
         }
-        return $this->ci->db->get()->result_array();
+        $rows = $this->ci->db->get()->result_array();
+        foreach ($rows as &$row) {
+            $fee = $this->_diploma_fee_status(isset($row['student_id']) ? (int) $row['student_id'] : 0);
+            $row['docs_cleared'] = !empty($fee['docs_cleared']);
+            $row['remaining_fee_amount'] = $fee['remaining_fee_amount'];
+            $row['has_unpaid'] = !empty($fee['has_unpaid']);
+            $img = isset($row['result_image']) ? trim((string) $row['result_image']) : '';
+            $row['result_image_url'] = $img !== ''
+                ? (rtrim(base_url(), '/') . '/' . ltrim($img, '/'))
+                : null;
+        }
+        unset($row);
+        return $rows;
+    }
+
+    /**
+     * Legacy diploma_documents.php fee gate:
+     * remaining college fee < 1 AND no unpaid payment rows → all docs;
+     * otherwise only Affidavit is allowed (student still listed).
+     */
+    private function _diploma_fee_status($student_id)
+    {
+        $student_id = (int) $student_id;
+        $empty = array(
+            'docs_cleared' => false,
+            'remaining_fee_amount' => 0.0,
+            'has_unpaid' => true,
+        );
+        if ($student_id <= 0) {
+            return $empty;
+        }
+
+        $student = $this->ci->db
+            ->select('total_fee')
+            ->get_where('students', array('student_id' => $student_id))
+            ->row_array();
+        $student_fee = $student ? (float) $student['total_fee'] : 0.0;
+
+        $created_row = $this->ci->db->query(
+            "SELECT SUM(amount) as amount FROM payments
+             WHERE student_id = ?
+               AND payment_plan != 'consulation fee'
+               AND payment_comment = 'College Fee'",
+            array($student_id)
+        )->row_array();
+        $created = isset($created_row['amount']) ? (float) $created_row['amount'] : 0.0;
+
+        $reversal_row = $this->ci->db->query(
+            "SELECT SUM(prs.reversal_amount) as reversal_amount
+             FROM payments_reversal_requests AS prs
+             INNER JOIN payments AS p ON prs.payment_id = p.id
+             WHERE prs.student_id = ?
+               AND prs.done = 1
+               AND p.payment_comment = 'College Fee'",
+            array($student_id)
+        )->row_array();
+        $reversal = isset($reversal_row['reversal_amount']) ? (float) $reversal_row['reversal_amount'] : 0.0;
+        // Legacy always subtracts (SUM row always exists); null reversal → 0
+        $discount = $created - $reversal;
+        $remaining = $student_fee - $discount;
+
+        $unpaid = $this->ci->db
+            ->get_where('payments', array('student_id' => $student_id, 'paid' => 0))
+            ->result_array();
+        $has_unpaid = count($unpaid) > 0;
+        $cleared = ($remaining < 1 && !$has_unpaid);
+
+        return array(
+            'docs_cleared' => $cleared,
+            'remaining_fee_amount' => round($remaining, 2),
+            'has_unpaid' => $has_unpaid,
+        );
     }
 
     public function students_search($campus_id = null, $course_id = null, $class_id = null)

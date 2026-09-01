@@ -170,6 +170,18 @@ class Dashboardapi extends CI_Controller {
 		$this->_json(array('success' => true, 'data' => $this->service->home_reminders($this->current_user)));
 	}
 
+	public function complete_home_reminder()
+	{
+		$body = json_decode(file_get_contents('php://input'), true);
+		if (!is_array($body)) {
+			$body = $this->input->post();
+		}
+		$reminder_id = isset($body['reminder_id']) ? (int) $body['reminder_id'] : 0;
+		$result = $this->service->complete_home_reminder($this->current_user, $reminder_id);
+		$code = !empty($result['success']) ? 200 : 400;
+		$this->_json($result, $code);
+	}
+
 	public function home_lectures()
 	{
 		$this->_json(array('success' => true, 'data' => $this->service->home_lectures($this->current_user)));

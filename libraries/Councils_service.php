@@ -91,10 +91,8 @@ class Councils_service {
 
     public function report_index($user, $status = null)
     {
-        $this->ci->db->select(
-            'exam_sequence.id, exam_sequence.course_id, exam_sequence.first_year, exam_sequence.first_year_type, exam_sequence.class, exam_sequence.status, courses.course_name'
-        );
-        $rows = $this->_exam_sequences_query($user, $status)->get()->result_array();
+        $select = 'exam_sequence.id, exam_sequence.course_id, exam_sequence.first_year, exam_sequence.first_year_type, exam_sequence.class, exam_sequence.status, courses.course_name';
+        $rows = $this->_exam_sequences_query($user, $status, $select)->get()->result_array();
 
         $out = array();
         foreach ($rows as $row) {
@@ -504,11 +502,14 @@ class Councils_service {
             : array();
     }
 
-    private function _exam_sequences_query($user, $status = null)
+    private function _exam_sequences_query($user, $status = null, $select = null)
     {
         $is_admin = $user && $user['role'] === 'Admin';
         $allowed_courses = $this->_report_allowed_courses($user);
 
+        if ($select !== null && $select !== '') {
+            $this->ci->db->select($select, false);
+        }
         $this->ci->db->from('exam_sequence');
         $this->ci->db->join('courses', 'courses.course_id = exam_sequence.course_id', 'inner');
         if ($status !== null && $status !== '') {
@@ -945,7 +946,9 @@ class Councils_service {
         if (!$user) {
             return array();
         }
-        return $this->ci->db->get_where('access', array('user_id' => $user['user_id']))->row_array() ?: array();
+        $row = $this->ci->db->get_where('access', array('user_id' => $user['user_id']))->row_array();
+        $this->ci->db->reset_query();
+        return $row ?: array();
     }
 
     private function _course_type_label($course_type)

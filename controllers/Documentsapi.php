@@ -88,7 +88,7 @@ class Documentsapi extends CI_Controller {
 
 	public function meta()
 	{
-		$this->_json(array('success' => true, 'data' => $this->service->meta()));
+		$this->_json(array('success' => true, 'data' => $this->service->meta($this->current_user)));
 	}
 
 	public function classes()

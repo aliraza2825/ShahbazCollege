@@ -108,18 +108,16 @@ class Hrapi extends CI_Controller {
 
 	private function _can_hr()
 	{
+		// Legacy always exposes Loans + My Attendence to every logged-in staff user.
+		// Section-level flags still gate the rest of the HR rail via meta().
+		return (bool) $this->current_user;
+	}
+
+	private function _access_flag($key)
+	{
 		if ($this->_is_admin()) return true;
 		$row = $this->_access_row();
-		if (!$row) return false;
-		$keys = array(
-			'hr_sidebar', 'attendence_sidebar', 'leave_approval', 'holidays_sidebar',
-			'department_sidebar', 'designation_sidebar', 'staff_type_sidebar', 'staff_sidebar',
-			'salary', 'define_allownces', 'payroll_statutory_rules', 'payroll_income_tax_rules',
-		);
-		foreach ($keys as $k) {
-			if (!empty($row[$k])) return true;
-		}
-		return false;
+		return $row && !empty($row[$key]);
 	}
 
 	private function _current_user_name()
@@ -141,30 +139,38 @@ class Hrapi extends CI_Controller {
 
 	public function meta()
 	{
+		$admin = $this->_is_admin();
+		// Map React HR rail keys → legacy `access` columns (sidebar.php staff branch).
 		$sections = array(
-			array('key' => 'locations', 'label' => 'Locations', 'enabled' => true),
-			array('key' => 'interviews', 'label' => 'HR', 'enabled' => true),
-			array('key' => 'attendance', 'label' => 'Attendence', 'enabled' => true),
-			array('key' => 'leaves', 'label' => 'Leaves', 'enabled' => true),
+			// Admin Human Resource only — staff sidebar has no Locations.
+			array('key' => 'locations', 'label' => 'Locations', 'enabled' => $admin),
+			array('key' => 'interviews', 'label' => 'HR', 'enabled' => $admin || $this->_access_flag('hr_sidebar')),
+			array('key' => 'attendance', 'label' => 'Attendence', 'enabled' => $admin || $this->_access_flag('attendence_sidebar')),
+			array('key' => 'leaves', 'label' => 'Leaves', 'enabled' => $admin || $this->_access_flag('leave_approval')),
+			// Always visible in legacy for every staff user.
 			array('key' => 'my_attendance', 'label' => 'My Attendence', 'enabled' => true),
-			array('key' => 'holidays', 'label' => 'Holidays', 'enabled' => true),
-			array('key' => 'staff', 'label' => 'Staff', 'enabled' => true),
-			array('key' => 'departments', 'label' => 'Departments', 'enabled' => true),
-			array('key' => 'designations', 'label' => 'Designations', 'enabled' => true),
+			array('key' => 'holidays', 'label' => 'Holidays', 'enabled' => $admin || $this->_access_flag('holidays_sidebar')),
+			array('key' => 'staff', 'label' => 'Staff', 'enabled' => $admin || $this->_access_flag('staff_sidebar')),
+			array('key' => 'departments', 'label' => 'Departments', 'enabled' => $admin || $this->_access_flag('department_sidebar')),
+			array('key' => 'designations', 'label' => 'Designations', 'enabled' => $admin || $this->_access_flag('designation_sidebar')),
+			array('key' => 'org_chart', 'label' => 'Org Chart', 'enabled' => $admin || $this->_access_flag('designation_sidebar')),
+			// Always visible in legacy for every staff user.
 			array('key' => 'loans', 'label' => 'Loans', 'enabled' => true),
-			array('key' => 'staff_type', 'label' => 'Staff Type', 'enabled' => true),
-			array('key' => 'staff_shifts', 'label' => 'Staff Shifts', 'enabled' => true),
-			array('key' => 'student_shifts', 'label' => 'Student Shifts', 'enabled' => true),
-			array('key' => 'allowances', 'label' => 'Allownces', 'enabled' => true),
-			array('key' => 'statutory', 'label' => 'Statutory Rules', 'enabled' => true),
-			array('key' => 'income_tax', 'label' => 'Income Tax', 'enabled' => true),
-			array('key' => 'salary', 'label' => 'Salary', 'enabled' => true),
+			array('key' => 'staff_type', 'label' => 'Staff Type', 'enabled' => $admin || $this->_access_flag('staff_type_sidebar')),
+			array('key' => 'staff_shifts', 'label' => 'Staff Shifts', 'enabled' => $admin || $this->_access_flag('staff_type_sidebar')),
+			array('key' => 'student_shifts', 'label' => 'Student Shifts', 'enabled' => $admin || $this->_access_flag('staff_type_sidebar')),
+			array('key' => 'allowances', 'label' => 'Allownces', 'enabled' => $admin || $this->_access_flag('define_allownces')),
+			array('key' => 'statutory', 'label' => 'Statutory Rules', 'enabled' => $admin || $this->_access_flag('payroll_statutory_rules')),
+			array('key' => 'income_tax', 'label' => 'Income Tax', 'enabled' => $admin || $this->_access_flag('payroll_income_tax_rules')),
+			array('key' => 'salary', 'label' => 'Salary', 'enabled' => $admin || $this->_access_flag('salary')),
 		);
 
 		$this->_json(array(
 			'success' => true,
 			'role' => isset($this->current_user['role']) ? $this->current_user['role'] : null,
 			'can_access' => true,
+			'is_admin' => $admin,
+			'can_approve_loans' => $admin || $this->_access_flag('loan_approval'),
 			'sections' => $sections,
 		));
 	}
@@ -708,8 +714,512 @@ class Hrapi extends CI_Controller {
 
 		if ($method === 'DELETE') {
 			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
+			$this->_ensure_designation_reporting_table();
+			$this->db->where('designation_id', $id)->delete('designation_reporting');
+			$this->db->where('reports_to_designation_id', $id)->delete('designation_reporting');
 			$this->db->where('designation_id', $id);
 			$this->db->delete('designations');
+			$this->_json(array('success' => true));
+		}
+
+		$this->_json(array('success' => false, 'message' => 'Method not allowed'), 405);
+	}
+
+	// ------------------------------------------------------------------
+	// Designation org chart (many-to-many reporting)
+	// ------------------------------------------------------------------
+
+	private function _ensure_designation_reporting_table()
+	{
+		if ($this->db->table_exists('designation_reporting')) return;
+		$this->db->query("CREATE TABLE `designation_reporting` (
+			`id` INT(11) NOT NULL AUTO_INCREMENT,
+			`designation_id` INT(11) NOT NULL,
+			`reports_to_designation_id` INT(11) NOT NULL,
+			PRIMARY KEY (`id`),
+			UNIQUE KEY `uniq_report` (`designation_id`, `reports_to_designation_id`),
+			KEY `designation_id` (`designation_id`),
+			KEY `reports_to_designation_id` (`reports_to_designation_id`)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+	}
+
+	private function _ensure_org_chart_settings_table()
+	{
+		if ($this->db->table_exists('org_chart_settings')) return;
+		$this->db->query("CREATE TABLE `org_chart_settings` (
+			`id` INT(11) NOT NULL AUTO_INCREMENT,
+			`head_designation_id` INT(11) NULL DEFAULT NULL,
+			`updated_at` DATETIME NULL,
+			PRIMARY KEY (`id`)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+		$this->db->insert('org_chart_settings', array(
+			'head_designation_id' => NULL,
+			'updated_at' => date('Y-m-d H:i:s'),
+		));
+	}
+
+	private function _org_chart_head_id()
+	{
+		$this->_ensure_org_chart_settings_table();
+		$row = $this->db->order_by('id', 'ASC')->limit(1)->get('org_chart_settings')->row_array();
+		if (!$row || empty($row['head_designation_id'])) return 0;
+		return (int)$row['head_designation_id'];
+	}
+
+	private function _set_org_chart_head_id($head_id)
+	{
+		$this->_ensure_org_chart_settings_table();
+		$head_id = (int)$head_id;
+		$row = $this->db->order_by('id', 'ASC')->limit(1)->get('org_chart_settings')->row_array();
+		$payload = array(
+			'head_designation_id' => $head_id > 0 ? $head_id : NULL,
+			'updated_at' => date('Y-m-d H:i:s'),
+		);
+		if ($row) {
+			$this->db->where('id', (int)$row['id'])->update('org_chart_settings', $payload);
+		} else {
+			$this->db->insert('org_chart_settings', $payload);
+		}
+	}
+
+	/** Load all reporting edges as list of [child => reports_to]. */
+	private function _designation_reporting_edges()
+	{
+		$this->_ensure_designation_reporting_table();
+		$rows = $this->db->get('designation_reporting')->result_array();
+		$edges = array();
+		foreach ($rows as $r) {
+			$edges[] = array(
+				'designation_id' => (int)$r['designation_id'],
+				'reports_to_designation_id' => (int)$r['reports_to_designation_id'],
+			);
+		}
+		return $edges;
+	}
+
+	/**
+	 * Would assigning $child → each of $parent_ids create a cycle?
+	 * Graph direction: child reports_to parent (edge child → parent for "boss walk").
+	 * Cycle if walking from parent can reach child.
+	 */
+	private function _designation_reporting_would_cycle($child_id, $parent_ids, $all_edges)
+	{
+		$child_id = (int)$child_id;
+		// Map: from_node => list of nodes it reports to (bosses)
+		$bosses = array();
+		foreach ($all_edges as $e) {
+			$from = (int)$e['designation_id'];
+			$to = (int)$e['reports_to_designation_id'];
+			if ($from === $child_id) continue; // replace-all: ignore old parents of this child
+			if (!isset($bosses[$from])) $bosses[$from] = array();
+			$bosses[$from][] = $to;
+		}
+		foreach ($parent_ids as $p) {
+			$p = (int)$p;
+			if ($p === $child_id) return true;
+			if (!isset($bosses[$child_id])) $bosses[$child_id] = array();
+			$bosses[$child_id][] = $p;
+		}
+
+		// Can we reach $child_id starting from any new parent by following reports_to?
+		foreach ($parent_ids as $start) {
+			$start = (int)$start;
+			$stack = array($start);
+			$seen = array();
+			while (count($stack)) {
+				$cur = array_pop($stack);
+				if ($cur === $child_id) return true;
+				if (isset($seen[$cur])) continue;
+				$seen[$cur] = true;
+				if (!empty($bosses[$cur])) {
+					foreach ($bosses[$cur] as $next) {
+						if (!isset($seen[$next])) $stack[] = $next;
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	public function designation_org_chart()
+	{
+		$this->_assert_designation_org_access();
+		$this->_ensure_designation_reporting_table();
+
+		$this->db->select('designations.*, departments.department_name');
+		$this->db->from('designations');
+		$this->db->join('departments', 'departments.department_id=designations.department_id', 'left');
+		$this->db->order_by('designations.designation_name', 'ASC');
+		$nodes = $this->db->get()->result_array();
+		$edges = $this->_designation_reporting_edges();
+
+		$has_parent = array();
+		$has_child = array();
+		foreach ($edges as $e) {
+			$has_parent[(int)$e['designation_id']] = true;
+			$has_child[(int)$e['reports_to_designation_id']] = true;
+		}
+
+		$roots = array();
+		$unlinked = array();
+		foreach ($nodes as $n) {
+			$id = (int)$n['designation_id'];
+			$is_root = empty($has_parent[$id]);
+			$is_unlinked = $is_root && empty($has_child[$id]);
+			if ($is_unlinked) {
+				$unlinked[] = $id;
+			} elseif ($is_root) {
+				$roots[] = $id;
+			}
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'nodes' => $nodes,
+				'edges' => $edges,
+				'roots' => $roots,
+				'unlinked' => $unlinked,
+				'head_id' => $this->_org_chart_head_id(),
+				'staff_by_designation' => $this->_staff_by_designation_map(),
+			),
+		));
+	}
+
+	/** Active staff grouped by designation_id (users.designation_id CSV). */
+	private function _staff_by_designation_map()
+	{
+		$this->db->select('users.user_id, users.first_name, users.last_name, users.designation_id, users.campus_id, campuses.campus_name');
+		$this->db->from('users');
+		$this->db->join('campuses', 'campuses.campus_id=users.campus_id', 'left');
+		$this->db->where('users.status', '1');
+		$this->db->order_by('users.first_name', 'ASC');
+		$this->db->order_by('users.last_name', 'ASC');
+		$rows = $this->db->get()->result_array();
+
+		$by = array();
+		foreach ($rows as $r) {
+			$name = trim((string)$r['first_name'] . ' ' . (string)$r['last_name']);
+			if ($name === '') $name = 'User #' . (int)$r['user_id'];
+			$entry = array(
+				'user_id' => (int)$r['user_id'],
+				'name' => $name,
+				'campus_id' => (int)$r['campus_id'],
+				'campus_name' => isset($r['campus_name']) ? (string)$r['campus_name'] : '',
+			);
+			foreach (explode(',', (string)$r['designation_id']) as $did) {
+				$did = (int)trim($did);
+				if ($did <= 0) continue;
+				if (!isset($by[$did])) $by[$did] = array();
+				$by[$did][] = $entry;
+			}
+		}
+		return $by;
+	}
+
+	private function _reachable_from_head($head_id, $edges)
+	{
+		$children_of = array();
+		foreach ($edges as $e) {
+			$boss = (int)$e['reports_to_designation_id'];
+			$child = (int)$e['designation_id'];
+			if (!isset($children_of[$boss])) $children_of[$boss] = array();
+			$children_of[$boss][] = $child;
+		}
+		$seen = array();
+		$head_id = (int)$head_id;
+		if ($head_id <= 0) return array();
+		$q = array($head_id);
+		$seen[$head_id] = true;
+		while (!empty($q)) {
+			$id = array_shift($q);
+			foreach (isset($children_of[$id]) ? $children_of[$id] : array() as $c) {
+				if (empty($seen[$c])) {
+					$seen[$c] = true;
+					$q[] = $c;
+				}
+			}
+		}
+		return array_keys($seen);
+	}
+
+	private function _designation_levels_from_head($head_id, $edges, $reachable)
+	{
+		$levels = array();
+		$head_id = (int)$head_id;
+		$reachable_set = array();
+		foreach ((array)$reachable as $id) $reachable_set[(int)$id] = true;
+		if ($head_id <= 0 || empty($reachable_set[$head_id])) return $levels;
+
+		$levels[$head_id] = 0;
+		$changed = true;
+		$guard = 0;
+		$max_pass = max(1, count($edges) + count($reachable_set));
+		while ($changed && $guard++ < $max_pass) {
+			$changed = false;
+			foreach ($edges as $e) {
+				$child = (int)$e['designation_id'];
+				$parent = (int)$e['reports_to_designation_id'];
+				if (empty($reachable_set[$child]) || empty($reachable_set[$parent])) continue;
+				if (!isset($levels[$parent])) continue;
+				$next = $levels[$parent] + 1;
+				if (!isset($levels[$child]) || $next > $levels[$child]) {
+					$levels[$child] = $next;
+					$changed = true;
+				}
+			}
+		}
+		return $levels;
+	}
+
+	private function _collect_ancestor_designations($des_id, $parents_of)
+	{
+		$seen = array();
+		$stack = array((int)$des_id);
+		while (!empty($stack)) {
+			$id = array_pop($stack);
+			if (isset($seen[$id])) continue;
+			$seen[$id] = true;
+			foreach (isset($parents_of[$id]) ? $parents_of[$id] : array() as $p) {
+				$p = (int)$p;
+				if (!isset($seen[$p])) $stack[] = $p;
+			}
+		}
+		return array_keys($seen);
+	}
+
+	/** Current user's reporting chart slice(s) — visual org flow, multiple designations supported. */
+	public function my_reporting_hierarchy()
+	{
+		if (!$this->_auth_user()) {
+			$this->_json(array('success' => false, 'message' => 'Unauthorized'), 401);
+		}
+
+		$this->_ensure_designation_reporting_table();
+		$this->_ensure_org_chart_settings_table();
+
+		$user_id = (int)$this->current_user['user_id'];
+		$user_name = $this->_current_user_name();
+		if ($user_name === '') $user_name = 'User #' . $user_id;
+
+		$user_row = $this->db->select('designation_id')->get_where('users', array('user_id' => $user_id))->row_array();
+		$my_des_ids = array();
+		foreach (explode(',', (string)($user_row ? $user_row['designation_id'] : '')) as $did) {
+			$did = (int)trim($did);
+			if ($did > 0) $my_des_ids[] = $did;
+		}
+		$my_des_ids = array_values(array_unique($my_des_ids));
+
+		$head_id = $this->_org_chart_head_id();
+		$edges = $this->_designation_reporting_edges();
+		$reachable = $this->_reachable_from_head($head_id, $edges);
+		$reachable_set = array();
+		foreach ($reachable as $id) $reachable_set[(int)$id] = true;
+		$staff_by_des = $this->_staff_by_designation_map();
+
+		$parents_of = array();
+		foreach ($edges as $e) {
+			$child = (int)$e['designation_id'];
+			$parent = (int)$e['reports_to_designation_id'];
+			if (empty($reachable_set[$child]) || empty($reachable_set[$parent])) continue;
+			if (!isset($parents_of[$child])) $parents_of[$child] = array();
+			if (!in_array($parent, $parents_of[$child], true)) $parents_of[$child][] = $parent;
+		}
+
+		$des_rows = $this->db->select('designations.*, departments.department_name')
+			->from('designations')
+			->join('departments', 'departments.department_id=designations.department_id', 'left')
+			->get()->result_array();
+		$des_by_id = array();
+		foreach ($des_rows as $d) {
+			$des_by_id[(int)$d['designation_id']] = $d;
+		}
+
+		$charts = array();
+		$not_in_chart = array();
+
+		foreach ($my_des_ids as $des_id) {
+			$des_id = (int)$des_id;
+			if (!isset($des_by_id[$des_id])) continue;
+			$des = $des_by_id[$des_id];
+
+			if (empty($reachable_set[$des_id])) {
+				$not_in_chart[] = array(
+					'designation_id' => $des_id,
+					'designation_name' => (string)$des['designation_name'],
+					'department_name' => isset($des['department_name']) ? (string)$des['department_name'] : '',
+				);
+				continue;
+			}
+
+			$focus_ids = $this->_collect_ancestor_designations($des_id, $parents_of);
+			$focus_set = array();
+			foreach ($focus_ids as $fid) $focus_set[(int)$fid] = true;
+
+			$filtered_nodes = array();
+			foreach ($des_rows as $d) {
+				$id = (int)$d['designation_id'];
+				if (!empty($focus_set[$id])) $filtered_nodes[] = $d;
+			}
+
+			$filtered_edges = array();
+			foreach ($edges as $e) {
+				$c = (int)$e['designation_id'];
+				$p = (int)$e['reports_to_designation_id'];
+				if (!empty($focus_set[$c]) && !empty($focus_set[$p])) {
+					$filtered_edges[] = $e;
+				}
+			}
+
+			$filtered_staff = array();
+			foreach ($staff_by_des as $did => $list) {
+				$did = (int)$did;
+				if (!empty($focus_set[$did])) $filtered_staff[(string)$did] = $list;
+			}
+
+			$charts[] = array(
+				'designation_id' => $des_id,
+				'designation_name' => (string)$des['designation_name'],
+				'department_name' => isset($des['department_name']) ? (string)$des['department_name'] : '',
+				'is_head' => $des_id === $head_id,
+				'head_id' => $head_id,
+				'nodes' => $filtered_nodes,
+				'edges' => $filtered_edges,
+				'staff_by_designation' => $filtered_staff,
+			);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'user_id' => $user_id,
+				'user_name' => $user_name,
+				'head_id' => $head_id,
+				'has_org_chart' => $head_id > 0,
+				'charts' => $charts,
+				'not_in_chart' => $not_in_chart,
+			),
+		));
+	}
+
+	public function designation_org_head()
+	{
+		$this->_assert_designation_org_access();
+		$this->_ensure_org_chart_settings_table();
+		$method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
+
+		if ($method === 'GET') {
+			$head_id = $this->_org_chart_head_id();
+			$head = null;
+			if ($head_id) {
+				$head = $this->db->get_where('designations', array('designation_id' => $head_id))->row_array();
+			}
+			$this->_json(array(
+				'success' => true,
+				'data' => array(
+					'head_id' => $head_id,
+					'head' => $head,
+				),
+			));
+		}
+
+		if ($method === 'POST') {
+			$body = $this->_body();
+			$head_id = isset($body['head_designation_id']) ? (int)$body['head_designation_id'] : 0;
+			if ($head_id <= 0) {
+				$this->_set_org_chart_head_id(0);
+				$this->_json(array('success' => true, 'head_id' => 0));
+			}
+			$exists = $this->db->get_where('designations', array('designation_id' => $head_id))->row_array();
+			if (!$exists) {
+				$this->_json(array('success' => false, 'message' => 'Designation not found'), 404);
+			}
+			$this->_set_org_chart_head_id($head_id);
+			$this->_json(array('success' => true, 'head_id' => $head_id));
+		}
+
+		$this->_json(array('success' => false, 'message' => 'Method not allowed'), 405);
+	}
+
+	private function _assert_designation_org_access()
+	{
+		if (!$this->_is_admin() && !$this->_access_flag('designation_sidebar')) {
+			$this->_json(array('success' => false, 'message' => 'Designation access required'), 403);
+		}
+	}
+
+	public function designation_reporting($id = 0, $boss_id = 0)
+	{
+		$this->_assert_designation_org_access();
+		$this->_ensure_designation_reporting_table();
+		$id = (int)$id;
+		$boss_id = (int)$boss_id;
+		$method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
+
+		if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
+		$node = $this->db->get_where('designations', array('designation_id' => $id))->row_array();
+		if (!$node) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+
+		if ($method === 'GET') {
+			$reports_to = array();
+			$reports = array();
+			foreach ($this->_designation_reporting_edges() as $e) {
+				if ((int)$e['designation_id'] === $id) {
+					$reports_to[] = (int)$e['reports_to_designation_id'];
+				}
+				if ((int)$e['reports_to_designation_id'] === $id) {
+					$reports[] = (int)$e['designation_id'];
+				}
+			}
+			$this->_json(array(
+				'success' => true,
+				'data' => array(
+					'designation' => $node,
+					'reports_to' => $reports_to,
+					'reports' => $reports,
+				),
+			));
+		}
+
+		if ($method === 'POST') {
+			$body = $this->_body();
+			$raw = isset($body['reports_to']) ? $body['reports_to'] : array();
+			if (!is_array($raw)) $raw = array();
+			$parent_ids = array();
+			foreach ($raw as $p) {
+				$p = (int)$p;
+				if ($p > 0 && $p !== $id) $parent_ids[$p] = $p;
+			}
+			$parent_ids = array_values($parent_ids);
+
+			foreach ($parent_ids as $p) {
+				$exists = $this->db->get_where('designations', array('designation_id' => $p))->row_array();
+				if (!$exists) {
+					$this->_json(array('success' => false, 'message' => 'Invalid reports_to designation: ' . $p), 422);
+				}
+			}
+
+			$all_edges = $this->_designation_reporting_edges();
+			if ($this->_designation_reporting_would_cycle($id, $parent_ids, $all_edges)) {
+				$this->_json(array('success' => false, 'message' => 'That reporting line would create a cycle'), 422);
+			}
+
+			$this->db->where('designation_id', $id)->delete('designation_reporting');
+			foreach ($parent_ids as $p) {
+				$this->db->insert('designation_reporting', array(
+					'designation_id' => $id,
+					'reports_to_designation_id' => $p,
+				));
+			}
+			$this->_json(array('success' => true, 'reports_to' => $parent_ids));
+		}
+
+		if ($method === 'DELETE') {
+			if (!$boss_id) $this->_json(array('success' => false, 'message' => 'boss id required'), 422);
+			$this->db->where(array(
+				'designation_id' => $id,
+				'reports_to_designation_id' => $boss_id,
+			))->delete('designation_reporting');
 			$this->_json(array('success' => true));
 		}
 
@@ -2301,26 +2811,278 @@ class Hrapi extends CI_Controller {
 	// Loans (ports Loans::insert_loan / loans_approval)
 	// ------------------------------------------------------------------
 
+	/** Installment included in a daily closing counts as paid even if amount_paid is still 0. */
+	private function _loan_installment_has_closing($inst)
+	{
+		if (!isset($inst['closing_id'])) {
+			return false;
+		}
+		$closing_id = $inst['closing_id'];
+		return !($closing_id === null || $closing_id === '' || $closing_id === '0' || (int)$closing_id === 0);
+	}
+
+	private function _loan_installment_is_paid($inst)
+	{
+		$amount_paid = (float)(isset($inst['amount_paid']) ? $inst['amount_paid'] : 0);
+		if ($amount_paid > 0) {
+			return true;
+		}
+		return $this->_loan_installment_has_closing($inst);
+	}
+
+	private function _loan_installment_paid_amount($inst)
+	{
+		$amount = (float)(isset($inst['amount']) ? $inst['amount'] : 0);
+		$amount_paid = (float)(isset($inst['amount_paid']) ? $inst['amount_paid'] : 0);
+		if ($amount_paid > 0) {
+			return $amount_paid;
+		}
+		if ($this->_loan_installment_has_closing($inst)) {
+			return $amount;
+		}
+		return 0.0;
+	}
+
+	private function _loan_plan_unpaid_sql($alias = 'lp')
+	{
+		return '((' . $alias . '.amount_paid IS NULL OR ' . $alias . '.amount_paid = 0 OR ' . $alias . '.amount_paid = "")'
+			. ' AND (' . $alias . '.closing_id IS NULL OR ' . $alias . '.closing_id = "" OR ' . $alias . '.closing_id = "0"))';
+	}
+
+	private function _loan_installment_paid_details($inst)
+	{
+		$paid_details = '';
+		$paid_details_warning = false;
+		if (!$this->_loan_installment_is_paid($inst)) {
+			return array('paid_details' => $paid_details, 'paid_details_warning' => $paid_details_warning);
+		}
+
+		if (!empty($inst['paid_at']) && $inst['paid_at'] === 'salary' && !empty($inst['payroll_id'])) {
+			$payroll = $this->db->get_where('payroll', array('id' => (int)$inst['payroll_id']))->row_array();
+			if ($payroll) {
+				$paid_details = trim(
+					(isset($payroll['payroll_year']) ? $payroll['payroll_year'] : '') . ' ' .
+					(isset($payroll['payroll_month']) ? $payroll['payroll_month'] : '')
+				);
+			}
+		} elseif (
+			$this->_loan_installment_has_closing($inst)
+			|| (!empty($inst['paid_at']) && $inst['paid_at'] === 'cash')
+		) {
+			$closing_id = isset($inst['closing_id']) ? $inst['closing_id'] : '';
+			if ($closing_id !== '' && $closing_id !== null) {
+				$closing = $this->db->get_where('closing_perday', array('campus_closing_id' => $closing_id))->row_array();
+				if ($closing) {
+					$paid_details = 'Closing : ' . $closing_id;
+				} else {
+					$paid_details = 'Daily Cash Closing Not Closed';
+					$paid_details_warning = true;
+				}
+			}
+		}
+
+		return array('paid_details' => $paid_details, 'paid_details_warning' => $paid_details_warning);
+	}
+
 	public function loans()
 	{
 		$status = $this->input->get('status');
+		$user_filter = $this->input->get('user_id');
+		$can_approve = $this->_is_admin() || $this->_access_flag('loan_approval');
+		$remaining_sql = '(SELECT COUNT(*) FROM loan_plan lp WHERE lp.loan_id = loans.id AND ' . $this->_loan_plan_unpaid_sql('lp') . ')';
 
-		$this->db->select('loans.*, users.first_name, users.last_name');
+		$this->db->select(
+			'loans.*, users.first_name, users.last_name, ' . $remaining_sql . ' AS remaining_installments',
+			false
+		);
 		$this->db->from('loans');
 		$this->db->join('users', 'loans.user_id=users.user_id', 'inner');
-		if ($status !== null && $status !== '') {
-			$this->db->where('loans.status', $status);
+
+		if (!$can_approve) {
+			$this->db->where('loans.user_id', (int)$this->current_user['user_id']);
+		} elseif ($user_filter !== null && $user_filter !== '') {
+			$this->db->where('loans.user_id', (int)$user_filter);
 		}
+
+		if ($status !== null && $status !== '') {
+			if ($status === '1') {
+				// Legacy type=1 — Running: approved with unpaid installments
+				$this->db->where('loans.status', 1);
+				$this->db->where($remaining_sql . ' > 0', null, false);
+			} elseif ($status === '3') {
+				// Legacy type=3 — Cleared: approved, all installments paid
+				$this->db->where('loans.status', 1);
+				$this->db->where($remaining_sql . ' = 0', null, false);
+			} else {
+				$this->db->where('loans.status', (int)$status);
+			}
+		}
+
 		$this->db->order_by('loans.id', 'DESC');
 		$rows = $this->db->get()->result_array();
+
+		foreach ($rows as &$row) {
+			$remaining = (int)(isset($row['remaining_installments']) ? $row['remaining_installments'] : 0);
+			$row['remaining'] = $remaining;
+			$monthsApproved = (int)(isset($row['months_approved']) ? $row['months_approved'] : 0);
+			$row['paid_installments'] = max(0, $monthsApproved - $remaining);
+		}
+		unset($row);
+
 		$this->_json(array('success' => true, 'data' => $rows));
+	}
+
+	public function loan_detail($id = 0)
+	{
+		$id = (int)$id;
+		if (!$id) {
+			$this->_json(array('success' => false, 'message' => 'Loan id required'), 422);
+		}
+
+		$loan = $this->db->get_where('loans', array('id' => $id))->row_array();
+		if (!$loan || (int)$loan['status'] !== 1) {
+			$this->_json(array('success' => false, 'message' => 'Approved loan not found'), 404);
+		}
+
+		$can_approve = $this->_is_admin() || $this->_access_flag('loan_approval');
+		if (!$can_approve && (int)$loan['user_id'] !== (int)$this->current_user['user_id']) {
+			$this->_json(array('success' => false, 'message' => 'Forbidden'), 403);
+		}
+
+		$user = $this->db->get_where('users', array('user_id' => (int)$loan['user_id']))->row_array();
+		if (!$user) {
+			$this->_json(array('success' => false, 'message' => 'Staff not found'), 404);
+		}
+
+		$this->db->from('loan_plan');
+		$this->db->where('loan_id', $id);
+		$this->db->order_by('due_date', 'asc');
+		$installments = $this->db->get()->result_array();
+
+		$total_loan = (float)(isset($loan['cash_given']) ? $loan['cash_given'] : 0);
+		$paid_loan = 0.0;
+		$remaining_loan = 0.0;
+		$out_installments = array();
+		$sr = 1;
+
+		foreach ($installments as $inst) {
+			$amount = (float)(isset($inst['amount']) ? $inst['amount'] : 0);
+			$is_paid = $this->_loan_installment_is_paid($inst);
+			$amount_paid = $this->_loan_installment_paid_amount($inst);
+			if ($is_paid) {
+				$paid_loan += $amount_paid;
+			} else {
+				$remaining_loan += $amount;
+			}
+
+			$detail = $this->_loan_installment_paid_details($inst);
+
+			$out_installments[] = array(
+				'id' => (int)$inst['id'],
+				'sr' => $sr++,
+				'amount' => $amount,
+				'amount_paid' => $amount_paid,
+				'due_date' => isset($inst['due_date']) ? $inst['due_date'] : '',
+				'paid_at' => isset($inst['paid_at']) ? $inst['paid_at'] : '',
+				'paid_date' => isset($inst['paid_date']) ? $inst['paid_date'] : '',
+				'paid_status' => $is_paid ? 'PAID' : 'NOT PAID',
+				'paid_details' => $detail['paid_details'],
+				'paid_details_warning' => $detail['paid_details_warning'],
+				'is_paid' => $is_paid,
+			);
+		}
+
+		$closing_campuses = array();
+		if ($this->db->table_exists('closing_persons')) {
+			$this->db->select('closing_persons.campus_id, campuses.campus_name', false);
+			$this->db->from('closing_persons');
+			$this->db->join('campuses', 'campuses.campus_id = closing_persons.campus_id', 'inner');
+			$this->db->where('closing_persons.active_status', 1);
+			$this->db->group_by('closing_persons.campus_id');
+			$closing_campuses = $this->db->get()->result_array();
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'loan' => $loan,
+				'staff' => array(
+					'user_id' => (int)$user['user_id'],
+					'first_name' => isset($user['first_name']) ? $user['first_name'] : '',
+					'last_name' => isset($user['last_name']) ? $user['last_name'] : '',
+					'father_name' => isset($user['father_name']) ? $user['father_name'] : '',
+					'cnic' => isset($user['cnic']) ? $user['cnic'] : '',
+					'mobile' => isset($user['mobile']) ? $user['mobile'] : '',
+					'emergency_no' => isset($user['emergency_no']) ? $user['emergency_no'] : '',
+				),
+				'summary' => array(
+					'total_loan' => $total_loan,
+					'remaining_loan' => $remaining_loan,
+					'paid_loan' => $paid_loan,
+				),
+				'installments' => $out_installments,
+				'closing_campuses' => $closing_campuses,
+			),
+		));
+	}
+
+	public function loan_pay_installments($loan_id = 0)
+	{
+		$loan_id = (int)$loan_id;
+		$body = $this->_body();
+		$installment_ids = isset($body['installment_ids']) ? $body['installment_ids'] : array();
+		$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+
+		if (!$loan_id || !is_array($installment_ids) || !count($installment_ids)) {
+			$this->_json(array('success' => false, 'message' => 'loan_id and installment_ids required'), 422);
+		}
+		if (!$campus_id) {
+			$this->_json(array('success' => false, 'message' => 'campus_id required'), 422);
+		}
+
+		$loan = $this->db->get_where('loans', array('id' => $loan_id, 'status' => 1))->row_array();
+		if (!$loan) {
+			$this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
+		}
+
+		$ids = array();
+		foreach ($installment_ids as $raw_id) {
+			$id = (int)$raw_id;
+			if ($id > 0) {
+				$ids[] = $id;
+			}
+		}
+		$ids = array_values(array_unique($ids));
+		if (!count($ids)) {
+			$this->_json(array('success' => false, 'message' => 'No valid installment ids'), 422);
+		}
+
+		$this->db->set('amount_paid', 'amount', false);
+		$this->db->set('paid_at', 'cash');
+		$this->db->set('paid_date', date('Y-m-d'));
+		$this->db->set('campus_id', $campus_id);
+		$this->db->where('loan_id', $loan_id);
+		$this->db->where_in('id', $ids);
+		$this->db->where('(amount_paid IS NULL OR amount_paid = 0 OR amount_paid = "")', null, false);
+		$this->db->where('(closing_id IS NULL OR closing_id = "" OR closing_id = "0")', null, false);
+		$this->db->update('loan_plan');
+
+		if ($this->db->affected_rows() <= 0) {
+			$this->_json(array('success' => false, 'message' => 'No installments updated'), 422);
+		}
+
+		$this->_json(array('success' => true, 'message' => 'Installment(s) marked paid'));
 	}
 
 	public function loan_apply()
 	{
 		$body = $this->_body();
-		$loan_type = isset($body['loan_type']) ? $body['loan_type'] : 'LOAN';
+		$loan_type = isset($body['loan_type']) ? $body['loan_type'] : (isset($body['type']) ? $body['type'] : 'LOAN');
+		$can_apply_for_others = $this->_is_admin() || $this->_access_flag('loan_approval');
 		$user_id = isset($body['user_id']) ? (int)$body['user_id'] : 0;
+		if (!$can_apply_for_others) {
+			$user_id = (int)$this->current_user['user_id'];
+		}
 		$in_month = isset($body['in_month']) ? (int)$body['in_month'] : 1;
 		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
 		$reason = isset($body['reason']) ? $body['reason'] : '';
@@ -2343,6 +3105,9 @@ class Hrapi extends CI_Controller {
 
 	public function loan_approve($id = 0)
 	{
+		if (!$this->_is_admin() && !$this->_access_flag('loan_approval')) {
+			$this->_json(array('success' => false, 'message' => 'Loan approval access required'), 403);
+		}
 		$id = (int)$id;
 		if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
 		$body = $this->_body();

@@ -16,7 +16,36 @@ class Website_service {
 
     public function can_manage($user)
     {
-        return $user && $user['role'] === 'Admin';
+        if (!$user) {
+            return false;
+        }
+        if (isset($user['role']) && $user['role'] === 'Admin') {
+            return true;
+        }
+        if (empty($user['user_id'])) {
+            return false;
+        }
+        $acc = $this->ci->db->get_where('access', array('user_id' => (int) $user['user_id']))->row_array();
+        if (!$acc) {
+            return false;
+        }
+        return !empty($acc['event_images']) || !empty($acc['slider_images']) || !empty($acc['news_updates']);
+    }
+
+    /** Require a specific website access flag (Admin always allowed). */
+    public function can_perm($user, $flag)
+    {
+        if (!$user) {
+            return false;
+        }
+        if (isset($user['role']) && $user['role'] === 'Admin') {
+            return true;
+        }
+        if (empty($user['user_id'])) {
+            return false;
+        }
+        $acc = $this->ci->db->get_where('access', array('user_id' => (int) $user['user_id']))->row_array();
+        return $acc && !empty($acc[$flag]);
     }
 
     public function meta()
@@ -176,14 +205,16 @@ class Website_service {
 
     public function event_images_list($user)
     {
+        $campus_ids = $this->_access_campus_ids($user);
+
         $this->ci->db->select('event_images.*, campuses.campus_name, events.name as event_name');
         $this->ci->db->from('event_images');
         $this->ci->db->join('campuses', 'event_images.campus_id=campuses.campus_id', 'inner');
         $this->ci->db->join('events', 'event_images.event_id=events.event_id', 'left');
-        if ($user['role'] !== 'Admin') {
-            $access = checkUserAccess();
-            $campus_ids = !empty($access[0]['campus_ids']) ? explode(',', $access[0]['campus_ids']) : array();
-            if (count($campus_ids)) {
+        if ($campus_ids !== null) {
+            if (!count($campus_ids)) {
+                $this->ci->db->where('1 = 0', null, false);
+            } else {
                 $this->ci->db->where_in('event_images.campus_id', $campus_ids);
             }
         }
@@ -494,6 +525,22 @@ class Website_service {
         return !empty($data['file_name']) ? $data['file_name'] : false;
     }
 
+    /** Access row campus_ids without CI session redirect (API-safe). */
+    private function _access_campus_ids($user)
+    {
+        if (!$user || empty($user['user_id'])) {
+            return array();
+        }
+        if (isset($user['role']) && $user['role'] === 'Admin') {
+            return null;
+        }
+        $acc = $this->ci->db->get_where('access', array('user_id' => (int) $user['user_id']))->row_array();
+        if (!$acc || empty($acc['campus_ids'])) {
+            return array();
+        }
+        return array_values(array_filter(array_map('intval', explode(',', $acc['campus_ids']))));
+    }
+
     private function _campus_ids_from_body($body, $key)
     {
         if (!isset($body[$key])) {
@@ -512,8 +559,11 @@ class Website_service {
         if ($user['role'] === 'Admin') {
             return $rows;
         }
-        $access = checkUserAccess();
-        $user_campuses = !empty($access[0]['campus_ids']) ? explode(',', $access[0]['campus_ids']) : array();
+        $user_campuses = $this->_access_campus_ids($user);
+        if ($user_campuses === null) {
+            return $rows;
+        }
+        $user_campuses = array_map('strval', $user_campuses);
         $filtered = array();
         foreach ($rows as $row) {
             $row_campuses = !empty($row[$field]) ? explode(',', $row[$field]) : array();
@@ -551,8 +601,11 @@ class Website_service {
             return array('success' => false, 'message' => 'Not found');
         }
         if ($user['role'] !== 'Admin') {
-            $access = checkUserAccess();
-            $campus_ids = !empty($access[0]['campus_ids']) ? explode(',', $access[0]['campus_ids']) : array();
+            $campus_ids = $this->_access_campus_ids($user);
+            if ($campus_ids === null) {
+                $campus_ids = array();
+            }
+            $campus_ids = array_map('strval', $campus_ids);
             $item_campuses = !empty($row[$campus_field]) ? explode(',', $row[$campus_field]) : array();
             foreach ($campus_ids as $campus_id) {
                 if (($key = array_search($campus_id, $item_campuses)) !== false) {

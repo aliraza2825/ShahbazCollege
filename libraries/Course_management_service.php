@@ -19,7 +19,11 @@ class Course_management_service {
         if (!$user || empty($user['user_id'])) {
             return null;
         }
-        return $this->ci->db->get_where('access', array('user_id' => $user['user_id']))->row_array();
+        $uid = (int) $user['user_id'];
+        if ($this->_scope_user && (int) $this->_scope_user['user_id'] === $uid && $this->_scope_access !== null) {
+            return $this->_scope_access === false ? null : $this->_scope_access;
+        }
+        return $this->ci->db->get_where('access', array('user_id' => $uid))->row_array();
     }
 
     private function _is_admin($user)
@@ -52,6 +56,13 @@ class Course_management_service {
         if ($this->_is_admin($user)) {
             return null;
         }
+        if (
+            $this->_scope_subject_ids_ready
+            && $this->_scope_user
+            && (int) $this->_scope_user['user_id'] === (int) $user['user_id']
+        ) {
+            return $this->_scope_subject_ids;
+        }
         $acc = $this->_access_row($user);
         if (!$acc || empty($acc['test_engine_subject_ids'])) {
             return array();
@@ -74,10 +85,41 @@ class Course_management_service {
 
     /** @var array|null */
     private $_scope_user = null;
+    /** @var array|false|null false = no access row; null = not loaded */
+    private $_scope_access = null;
+    /** @var array|null null = admin (no filter) or not set; array = allowed subject ids */
+    private $_scope_subject_ids = null;
+    /** Whether subject ids were resolved for the current scope user */
+    private $_scope_subject_ids_ready = false;
 
     private function _set_scope_user($user)
     {
         $this->_scope_user = $user;
+        $this->_scope_access = null;
+        $this->_scope_subject_ids = null;
+        $this->_scope_subject_ids_ready = false;
+
+        // Eager-load access BEFORE any list query — get_where() merges into an active QB.
+        if ($this->_is_admin($user)) {
+            $this->_scope_access = false;
+            $this->_scope_subject_ids = null;
+            $this->_scope_subject_ids_ready = true;
+            return;
+        }
+        if (!$user || empty($user['user_id'])) {
+            $this->_scope_access = false;
+            $this->_scope_subject_ids = array();
+            $this->_scope_subject_ids_ready = true;
+            return;
+        }
+        $acc = $this->ci->db->get_where('access', array('user_id' => (int) $user['user_id']))->row_array();
+        $this->_scope_access = $acc ? $acc : false;
+        if (!$acc || empty($acc['test_engine_subject_ids'])) {
+            $this->_scope_subject_ids = array();
+        } else {
+            $this->_scope_subject_ids = array_values(array_filter(array_map('intval', explode(',', $acc['test_engine_subject_ids']))));
+        }
+        $this->_scope_subject_ids_ready = true;
     }
 
     private function _current_user_scope()

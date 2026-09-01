@@ -34,7 +34,7 @@ class Incentiveapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Unauthorized'), 401);
 		}
 		$this->access_row = $this->_load_access_row();
-		if (!$this->_is_admin() && !$this->_access_flag('recovery_portal') && !$this->_access_flag('all_users_recovery')) {
+		if (!$this->_has_incentive_access()) {
 			$this->_json(array('success' => false, 'message' => 'Incentive access required'), 403);
 		}
 	}
@@ -122,6 +122,99 @@ class Incentiveapi extends CI_Controller {
 		$this->_json(array('success' => false, 'message' => 'Incentive manage access required'), 403);
 	}
 
+	/** Legacy sidebar: user designation_id CSV. */
+	private function _user_designation_ids()
+	{
+		$out = array();
+		$raw = isset($this->current_user['designation_id']) ? (string)$this->current_user['designation_id'] : '';
+		foreach (explode(',', $raw) as $id) {
+			$id = (int)trim($id);
+			if ($id > 0) $out[] = $id;
+		}
+		return array_values(array_unique($out));
+	}
+
+	/** Port of sidebar.php recovery_management lookup (requires recovery_portal for portal users). */
+	private function _find_recovery_task_id_for_user()
+	{
+		$found = null;
+		foreach ($this->_user_designation_ids() as $desig) {
+			$row = $this->db->query(
+				'SELECT recovery_management_id FROM recovery_management WHERE FIND_IN_SET(?, designation_id) LIMIT 1',
+				array($desig)
+			)->row_array();
+			if ($row) {
+				$found = (int)$row['recovery_management_id'];
+			}
+		}
+		return $found;
+	}
+
+	/** Port of sidebar.php admission_management_incentives lookup. */
+	private function _find_admission_task_id_for_user()
+	{
+		$found = null;
+		foreach ($this->_user_designation_ids() as $desig) {
+			$row = $this->db->query(
+				'SELECT incentive_id FROM admission_management_incentives WHERE FIND_IN_SET(?, designation_id) LIMIT 1',
+				array($desig)
+			)->row_array();
+			if ($row) {
+				$found = (int)$row['incentive_id'];
+			}
+		}
+		return $found;
+	}
+
+	/**
+	 * Legacy Incentive Management menu visibility:
+	 * admission task for designation OR recovery task + recovery_portal OR all_users_recovery/admin.
+	 */
+	private function _has_incentive_access()
+	{
+		if ($this->_is_admin() || $this->_access_flag('all_users_recovery')) {
+			return true;
+		}
+		if ($this->_find_admission_task_id_for_user()) {
+			return true;
+		}
+		if ($this->_access_flag('recovery_portal') && $this->_find_recovery_task_id_for_user()) {
+			return true;
+		}
+		return false;
+	}
+
+	private function _assert_recovery_task_access($recovery_id, $user_id = null)
+	{
+		if ($this->_can_manage()) {
+			return;
+		}
+		if (!$this->_access_flag('recovery_portal')) {
+			$this->_json(array('success' => false, 'message' => 'Recovery portal access required'), 403);
+		}
+		$mine = $this->_find_recovery_task_id_for_user();
+		if (!$mine || (int)$recovery_id !== (int)$mine) {
+			$this->_json(array('success' => false, 'message' => 'No access to this recovery task'), 403);
+		}
+		if ($user_id !== null && (int)$user_id !== (int)$this->current_user['user_id']) {
+			$this->_json(array('success' => false, 'message' => 'No access to this recovery user'), 403);
+		}
+	}
+
+	private function _assert_admission_task_access($incentive_id, $user_id = null)
+	{
+		if ($this->_can_manage()) {
+			return;
+		}
+		$mine = $this->_find_admission_task_id_for_user();
+		if (!$mine || (int)$incentive_id !== (int)$mine) {
+			$this->_json(array('success' => false, 'message' => 'No access to this admission incentive'), 403);
+		}
+		if ($user_id !== null && (int)$user_id !== (int)$this->current_user['user_id']) {
+			$this->_json(array('success' => false, 'message' => 'No access to this admission user'), 403);
+		}
+	}
+
 	// ------------------------------------------------------------------
 	// Small helpers
 	// ------------------------------------------------------------------
@@ -190,17 +283,58 @@ class Incentiveapi extends CI_Controller {
 	public function meta()
 	{
 		$can_manage = $this->_can_manage();
-		$can_portal = $this->_is_admin() || $this->_access_flag('recovery_portal') || $can_manage;
+		$user_id = (int)$this->current_user['user_id'];
+		$recovery_task_id = null;
+		if ($this->_is_admin() || $this->_access_flag('recovery_portal') || $can_manage) {
+			$recovery_task_id = $this->_find_recovery_task_id_for_user();
+		}
+		$admission_task_id = $this->_find_admission_task_id_for_user();
+
+		$show_recovery_portal = $recovery_task_id
+			&& ($this->_is_admin() || $this->_access_flag('recovery_portal'));
+		$show_admission_portal = !empty($admission_task_id);
+		$show_recovery_tasks = $can_manage;
+		$show_admission_tasks = $can_manage;
+
+		$sections = array();
+		if ($show_recovery_portal || $show_recovery_tasks) {
+			$sections[] = array('key' => 'recovery', 'label' => 'Recovery Portal', 'enabled' => true);
+		}
+		if ($show_admission_portal || $show_admission_tasks) {
+			$sections[] = array('key' => 'admission', 'label' => 'Admission Incentive', 'enabled' => true);
+		}
+
+		$default_route = null;
+		if ($show_recovery_tasks) {
+			$default_route = '/incentive/recovery';
+		} elseif ($show_admission_tasks && !$show_recovery_portal && !$show_admission_portal) {
+			$default_route = '/incentive/admission';
+		} elseif ($show_recovery_portal && $show_admission_portal) {
+			$default_route = '/incentive';
+		} elseif ($show_recovery_portal) {
+			$default_route = '/incentive/recovery/check/' . $recovery_task_id . '/' . $user_id;
+		} elseif ($show_admission_portal) {
+			$default_route = '/incentive/admission/check/' . $admission_task_id . '/' . $user_id;
+		} elseif ($show_admission_tasks) {
+			$default_route = '/incentive/admission';
+		} elseif ($show_recovery_tasks) {
+			$default_route = '/incentive/recovery';
+		}
 
 		$this->_json(array(
 			'success' => true,
 			'role' => isset($this->current_user['role']) ? $this->current_user['role'] : null,
 			'can_manage' => $can_manage,
-			'can_portal' => $can_portal,
-			'sections' => array(
-				array('key' => 'recovery', 'label' => 'Fee Recovery Incentives', 'enabled' => true),
-				array('key' => 'admission', 'label' => 'Admission Incentives', 'enabled' => true),
-			),
+			'can_portal' => $show_recovery_portal || $show_admission_portal,
+			'show_recovery_portal' => (bool)$show_recovery_portal,
+			'show_admission_portal' => (bool)$show_admission_portal,
+			'show_recovery_tasks' => (bool)$show_recovery_tasks,
+			'show_admission_tasks' => (bool)$show_admission_tasks,
+			'recovery_task_id' => $recovery_task_id,
+			'admission_task_id' => $admission_task_id,
+			'user_id' => $user_id,
+			'default_route' => $default_route,
+			'sections' => $sections,
 		));
 	}
 
@@ -417,6 +551,7 @@ class Incentiveapi extends CI_Controller {
 		$recovery_id = (int)$recovery_id;
 		$user_id = (int)$user_id;
 		if (!$recovery_id || !$user_id) $this->_json(array('success' => false, 'message' => 'recovery_id and user_id required'), 422);
+		$this->_assert_recovery_task_access($recovery_id, $user_id);
 
 		$from_date = $this->input->get('from');
 		$to_date = $this->input->get('to');
@@ -781,6 +916,7 @@ class Incentiveapi extends CI_Controller {
 		if (!$recovery_id || !$user_id) {
 			$this->_json(array('success' => false, 'message' => 'recovery_id and user_id required'), 422);
 		}
+		$this->_assert_recovery_task_access($recovery_id, $user_id);
 
 		$from_date = $this->input->get('from');
 		$to_date = $this->input->get('to');
@@ -889,6 +1025,7 @@ class Incentiveapi extends CI_Controller {
 	{
 		$recovery_id = (int)$recovery_id;
 		if (!$recovery_id) $this->_json(array('success' => false, 'message' => 'recovery_id required'), 422);
+		$this->_assert_recovery_task_access($recovery_id);
 
 		$kind = $this->input->get('kind');
 		if ($kind !== 'paid') $kind = 'all';
@@ -1134,6 +1271,7 @@ class Incentiveapi extends CI_Controller {
 	{
 		$recovery_id = (int)$recovery_id;
 		if (!$recovery_id) $this->_json(array('success' => false, 'message' => 'recovery_id required'), 422);
+		$this->_assert_recovery_task_access($recovery_id);
 
 		$filter = (int)$this->input->get('filter');
 		if ($this->input->get('filter') === null) $filter = 0;
@@ -1585,7 +1723,6 @@ class Incentiveapi extends CI_Controller {
 		$fee_decided_current_time = 0;
 		$total_fee_submitted = 0;
 		$unpaid_installments_current_time = 0;
-		$paid_lines = array();
 		$unpaid_lines = array();
 		$today = date('Y-m-d');
 
@@ -1613,10 +1750,6 @@ class Incentiveapi extends CI_Controller {
 					$unpaid_installments_current_time++;
 				}
 			}
-			if ($payment['paid'] == 1 && $payment['payment_plan'] != 'consulation fee') {
-				$total_fee_submitted += (float)$payment['actual_amount'];
-				$paid_lines[] = $payment['actual_amount'] . ' Paid on ' . $payment['paid_date'];
-			}
 			if ($payment['paid'] == 0) {
 				$overdue = $payment['dead_line'] < $today;
 				$unpaid_lines[] = array(
@@ -1625,6 +1758,9 @@ class Incentiveapi extends CI_Controller {
 				);
 			}
 		}
+
+		$total_fee_submitted = $this->_sum_grouped_fee_submitted($payments, true);
+		$paid_lines = $this->_build_paid_fee_detail_lines($payments);
 
 		$remaining = $fee_decided_current_time - $total_fee_submitted;
 		$pct_received = ($total_fee_submitted > 0 && $total_fee > 0)
@@ -1665,6 +1801,7 @@ class Incentiveapi extends CI_Controller {
 		$recovery_id = (int)$this->input->get('recovery_id');
 		$user_id = (int)$this->input->get('user_id');
 		if (!$recovery_id || !$user_id) $this->_json(array('success' => false, 'message' => 'recovery_id and user_id required'), 422);
+		$this->_assert_recovery_task_access($recovery_id, $user_id);
 
 		$kind = $this->input->get('kind');
 		if ($kind !== 'unverified') $kind = 'fine';
@@ -1839,6 +1976,7 @@ class Incentiveapi extends CI_Controller {
 		$incentive_id = (int)$incentive_id;
 		$user_id = (int)$user_id;
 		if (!$incentive_id || !$user_id) $this->_json(array('success' => false, 'message' => 'incentive_id and user_id required'), 422);
+		$this->_assert_admission_task_access($incentive_id, $user_id);
 
 		$from_date = $this->input->get('from');
 		$to_date = $this->input->get('to');
@@ -1894,17 +2032,10 @@ class Incentiveapi extends CI_Controller {
 		$counted = 0;
 		$uncounted = 0;
 		foreach ($total_paid_students as $paid) {
-			$this->db->select_sum('payments.actual_amount');
-			$this->db->from('payments');
-			$this->db->where("payments.student_id = '" . $paid['student_id'] . "'");
-			$tot = $this->db->get()->result_array();
-
-			if (count($tot) > 0) {
-				if ($tot[0]['actual_amount'] > $recovery['min_fee_amount']) {
-					$counted++;
-				} else {
-					$uncounted++;
-				}
+			if ($this->_is_admission_fee_counted($paid['student_id'], $recovery['min_fee_amount'])) {
+				$counted++;
+			} else {
+				$uncounted++;
 			}
 		}
 
@@ -1962,6 +2093,8 @@ class Incentiveapi extends CI_Controller {
 	{
 		$incentive_id = (int)$incentive_id;
 		if (!$incentive_id) $this->_json(array('success' => false, 'message' => 'incentive_id required'), 422);
+		$user_id = (int)$this->input->get('user_id');
+		$this->_assert_admission_task_access($incentive_id, $user_id > 0 ? $user_id : null);
 
 		$id = $this->input->get('id');
 		if ($id === null || $id === '') $id = 0;
@@ -2028,33 +2161,20 @@ class Incentiveapi extends CI_Controller {
 
 		if ($id == 1) {
 			foreach ($rows as $key => $paid) {
-				$this->db->select_sum('payments.actual_amount');
-				$this->db->from('payments');
-				$this->db->where("payments.student_id = '" . $paid['student_id'] . "'");
-				$tot = $this->db->get()->result_array();
-				if (count($tot) > 0) {
-					if ($tot[0]['actual_amount'] > $recovery['min_fee_amount']) {
-						// keep — counted admission
-					} else {
-						unset($rows[$key]);
-					}
+				if (!$this->_is_admission_fee_counted($paid['student_id'], $recovery['min_fee_amount'])) {
+					unset($rows[$key]);
 				}
 			}
 		} elseif ($id == 2) {
 			foreach ($rows as $key => $paid) {
-				$this->db->select_sum('payments.actual_amount');
-				$this->db->from('payments');
-				$this->db->where("payments.student_id = '" . $paid['student_id'] . "'");
-				$tot = $this->db->get()->result_array();
-				if (count($tot) > 0) {
-					if ($tot[0]['actual_amount'] > $recovery['min_fee_amount']) {
-						unset($rows[$key]);
-					}
+				if ($this->_is_admission_fee_counted($paid['student_id'], $recovery['min_fee_amount'])) {
+					unset($rows[$key]);
 				}
 			}
 		}
 
 		$rows = array_values($rows);
+		$rows = $this->_enrich_admission_entries($rows, $recovery, $incamount);
 
 		$this->_json(array(
 			'success' => true,
@@ -2062,10 +2182,211 @@ class Incentiveapi extends CI_Controller {
 			'to_date' => $to_date,
 			'recoveryid' => $incentive_id,
 			'incamount' => $incamount,
+			'recovery' => $recovery,
 			'user' => $user,
 			'data' => $rows,
 			'contracts' => array(),
 		));
+	}
+
+	private function _build_paid_fee_detail_lines($payments)
+	{
+		$lines = array();
+		foreach ($this->_group_student_payments_from_rows($payments) as $payment) {
+			if ((int)$payment['paid'] !== 1) {
+				continue;
+			}
+			$actual = (float)$payment['actual_amount'];
+			if ($actual <= 0) {
+				continue;
+			}
+			$paid_date = isset($payment['paid_date']) ? trim((string)$payment['paid_date']) : '';
+			if ($paid_date === '' || $paid_date === '0000-00-00') {
+				continue;
+			}
+			$lines[] = $actual . ' Paid on ' . $paid_date;
+		}
+		return $lines;
+	}
+
+	private function _sum_grouped_fee_submitted($payments, $exclude_consultation = false)
+	{
+		$total = 0.0;
+		foreach ($this->_group_student_payments_from_rows($payments) as $payment) {
+			if ((int)$payment['paid'] !== 1) {
+				continue;
+			}
+			if ($exclude_consultation && isset($payment['payment_plan']) && $payment['payment_plan'] == 'consulation fee') {
+				continue;
+			}
+			$total += (float)$payment['actual_amount'];
+		}
+		return $total;
+	}
+
+	private function _student_fee_submitted_total($student_id)
+	{
+		$this->db->order_by('dead_line', 'ASC');
+		$payments = $this->db->get_where('payments', array('student_id' => (int)$student_id))->result_array();
+		return $this->_sum_grouped_fee_submitted($payments);
+	}
+
+	/** Counted when submitted fee meets or exceeds admission min_fee_amount (merged challan safe). */
+	private function _is_admission_fee_counted($student_id, $min_fee_amount)
+	{
+		return $this->_student_fee_submitted_total($student_id) >= (float)$min_fee_amount;
+	}
+
+	private function _compute_admission_entry_details($payments, $student_total_fee)
+	{
+		$total_created = 0;
+		$created_council_fee = 0;
+		$total_fee_submitted = 0;
+		$unpaid_lines = array();
+		$today = date('Y-m-d');
+
+		foreach ($payments as $key => $payment) {
+			if (!empty($payment['payment_plan'])) {
+				$total_created += (float) $payment['amount'];
+			}
+			if ($payment['payment_plan'] == 'consulation fee') {
+				$created_council_fee += (float) $payment['amount'];
+			}
+			if ($payment['paid'] == 0 && $key < 5) {
+				$overdue = $payment['dead_line'] < $today;
+				$unpaid_lines[] = array(
+					'text' => $payment['amount'] . ' Not Paid on ' . $payment['dead_line'],
+					'overdue' => $overdue,
+				);
+			}
+		}
+
+		$total_fee_submitted = $this->_sum_grouped_fee_submitted($payments);
+		$paid_lines = $this->_build_paid_fee_detail_lines($payments);
+
+		return array(
+			'total_fee' => $student_total_fee,
+			'total_created_fee' => $total_created,
+			'total_created_council_fee' => $created_council_fee,
+			'total_fee_submitted' => $total_fee_submitted,
+			'paid_lines' => $paid_lines,
+			'unpaid_lines' => $unpaid_lines,
+		);
+	}
+
+	private function _enrich_admission_entries($rows, $recovery, $incamount)
+	{
+		if (!count($rows)) {
+			return array();
+		}
+
+		$student_ids = array();
+		$plan_ids = array();
+		foreach ($rows as $row) {
+			$student_ids[] = (int) $row['student_id'];
+			if (!empty($row['plan_id'])) {
+				$plan_ids[] = (int) $row['plan_id'];
+			}
+		}
+		$student_ids = array_values(array_unique(array_filter($student_ids)));
+		$plan_ids = array_values(array_unique(array_filter($plan_ids)));
+
+		$doc_map = array();
+		if (count($student_ids)) {
+			$this->db->where_in('student_id', $student_ids);
+			$docs = $this->db->get('student_documents')->result_array();
+			foreach ($docs as $doc) {
+				$sid = (int) $doc['student_id'];
+				if (!isset($doc_map[$sid])) {
+					$doc_map[$sid] = array();
+				}
+				$doc_map[$sid][$doc['type']] = true;
+			}
+		}
+
+		$fee_rules = array();
+		if (count($plan_ids)) {
+			$this->db->where_in('fee_rule_id', $plan_ids);
+			$rules = $this->db->get('fee_rules')->result_array();
+			foreach ($rules as $rule) {
+				$fee_rules[(int) $rule['fee_rule_id']] = $rule;
+			}
+		}
+
+		$doc_labels = array(
+			'ID Card',
+			'B - FORM',
+			'Photo',
+			'Result Card',
+			'College Form',
+			'Rules and Regulation Form',
+			'Fee Strcuture Form',
+		);
+
+		$out = array();
+		foreach ($rows as $row) {
+			$student_id = (int) $row['student_id'];
+			$this->db->order_by('dead_line', 'ASC');
+			$payments = $this->db->get_where('payments', array('student_id' => $student_id))->result_array();
+
+			$student_row = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+			$add_by = $student_row ? $student_row['add_by'] : (isset($row['add_by']) ? $row['add_by'] : '');
+			$plan_id = $student_row && isset($student_row['plan_id']) ? (int) $student_row['plan_id'] : (isset($row['plan_id']) ? (int) $row['plan_id'] : 0);
+
+			$fee_details = $this->_compute_admission_entry_details($payments, isset($row['total_fee']) ? $row['total_fee'] : 0);
+
+			$remaining_days = null;
+			if (!empty($row['entry_date'])) {
+				$admissiondate = date_create($row['entry_date']);
+				$paid_date = date_create(date('Y-m-d'));
+				if ($admissiondate && $paid_date) {
+					$diff = date_diff($admissiondate, $paid_date);
+					$remaining_days = (int) $recovery['with_in_days'] - (int) $diff->days;
+				}
+			}
+
+			$max_comision = 0;
+			if ($plan_id && isset($fee_rules[$plan_id])) {
+				$max_comision = (float) $fee_rules[$plan_id]['max_comision'];
+			}
+			$inc = (float) $incamount;
+			$incentive_for_student = ($max_comision / 100) * $inc;
+
+			$documents = array();
+			foreach ($doc_labels as $label) {
+				$documents[] = array(
+					'type' => $label,
+					'present' => !empty($doc_map[$student_id][$label]),
+				);
+			}
+
+			$row['add_by'] = $add_by;
+			$row['payment_details'] = array(
+				'total_fee' => $fee_details['total_fee'],
+				'total_created_fee' => $fee_details['total_created_fee'],
+				'total_created_council_fee' => $fee_details['total_created_council_fee'],
+				'total_fee_submitted' => $fee_details['total_fee_submitted'],
+			);
+			$row['paid_lines'] = $fee_details['paid_lines'];
+			$row['unpaid_lines'] = $fee_details['unpaid_lines'];
+			$row['paid_required'] = array(
+				'required_amount' => $recovery['min_fee_amount'],
+				'with_in_days' => $recovery['with_in_days'],
+				'received_amount' => $fee_details['total_fee_submitted'],
+				'remaining_days' => $remaining_days,
+			);
+			$row['incentive_info'] = array(
+				'max_comision' => $max_comision,
+				'slab_amount' => $inc,
+				'incentive_for_student' => $incentive_for_student,
+			);
+			$row['documents'] = $documents;
+			$row['contractor_id'] = isset($row['contractor_id']) ? (int) $row['contractor_id'] : 0;
+			$row['fee_counted'] = (float) $fee_details['total_fee_submitted'] >= (float) $recovery['min_fee_amount'];
+			$out[] = $row;
+		}
+
+		return $out;
 	}
 
 	/**
@@ -2157,13 +2478,10 @@ class Incentiveapi extends CI_Controller {
 				$counted = 0;
 				$uncounted = 0;
 				foreach ($total_paid_students as $paid) {
-					$this->db->select_sum('payments.actual_amount');
-					$this->db->from('payments');
-					$this->db->where("payments.student_id = '" . $paid['student_id'] . "'");
-					$tot = $this->db->get()->result_array();
-					if (count($tot) > 0) {
-						if ($tot[0]['actual_amount'] > $recovery['min_fee_amount']) $counted++;
-						else $uncounted++;
+					if ($this->_is_admission_fee_counted($paid['student_id'], $recovery['min_fee_amount'])) {
+						$counted++;
+					} else {
+						$uncounted++;
 					}
 				}
 				$this->db->order_by('start', 'ASC');

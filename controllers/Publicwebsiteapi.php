@@ -32,12 +32,17 @@ class Publicwebsiteapi extends CI_Controller {
 			'http://127.0.0.1:5174', 'http://127.0.0.1:5173',
 			'https://www.shahbazcollegeofpharmacy.edu.pk',
 			'https://shahbazcollegeofpharmacy.edu.pk',
+			'https://www.statecollegeofhealthsciences.com',
+			'https://statecollegeofhealthsciences.com',
 		);
 		if ($origin === '*' || in_array($origin, $allowed, true)) {
 			header('Access-Control-Allow-Origin: ' . ($origin === '*' ? '*' : $origin));
 		} elseif (preg_match('/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/', $origin)) {
 			header('Access-Control-Allow-Origin: ' . $origin);
 		} elseif (preg_match('/^https?:\/\/([a-z0-9.-]+\.)?shahbazcollegeofpharmacy\.edu\.pk$/i', $origin)) {
+			header('Access-Control-Allow-Origin: ' . $origin);
+		} elseif (preg_match('/^https?:\/\/([a-z0-9.-]+\.)?[a-z0-9.-]+\.(com|pk|edu\.pk)$/i', $origin)) {
+			// Multi-campus public sites share this API; reflect campus Origin.
 			header('Access-Control-Allow-Origin: ' . $origin);
 		}
 		header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
@@ -161,5 +166,60 @@ class Publicwebsiteapi extends CI_Controller {
 			$this->_json($result, 422);
 		}
 		$this->_json($result);
+	}
+
+	/** Public admission eligibility form options + courses that have criteria. */
+	public function eligibility_meta()
+	{
+		$this->load->library('Admission_criteria_service', null, 'admission_criteria');
+		$this->admission_criteria->seed_defaults();
+		$campus = $this->service->resolve_campus($this->_domain());
+		$courses = array();
+		if ($campus) {
+			$courses = $this->service->courses_for_campus((int)$campus['campus_id']);
+		}
+		$with_criteria = array();
+		foreach ($courses as $c) {
+			$set = $this->admission_criteria->get_set_for_course((int)$c['course_id'], false);
+			$c['has_criteria'] = $set ? true : false;
+			$c['criteria_title'] = $set ? $set['title'] : '';
+			$with_criteria[] = $c;
+		}
+		$this->_json(array(
+			'success' => true,
+			'qualification_options' => $this->admission_criteria->qualification_options(),
+			'subject_options' => $this->admission_criteria->subject_options(),
+			'courses' => $with_criteria,
+		));
+	}
+
+	/**
+	 * Match applicant profile against all active course criteria.
+	 * Body: qualification, overall_percent, subjects{}, date_of_birth, gender
+	 */
+	public function eligibility_match()
+	{
+		if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+			$this->_json(array('success' => false, 'message' => 'POST required'), 405);
+		}
+		$body = $this->_body();
+		$qualification = isset($body['qualification']) ? trim((string)$body['qualification']) : '';
+		if ($qualification === '') {
+			$this->_json(array('success' => false, 'message' => 'Qualification is required'), 422);
+		}
+		$profile = array(
+			'qualification' => $qualification,
+			'overall_percent' => isset($body['overall_percent']) ? $body['overall_percent'] : '',
+			'subjects' => isset($body['subjects']) && is_array($body['subjects']) ? $body['subjects'] : array(),
+			'date_of_birth' => isset($body['date_of_birth']) ? $body['date_of_birth'] : '',
+			'gender' => isset($body['gender']) ? $body['gender'] : '',
+			'group' => isset($body['group']) ? $body['group'] : '',
+		);
+		$this->load->library('Admission_criteria_service', null, 'admission_criteria');
+		$match = $this->admission_criteria->match_courses_for_profile($profile);
+		$this->_json(array(
+			'success' => true,
+			'data' => $match,
+		));
 	}
 }

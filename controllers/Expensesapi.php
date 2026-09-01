@@ -127,6 +127,36 @@ class Expensesapi extends CI_Controller {
         ));
     }
 
+    public function dashboard()
+    {
+        $p = $this->_perms();
+        if (empty($p['all'])) {
+            $this->_json(array('success' => false, 'message' => 'All Expenses permission required'), 403);
+        }
+
+        $filters = array_merge(
+            array(
+                'from_date' => $this->input->get('from_date'),
+                'to_date' => $this->input->get('to_date'),
+                'campus_id' => $this->input->get('campus_id'),
+            ),
+            $this->_body()
+        );
+
+        try {
+            $data = $this->service->dashboard_analytics($this->current_user, $filters);
+            $this->_json(array(
+                'success' => true,
+                'data' => $data,
+            ));
+        } catch (Exception $e) {
+            $this->_json(array(
+                'success' => false,
+                'message' => 'Dashboard failed: ' . $e->getMessage(),
+            ), 500);
+        }
+    }
+
     public function expense_history()
     {
         $p = $this->_perms();
@@ -214,6 +244,19 @@ class Expensesapi extends CI_Controller {
         $this->_json(array(
             'success' => true,
             'data' => $this->service->campus_staff($campus_id),
+        ));
+    }
+
+    public function categories_for_campus()
+    {
+        $campus_id = $this->input->get('campus_id');
+        if ($campus_id === null || $campus_id === '') {
+            $body = $this->_body();
+            $campus_id = isset($body['campus_id']) ? $body['campus_id'] : 0;
+        }
+        $this->_json(array(
+            'success' => true,
+            'data' => $this->service->categories_for_campus($campus_id),
         ));
     }
 

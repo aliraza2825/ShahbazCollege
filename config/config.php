@@ -27,7 +27,17 @@ date_default_timezone_set("Asia/Karachi");
 $root.= str_replace(basename($_SERVER['SCRIPT_NAME']), '', $_SERVER['SCRIPT_NAME']);
 $config['base_url'] = $root;*/
 
-$config['base_url'] = 'https://www.shahbazcollegeofpharmacy.edu.pk/lahore-campus/';
+// Production: auto-detect host (www / non-www). Localhost stays on :8080 for dev.
+if (isset($_SERVER['HTTP_HOST']) && (
+	strpos($_SERVER['HTTP_HOST'], 'localhost') !== false
+	|| strpos($_SERVER['HTTP_HOST'], '127.0.0.1') !== false
+)) {
+	$config['base_url'] = 'http://localhost:8080/';
+} else {
+	$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'https://';
+	$host = isset($_SERVER['HTTP_HOST']) ? $_SERVER['HTTP_HOST'] : 'shahbazcollegeofpharmacy.edu.pk';
+	$config['base_url'] = $scheme . $host . '/lahore-campus/';
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -104,7 +114,7 @@ $config['charset'] = 'UTF-8';
 | setting this variable to TRUE (boolean).  See the user guide for details.
 |
 */
-$config['enable_hooks'] = FALSE;
+$config['enable_hooks'] = TRUE;
 
 /*
 |--------------------------------------------------------------------------

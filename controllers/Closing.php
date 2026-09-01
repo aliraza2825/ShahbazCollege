@@ -74,6 +74,16 @@ class Closing extends CI_Controller {
         $this->db->group_end();
     }
 
+    private function apply_pos_not_returned_where()
+    {
+        if ($this->db->field_exists('return_status', 'products')) {
+            $this->db->group_start();
+            $this->db->where('products.return_status', 0);
+            $this->db->or_where('products.return_status IS NULL', null, false);
+            $this->db->group_end();
+        }
+    }
+
     private function get_pos_sales_rows($campus, $sold_date, $only_unclosed = true)
     {
         $this->db->select('products.*, product_names.product_name, CONCAT(users.first_name, " ", users.last_name) as sold_by_name', false);
@@ -83,6 +93,7 @@ class Closing extends CI_Controller {
         $this->db->where('products.sold', 1);
         $this->db->where('products.campus_id', $campus);
         $this->db->where('products.sold_date', $sold_date);
+        $this->apply_pos_not_returned_where();
         if ($only_unclosed) {
             $this->apply_pos_unclosed_where();
         }
@@ -97,6 +108,7 @@ class Closing extends CI_Controller {
         $this->db->where('products.sold', 1);
         $this->db->where('products.campus_id', $campus);
         $this->db->where('products.sold_date', $sold_date);
+        $this->apply_pos_not_returned_where();
         if ($only_unclosed) {
             $this->apply_pos_unclosed_where();
         }
@@ -113,6 +125,7 @@ class Closing extends CI_Controller {
         $this->db->where('products.sold', 1);
         $this->db->where('products.campus_id', $campus);
         $this->db->where('products.closing_id', $campus_closing_id);
+        $this->apply_pos_not_returned_where();
         $this->db->order_by('products.invoice_no', 'DESC');
         return $this->db->get()->result_array();
     }
@@ -124,6 +137,7 @@ class Closing extends CI_Controller {
         $this->db->where('products.sold', 1);
         $this->db->where('products.campus_id', $campus);
         $this->db->where('products.closing_id', $campus_closing_id);
+        $this->apply_pos_not_returned_where();
         $row = $this->db->get()->result_array();
         return (float)@$row[0]['total'];
     }
@@ -812,6 +826,12 @@ class Closing extends CI_Controller {
         $this->db->where('sold', 1);
         $this->db->where('campus_id', $cam_id);
         $this->db->where_in('sold_date', $pos_dates);
+        if ($this->db->field_exists('return_status', 'products')) {
+            $this->db->group_start();
+            $this->db->where('return_status', 0);
+            $this->db->or_where('return_status IS NULL', null, false);
+            $this->db->group_end();
+        }
         $this->apply_pos_unclosed_where();
         $this->db->update('products');
 

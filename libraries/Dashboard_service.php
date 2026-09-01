@@ -240,15 +240,44 @@ class Dashboard_service {
         $rows = $this->ci->dashboards->getReminders();
         $out = array();
         foreach ($rows as $r) {
+            $image_url = '';
+            if (!empty($r['online_image'])) {
+                $bucket = 'https://shahbazcollegeofpharmacy.s3.amazonaws.com';
+                $cloudfront = 'https://d10iw6eujrfvyr.cloudfront.net';
+                $image_url = str_replace($bucket, $cloudfront, $r['online_image']);
+            } elseif (!empty($r['image'])) {
+                $image_url = rtrim(base_url(), '/').'/reminder_images/'.$r['image'];
+            }
             $out[] = array(
                 'reminder_id' => (int) $r['reminder_id'],
                 'note' => isset($r['note']) ? $r['note'] : '',
                 'date' => isset($r['date']) ? $r['date'] : '',
                 'status' => isset($r['status']) ? $r['status'] : '',
                 'add_by' => isset($r['add_by']) ? $r['add_by'] : '',
+                'image_url' => $image_url,
             );
         }
         return $out;
+    }
+
+    /** Mark dashboard reminder completed (legacy dashboard/update_reminder). */
+    public function complete_home_reminder($user, $reminder_id)
+    {
+        $reminder_id = (int) $reminder_id;
+        if (!$reminder_id || !$user || empty($user['user_id'])) {
+            return array('success' => false, 'message' => 'Invalid reminder');
+        }
+        $row = $this->ci->db->get_where('reminder', array(
+            'reminder_id' => $reminder_id,
+            'user_id' => (int) $user['user_id'],
+        ))->row_array();
+        if (!$row) {
+            return array('success' => false, 'message' => 'Reminder not found');
+        }
+        $this->ci->db->set('status', 'Completed');
+        $this->ci->db->where('reminder_id', $reminder_id);
+        $this->ci->db->update('reminder');
+        return array('success' => true, 'message' => 'Status updated successfully');
     }
 
     /** Teacher's assigned lectures (legacy dashboard "My Lectures"). */
