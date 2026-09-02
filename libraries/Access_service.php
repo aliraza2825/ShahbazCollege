@@ -267,6 +267,201 @@ class Access_service {
         return array('sections' => $sections);
     }
 
+    /**
+     * Reverse report: which users / designations have each permission.
+     * GET params: q (search), section (title filter), field (selected key for assignee lists).
+     */
+    public function who_has_report($q = '', $section_filter = '', $field = '')
+    {
+        $schema = $this->parse_schema();
+        $q = strtolower(trim((string) $q));
+        $section_filter = trim((string) $section_filter);
+        $field = trim((string) $field);
+
+        $db_col = function ($form_name) {
+            if ($form_name === 'subject_ids') {
+                return 'test_engine_subject_ids';
+            }
+            if ($form_name === 'loans') {
+                return 'loan_approval';
+            }
+            return $form_name;
+        };
+
+        $is_granted = function ($row, $form_name, $type) use ($db_col) {
+            $col = $db_col($form_name);
+            $val = null;
+            if (array_key_exists($col, $row)) {
+                $val = $row[$col];
+            } elseif (array_key_exists($form_name, $row)) {
+                $val = $row[$form_name];
+            }
+            if ($type === 'multiselect') {
+                if ($val === null || $val === '' || $val === '0') {
+                    return false;
+                }
+                if (is_array($val)) {
+                    return count(array_filter($val, 'strlen')) > 0;
+                }
+                return trim((string) $val) !== '';
+            }
+            return $val === 1 || $val === '1' || $val === true;
+        };
+
+        $scope_summary = function ($row, $form_name, $type) use ($db_col) {
+            if ($type !== 'multiselect') {
+                return '';
+            }
+            $col = $db_col($form_name);
+            $raw = '';
+            if (array_key_exists($col, $row) && $row[$col] !== null && $row[$col] !== '') {
+                $raw = is_array($row[$col]) ? implode(',', $row[$col]) : (string) $row[$col];
+            } elseif (array_key_exists($form_name, $row) && $row[$form_name] !== null && $row[$form_name] !== '') {
+                $raw = is_array($row[$form_name]) ? implode(',', $row[$form_name]) : (string) $row[$form_name];
+            }
+            $ids = array_values(array_filter(array_map('trim', explode(',', $raw)), 'strlen'));
+            if (!count($ids)) {
+                return '';
+            }
+            $shown = array_slice($ids, 0, 6);
+            $extra = count($ids) - count($shown);
+            $text = implode(', ', $shown);
+            if ($extra > 0) {
+                $text .= ' +' . $extra . ' more';
+            }
+            return $text;
+        };
+
+        $access_rows = array();
+        if ($this->ci->db->table_exists('access')) {
+            $this->ci->db->select(
+                'access.*, users.user_id AS _uid, users.first_name, users.last_name, campuses.campus_name',
+                false
+            );
+            $this->ci->db->from('access');
+            $this->ci->db->join('users', 'users.user_id = access.user_id', 'inner');
+            $this->ci->db->join('campuses', 'campuses.campus_id = users.campus_id', 'left');
+            $this->ci->db->where('users.status', '1');
+            $this->ci->db->order_by('users.first_name', 'ASC');
+            $this->ci->db->order_by('users.last_name', 'ASC');
+            $access_rows = $this->ci->db->get()->result_array();
+        }
+
+        $rule_rows = array();
+        if ($this->ci->db->table_exists('access_rules')) {
+            $this->ci->db->select(
+                'access_rules.*, designations.designation_id AS _did, designations.designation_name, departments.department_name',
+                false
+            );
+            $this->ci->db->from('access_rules');
+            $this->ci->db->join('designations', 'designations.designation_id = access_rules.designation_id', 'inner');
+            $this->ci->db->join('departments', 'departments.department_id = designations.department_id', 'left');
+            $this->ci->db->order_by('departments.department_name', 'ASC');
+            $this->ci->db->order_by('designations.designation_name', 'ASC');
+            $rule_rows = $this->ci->db->get()->result_array();
+        }
+
+        $sections_out = array();
+        $selected_meta = null;
+        $selected_users = array();
+        $selected_designations = array();
+
+        foreach ($schema['sections'] as $section) {
+            $title = isset($section['title']) ? $section['title'] : '';
+            if ($section_filter !== '' && strcasecmp($title, $section_filter) !== 0) {
+                continue;
+            }
+            $fields_out = array();
+            foreach ($section['fields'] as $f) {
+                $name = isset($f['name']) ? $f['name'] : '';
+                $label = isset($f['label']) ? $f['label'] : $name;
+                $type = isset($f['type']) ? $f['type'] : 'checkbox';
+                if ($name === '') {
+                    continue;
+                }
+                if ($q !== '') {
+                    $hay = strtolower($label . ' ' . $name . ' ' . $title);
+                    if (strpos($hay, $q) === false) {
+                        continue;
+                    }
+                }
+
+                $user_count = 0;
+                $desig_count = 0;
+                foreach ($access_rows as $row) {
+                    if ($is_granted($row, $name, $type)) {
+                        $user_count++;
+                    }
+                }
+                foreach ($rule_rows as $row) {
+                    if ($is_granted($row, $name, $type)) {
+                        $desig_count++;
+                    }
+                }
+
+                if ($user_count === 0 && $desig_count === 0) {
+                    continue;
+                }
+
+                $fields_out[] = array(
+                    'name' => $name,
+                    'label' => $label,
+                    'type' => $type,
+                    'optionsKey' => isset($f['optionsKey']) ? $f['optionsKey'] : null,
+                    'user_count' => $user_count,
+                    'designation_count' => $desig_count,
+                );
+
+                if ($field !== '' && $field === $name) {
+                    $selected_meta = array(
+                        'name' => $name,
+                        'label' => $label,
+                        'type' => $type,
+                        'section' => $title,
+                        'user_count' => $user_count,
+                        'designation_count' => $desig_count,
+                    );
+                    foreach ($access_rows as $row) {
+                        if (!$is_granted($row, $name, $type)) {
+                            continue;
+                        }
+                        $selected_users[] = array(
+                            'user_id' => (int) (isset($row['_uid']) ? $row['_uid'] : (isset($row['user_id']) ? $row['user_id'] : 0)),
+                            'name' => trim(
+                                (isset($row['first_name']) ? $row['first_name'] : '') . ' ' .
+                                (isset($row['last_name']) ? $row['last_name'] : '')
+                            ),
+                            'campus_name' => isset($row['campus_name']) ? $row['campus_name'] : '',
+                            'scope_summary' => $scope_summary($row, $name, $type),
+                        );
+                    }
+                    foreach ($rule_rows as $row) {
+                        if (!$is_granted($row, $name, $type)) {
+                            continue;
+                        }
+                        $dept = isset($row['department_name']) ? $row['department_name'] : '';
+                        $dname = isset($row['designation_name']) ? $row['designation_name'] : '';
+                        $selected_designations[] = array(
+                            'designation_id' => (int) (isset($row['_did']) ? $row['_did'] : (isset($row['designation_id']) ? $row['designation_id'] : 0)),
+                            'label' => trim($dept . ($dept !== '' && $dname !== '' ? ' · ' : '') . $dname),
+                            'scope_summary' => $scope_summary($row, $name, $type),
+                        );
+                    }
+                }
+            }
+            if (count($fields_out)) {
+                $sections_out[] = array('title' => $title, 'fields' => $fields_out);
+            }
+        }
+
+        return array(
+            'sections' => $sections_out,
+            'field' => $selected_meta,
+            'users' => $selected_users,
+            'designations' => $selected_designations,
+        );
+    }
+
     private function humanize_field($name)
     {
         return ucwords(str_replace('_', ' ', $name));

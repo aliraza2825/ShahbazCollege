@@ -145,4 +145,18 @@ class Accessapi extends CI_Controller {
 		}
 		$this->_json($result);
 	}
+
+	/** Permission → users / designations reverse report */
+	public function who_has()
+	{
+		$q = $this->input->get('q');
+		$section = $this->input->get('section');
+		$field = $this->input->get('field');
+		$data = $this->service->who_has_report(
+			$q ? $q : '',
+			$section ? $section : '',
+			$field ? $field : ''
+		);
+		$this->_json(array_merge(array('success' => true), $data));
+	}
 }
