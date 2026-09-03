@@ -54,4 +54,9 @@ class Payroll_service {
     {
         return $this->salary->fetch_salary_slip_data($user_id, $month, $year);
     }
+
+    public function calculate_income_tax_for_amount($monthly_taxable_salary, $payroll_date)
+    {
+        return $this->salary->calculate_income_tax_for_amount($monthly_taxable_salary, $payroll_date);
+    }
 }

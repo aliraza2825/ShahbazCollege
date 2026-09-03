@@ -3436,6 +3436,44 @@ class Hrapi extends CI_Controller {
 		}
 	}
 
+	/**
+	 * POST/GET: calculate monthly income tax from payroll tax slabs.
+	 * Body/query: monthly_taxable_salary, payroll_date (Y-m-d) OR month + year
+	 */
+	public function calculate_income_tax()
+	{
+		$body = $this->_body();
+		if (!is_array($body)) {
+			$body = array();
+		}
+		$monthly = isset($body['monthly_taxable_salary'])
+			? $body['monthly_taxable_salary']
+			: $this->input->get('monthly_taxable_salary');
+		$monthly = (float) $monthly;
+
+		$payroll_date = isset($body['payroll_date']) ? $body['payroll_date'] : $this->input->get('payroll_date');
+		if (!$payroll_date) {
+			$month = isset($body['month']) ? $body['month'] : $this->input->get('month');
+			$year = isset($body['year']) ? $body['year'] : $this->input->get('year');
+			if ($month !== null && $month !== '' && $year !== null && $year !== '') {
+				$ts = strtotime($year . '-' . $month . '-01');
+				if (!$ts) {
+					$ts = strtotime('1 ' . $month . ' ' . $year);
+				}
+				$payroll_date = $ts ? date('Y-m-t', $ts) : date('Y-m-d');
+			} else {
+				$payroll_date = date('Y-m-d');
+			}
+		}
+
+		try {
+			$result = $this->_payroll_service()->calculate_income_tax_for_amount($monthly, $payroll_date);
+			$this->_json(array('success' => true, 'data' => $result, 'payroll_date' => $payroll_date));
+		} catch (Exception $e) {
+			$this->_json(array('success' => false, 'message' => $e->getMessage()), 500);
+		}
+	}
+
 	public function salary_view($user_id = 0, $month = '', $year = '')
 	{
 		$user_id = (int) $user_id;

@@ -796,8 +796,19 @@ class Salary  extends CI_Controller{
         return array(
             'amount' => round($annual_tax / 12, 2),
             'tax_year_id' => $tax_year['id'],
-            'tax_slab_id' => $slab['id']
+            'tax_slab_id' => $slab['id'],
+            'monthly_taxable_salary' => (float) $monthly_taxable_salary,
+            'annual_income' => (float) $annual_income,
+            'annual_tax' => (float) $annual_tax,
         );
+    }
+
+    /**
+     * Public wrapper for Hrapi — tax from slab for a monthly taxable amount.
+     */
+    public function calculate_income_tax_for_amount($monthly_taxable_salary, $payroll_date)
+    {
+        return $this->calculate_income_tax_amount($monthly_taxable_salary, $payroll_date);
     }
 
     private function post_minimum_salary_adjustment_to_pettycash($user_id, $campus_id, $amount, $month, $year, $payroll_id, $is_reversal = false)
