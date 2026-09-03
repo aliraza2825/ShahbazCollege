@@ -2811,6 +2811,123 @@ class Hrapi extends CI_Controller {
 	// Loans (ports Loans::insert_loan / loans_approval)
 	// ------------------------------------------------------------------
 
+	private function _loan_has_external_schema()
+	{
+		return $this->db->field_exists('is_external', 'loans');
+	}
+
+	private function _loan_is_external($loan)
+	{
+		if (!$loan || !is_array($loan)) {
+			return false;
+		}
+		if ($this->_loan_has_external_schema() && !empty($loan['is_external'])) {
+			return true;
+		}
+		return (int)(isset($loan['user_id']) ? $loan['user_id'] : 0) === 0
+			&& trim((string)(isset($loan['borrower_name']) ? $loan['borrower_name'] : '')) !== '';
+	}
+
+	private function _loan_borrower_staff_payload($loan, $user = null)
+	{
+		if ($this->_loan_is_external($loan)) {
+			return array(
+				'user_id' => 0,
+				'is_external' => true,
+				'first_name' => isset($loan['borrower_name']) ? $loan['borrower_name'] : '',
+				'last_name' => '',
+				'father_name' => isset($loan['borrower_father_name']) ? $loan['borrower_father_name'] : '',
+				'cnic' => isset($loan['borrower_cnic']) ? $loan['borrower_cnic'] : '',
+				'mobile' => isset($loan['borrower_mobile']) ? $loan['borrower_mobile'] : '',
+				'emergency_no' => '',
+				'address' => isset($loan['borrower_address']) ? $loan['borrower_address'] : '',
+			);
+		}
+		if (!$user || !is_array($user)) {
+			return null;
+		}
+		return array(
+			'user_id' => (int)$user['user_id'],
+			'is_external' => false,
+			'first_name' => isset($user['first_name']) ? $user['first_name'] : '',
+			'last_name' => isset($user['last_name']) ? $user['last_name'] : '',
+			'father_name' => isset($user['father_name']) ? $user['father_name'] : '',
+			'cnic' => isset($user['cnic']) ? $user['cnic'] : '',
+			'mobile' => isset($user['mobile']) ? $user['mobile'] : '',
+			'emergency_no' => isset($user['emergency_no']) ? $user['emergency_no'] : '',
+			'address' => '',
+		);
+	}
+
+	private function _loan_petty_cash_options()
+	{
+		if (!$this->db->table_exists('petty_cash_college_wise')) {
+			return array();
+		}
+		$this->db->select(
+			'petty_cash_college_wise.id AS pettycash_id, petty_cash_college_wise.campus_id,
+			 campuses.campus_name, users.first_name, users.last_name',
+			false
+		);
+		$this->db->from('petty_cash_college_wise');
+		$this->db->join('campuses', 'campuses.campus_id = petty_cash_college_wise.campus_id', 'left');
+		$this->db->join('users', 'users.user_id = petty_cash_college_wise.assign_to', 'left');
+		$this->db->where('petty_cash_college_wise.petty_status', 1);
+		$this->db->order_by('campuses.campus_name', 'asc');
+		$rows = $this->db->get()->result_array();
+		$out = array();
+		foreach ($rows as $row) {
+			$name = trim(
+				(isset($row['first_name']) ? $row['first_name'] : '') . ' ' .
+				(isset($row['last_name']) ? $row['last_name'] : '')
+			);
+			$campus = trim(isset($row['campus_name']) ? $row['campus_name'] : '');
+			$label = $name !== '' ? $name : ('Petty #' . (int)$row['pettycash_id']);
+			if ($campus !== '') {
+				$label .= ' · ' . $campus;
+			}
+			$out[] = array(
+				'pettycash_id' => (int)$row['pettycash_id'],
+				'campus_id' => (int)(isset($row['campus_id']) ? $row['campus_id'] : 0),
+				'campus_name' => $campus,
+				'label' => $label,
+			);
+		}
+		return $out;
+	}
+
+	private function _loan_credit_petty_cash($pettycash_id, $amount, $reason)
+	{
+		$petty = $this->db->get_where('petty_cash_college_wise', array(
+			'id' => (int)$pettycash_id,
+			'petty_status' => 1,
+		))->row_array();
+		if (!$petty) {
+			return array('ok' => false, 'message' => 'Petty cash account not found');
+		}
+		$amount = round((float)$amount, 2);
+		if ($amount <= 0) {
+			return array('ok' => false, 'message' => 'Invalid amount');
+		}
+		$this->db->set('remaining_amount', 'remaining_amount + ' . $amount, false);
+		$this->db->where('id', (int)$petty['id']);
+		$this->db->update('petty_cash_college_wise');
+		if ($this->db->table_exists('petty_cash_history')) {
+			$this->db->insert('petty_cash_history', array(
+				'campus_id' => (int)(isset($petty['campus_id']) ? $petty['campus_id'] : 0),
+				'user_id' => (int)(isset($petty['assign_to']) ? $petty['assign_to'] : 0),
+				'amount_given' => $amount,
+				'debit_credit' => 'D',
+				'transaction_pettycash_account' => (int)$petty['id'],
+				'status' => '1',
+				'reason' => $reason,
+				'transaction_by' => $this->_current_user_name(),
+				'created_at' => date('Y-m-d H:i:s'),
+			));
+		}
+		return array('ok' => true, 'pettycash_id' => (int)$petty['id']);
+	}
+
 	/** Installment included in a daily closing counts as paid even if amount_paid is still 0. */
 	private function _loan_installment_has_closing($inst)
 	{
@@ -2865,6 +2982,9 @@ class Hrapi extends CI_Controller {
 					(isset($payroll['payroll_month']) ? $payroll['payroll_month'] : '')
 				);
 			}
+		} elseif (!empty($inst['paid_at']) && $inst['paid_at'] === 'petty') {
+			$petty_id = isset($inst['pettycash_id']) ? (int)$inst['pettycash_id'] : 0;
+			$paid_details = $petty_id > 0 ? ('Petty Cash #' . $petty_id) : 'Petty Cash';
 		} elseif (
 			$this->_loan_installment_has_closing($inst)
 			|| (!empty($inst['paid_at']) && $inst['paid_at'] === 'cash')
@@ -2890,13 +3010,18 @@ class Hrapi extends CI_Controller {
 		$user_filter = $this->input->get('user_id');
 		$can_approve = $this->_is_admin() || $this->_access_flag('loan_approval');
 		$remaining_sql = '(SELECT COUNT(*) FROM loan_plan lp WHERE lp.loan_id = loans.id AND ' . $this->_loan_plan_unpaid_sql('lp') . ')';
+		$has_external = $this->_loan_has_external_schema();
+		$name_sql = $has_external
+			? "COALESCE(NULLIF(TRIM(loans.borrower_name), ''), CONCAT(users.first_name, ' ', users.last_name))"
+			: "CONCAT(users.first_name, ' ', users.last_name)";
 
 		$this->db->select(
-			'loans.*, users.first_name, users.last_name, ' . $remaining_sql . ' AS remaining_installments',
+			'loans.*, users.first_name, users.last_name, ' . $name_sql . ' AS borrower_display_name, '
+			. $remaining_sql . ' AS remaining_installments',
 			false
 		);
 		$this->db->from('loans');
-		$this->db->join('users', 'loans.user_id=users.user_id', 'inner');
+		$this->db->join('users', 'loans.user_id=users.user_id', $has_external ? 'left' : 'inner');
 
 		if (!$can_approve) {
 			$this->db->where('loans.user_id', (int)$this->current_user['user_id']);
@@ -2949,10 +3074,15 @@ class Hrapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Forbidden'), 403);
 		}
 
-		$user = $this->db->get_where('users', array('user_id' => (int)$loan['user_id']))->row_array();
-		if (!$user) {
-			$this->_json(array('success' => false, 'message' => 'Staff not found'), 404);
+		$is_external = $this->_loan_is_external($loan);
+		$user = null;
+		if (!$is_external) {
+			$user = $this->db->get_where('users', array('user_id' => (int)$loan['user_id']))->row_array();
+			if (!$user) {
+				$this->_json(array('success' => false, 'message' => 'Staff not found'), 404);
+			}
 		}
+		$staff_payload = $this->_loan_borrower_staff_payload($loan, $user);
 
 		$this->db->from('loan_plan');
 		$this->db->where('loan_id', $id);
@@ -3006,15 +3136,8 @@ class Hrapi extends CI_Controller {
 			'success' => true,
 			'data' => array(
 				'loan' => $loan,
-				'staff' => array(
-					'user_id' => (int)$user['user_id'],
-					'first_name' => isset($user['first_name']) ? $user['first_name'] : '',
-					'last_name' => isset($user['last_name']) ? $user['last_name'] : '',
-					'father_name' => isset($user['father_name']) ? $user['father_name'] : '',
-					'cnic' => isset($user['cnic']) ? $user['cnic'] : '',
-					'mobile' => isset($user['mobile']) ? $user['mobile'] : '',
-					'emergency_no' => isset($user['emergency_no']) ? $user['emergency_no'] : '',
-				),
+				'staff' => $staff_payload,
+				'is_external' => $is_external,
 				'summary' => array(
 					'total_loan' => $total_loan,
 					'remaining_loan' => $remaining_loan,
@@ -3022,6 +3145,7 @@ class Hrapi extends CI_Controller {
 				),
 				'installments' => $out_installments,
 				'closing_campuses' => $closing_campuses,
+				'petty_cash_accounts' => $is_external ? $this->_loan_petty_cash_options() : array(),
 			),
 		));
 	}
@@ -3032,17 +3156,33 @@ class Hrapi extends CI_Controller {
 		$body = $this->_body();
 		$installment_ids = isset($body['installment_ids']) ? $body['installment_ids'] : array();
 		$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+		$pettycash_id = isset($body['pettycash_id']) ? (int)$body['pettycash_id'] : 0;
+		$payment_method = isset($body['payment_method']) ? strtolower(trim((string)$body['payment_method'])) : 'closing';
+		if ($payment_method === '' || $payment_method === 'cash') {
+			$payment_method = 'closing';
+		}
 
 		if (!$loan_id || !is_array($installment_ids) || !count($installment_ids)) {
 			$this->_json(array('success' => false, 'message' => 'loan_id and installment_ids required'), 422);
-		}
-		if (!$campus_id) {
-			$this->_json(array('success' => false, 'message' => 'campus_id required'), 422);
 		}
 
 		$loan = $this->db->get_where('loans', array('id' => $loan_id, 'status' => 1))->row_array();
 		if (!$loan) {
 			$this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
+		}
+
+		$is_external = $this->_loan_is_external($loan);
+		if ($payment_method === 'petty') {
+			if (!$is_external) {
+				$this->_json(array('success' => false, 'message' => 'Petty cash receive is only for external loans'), 422);
+			}
+			if (!$pettycash_id) {
+				$this->_json(array('success' => false, 'message' => 'pettycash_id required'), 422);
+			}
+		} else {
+			if (!$campus_id) {
+				$this->_json(array('success' => false, 'message' => 'campus_id required'), 422);
+			}
 		}
 
 		$ids = array();
@@ -3057,15 +3197,56 @@ class Hrapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'No valid installment ids'), 422);
 		}
 
-		$this->db->set('amount_paid', 'amount', false);
-		$this->db->set('paid_at', 'cash');
-		$this->db->set('paid_date', date('Y-m-d'));
-		$this->db->set('campus_id', $campus_id);
+		$this->db->from('loan_plan');
 		$this->db->where('loan_id', $loan_id);
 		$this->db->where_in('id', $ids);
 		$this->db->where('(amount_paid IS NULL OR amount_paid = 0 OR amount_paid = "")', null, false);
 		$this->db->where('(closing_id IS NULL OR closing_id = "" OR closing_id = "0")', null, false);
-		$this->db->update('loan_plan');
+		$to_pay = $this->db->get()->result_array();
+		if (!count($to_pay)) {
+			$this->_json(array('success' => false, 'message' => 'No installments updated'), 422);
+		}
+
+		$total_amount = 0.0;
+		foreach ($to_pay as $inst) {
+			$total_amount += (float)(isset($inst['amount']) ? $inst['amount'] : 0);
+		}
+
+		if ($payment_method === 'petty') {
+			$borrower = trim((string)(isset($loan['borrower_name']) ? $loan['borrower_name'] : 'External'));
+			$credit = $this->_loan_credit_petty_cash(
+				$pettycash_id,
+				$total_amount,
+				'Loan installment received — ' . $borrower . ' (Loan #' . $loan_id . ')'
+			);
+			if (empty($credit['ok'])) {
+				$this->_json(array(
+					'success' => false,
+					'message' => isset($credit['message']) ? $credit['message'] : 'Petty cash update failed',
+				), 422);
+			}
+			$this->db->set('amount_paid', 'amount', false);
+			$this->db->set('paid_at', 'petty');
+			$this->db->set('paid_date', date('Y-m-d'));
+			if ($this->db->field_exists('pettycash_id', 'loan_plan')) {
+				$this->db->set('pettycash_id', (int)$credit['pettycash_id']);
+			}
+			$this->db->where('loan_id', $loan_id);
+			$this->db->where_in('id', $ids);
+			$this->db->where('(amount_paid IS NULL OR amount_paid = 0 OR amount_paid = "")', null, false);
+			$this->db->where('(closing_id IS NULL OR closing_id = "" OR closing_id = "0")', null, false);
+			$this->db->update('loan_plan');
+		} else {
+			$this->db->set('amount_paid', 'amount', false);
+			$this->db->set('paid_at', 'cash');
+			$this->db->set('paid_date', date('Y-m-d'));
+			$this->db->set('campus_id', $campus_id);
+			$this->db->where('loan_id', $loan_id);
+			$this->db->where_in('id', $ids);
+			$this->db->where('(amount_paid IS NULL OR amount_paid = 0 OR amount_paid = "")', null, false);
+			$this->db->where('(closing_id IS NULL OR closing_id = "" OR closing_id = "0")', null, false);
+			$this->db->update('loan_plan');
+		}
 
 		if ($this->db->affected_rows() <= 0) {
 			$this->_json(array('success' => false, 'message' => 'No installments updated'), 422);
@@ -3079,14 +3260,50 @@ class Hrapi extends CI_Controller {
 		$body = $this->_body();
 		$loan_type = isset($body['loan_type']) ? $body['loan_type'] : (isset($body['type']) ? $body['type'] : 'LOAN');
 		$can_apply_for_others = $this->_is_admin() || $this->_access_flag('loan_approval');
+		$is_external = $this->_loan_has_external_schema() && !empty($body['is_external']);
 		$user_id = isset($body['user_id']) ? (int)$body['user_id'] : 0;
-		if (!$can_apply_for_others) {
-			$user_id = (int)$this->current_user['user_id'];
-		}
 		$in_month = isset($body['in_month']) ? (int)$body['in_month'] : 1;
 		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
 		$reason = isset($body['reason']) ? $body['reason'] : '';
 
+		if ($is_external) {
+			if (!$can_apply_for_others) {
+				$this->_json(array('success' => false, 'message' => 'Only HR can create external person loans'), 403);
+			}
+			$borrower_name = trim((string)(isset($body['borrower_name']) ? $body['borrower_name'] : ''));
+			if ($borrower_name === '' || $amount <= 0) {
+				$this->_json(array('success' => false, 'message' => 'borrower_name and amount required'), 422);
+			}
+			$borrower_cnic = trim((string)(isset($body['borrower_cnic']) ? $body['borrower_cnic'] : ''));
+			if ($borrower_cnic !== '') {
+				$this->db->from('loans');
+				$this->db->where('is_external', 1);
+				$this->db->where('borrower_cnic', $borrower_cnic);
+				$this->db->where('(status = 0 OR (status = 1 AND cash_given IS NULL))', null, false);
+				if ($this->db->count_all_results() > 0) {
+					$this->_json(array('success' => false, 'message' => 'This person already has a pending loan application'), 422);
+				}
+			}
+			$this->db->set('type', $loan_type);
+			$this->db->set('user_id', 0);
+			$this->db->set('is_external', 1);
+			$this->db->set('borrower_name', $borrower_name);
+			$this->db->set('borrower_father_name', trim((string)(isset($body['borrower_father_name']) ? $body['borrower_father_name'] : '')));
+			$this->db->set('borrower_cnic', $borrower_cnic);
+			$this->db->set('borrower_mobile', trim((string)(isset($body['borrower_mobile']) ? $body['borrower_mobile'] : '')));
+			$this->db->set('borrower_address', trim((string)(isset($body['borrower_address']) ? $body['borrower_address'] : '')));
+			$this->db->set('amount_applied', $amount);
+			$this->db->set('months', $in_month);
+			$this->db->set('reason', $reason);
+			$this->db->set('created_by', $this->current_user['user_id']);
+			$this->db->set('undertaken_img', '');
+			$this->db->insert('loans');
+			$this->_json(array('success' => true, 'id' => (int)$this->db->insert_id()));
+		}
+
+		if (!$can_apply_for_others) {
+			$user_id = (int)$this->current_user['user_id'];
+		}
 		if (!$user_id || $amount <= 0) $this->_json(array('success' => false, 'message' => 'user_id and amount required'), 422);
 
 		$already = $this->db->get_where('loans', "user_id = $user_id and (status = 0 or (status = 1 and cash_given IS NULL))")->result_array();
@@ -3094,6 +3311,9 @@ class Hrapi extends CI_Controller {
 
 		$this->db->set('type', $loan_type);
 		$this->db->set('user_id', $user_id);
+		if ($this->_loan_has_external_schema()) {
+			$this->db->set('is_external', 0);
+		}
 		$this->db->set('amount_applied', $amount);
 		$this->db->set('months', $in_month);
 		$this->db->set('reason', $reason);

@@ -382,12 +382,60 @@ class Incentiveapi extends CI_Controller {
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
-	public function courses()
+	private function _normalize_recovery_task_row($row)
 	{
+		if (!is_array($row)) return $row;
+		if (
+			(!isset($row['fine_amount_percentage']) || $row['fine_amount_percentage'] === '' || $row['fine_amount_percentage'] === null)
+			&& isset($row['fine_percentage'])
+		) {
+			$row['fine_amount_percentage'] = $row['fine_percentage'];
+		}
+		return $row;
+	}
+
+	private function _courses_for_campuses($campus_ids)
+	{
+		$this->db->from('courses');
 		if ($this->db->field_exists('status', 'courses')) {
 			$this->db->where('status', 1);
 		}
-		$rows = $this->db->get('courses')->result_array();
+		if (is_array($campus_ids) && count($campus_ids) && $this->db->field_exists('campus_ids', 'courses')) {
+			$this->db->group_start();
+			$first = true;
+			foreach ($campus_ids as $cid) {
+				$cid = (int)$cid;
+				if ($cid <= 0) continue;
+				$clause = "FIND_IN_SET('" . $cid . "', campus_ids) > 0";
+				if ($first) {
+					$this->db->where($clause, null, false);
+					$first = false;
+				} else {
+					$this->db->or_where($clause, null, false);
+				}
+			}
+			$this->db->group_end();
+		}
+		return $this->db->order_by('course_name', 'ASC')->get()->result_array();
+	}
+
+  public function courses()
+  {
+		$campus_ids_param = $this->input->get('campus_ids');
+		$campus_id = $this->input->get('campus_id');
+
+		if ($campus_ids_param !== null && $campus_ids_param !== '') {
+			$ids = is_array($campus_ids_param) ? $campus_ids_param : explode(',', (string)$campus_ids_param);
+			$campus_ids = $this->_ids_from_csv(implode(',', $ids));
+		} elseif ($campus_id !== null && $campus_id !== '') {
+			$campus_ids = array((int)$campus_id);
+		} else {
+			$campus_ids = array();
+		}
+
+		$rows = count($campus_ids)
+			? $this->_courses_for_campuses($campus_ids)
+			: $this->_courses_for_campuses(array());
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
@@ -399,7 +447,10 @@ class Incentiveapi extends CI_Controller {
 	{
 		$this->_assert_manage();
 
-		$this->db->select('*');
+		$this->db->select(
+			'recovery_management.*, designations.designation_name, departments.department_name',
+			false
+		);
 		$this->db->from('recovery_management');
 		$this->db->join('designations', 'recovery_management.designation_id=designations.designation_id', 'INNER');
 		$this->db->join('departments', 'designations.department_id=departments.department_id', 'INNER');
@@ -415,6 +466,7 @@ class Incentiveapi extends CI_Controller {
 
 	private function _enrich_recovery_row($row)
 	{
+		$row = $this->_normalize_recovery_task_row($row);
 		$campus_ids = $this->_ids_from_csv($row['campus_ids']);
 		$course_ids = $this->_ids_from_csv($row['course_id']);
 
@@ -453,6 +505,7 @@ class Incentiveapi extends CI_Controller {
 			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
 			$row = $this->db->get_where('recovery_management', array('recovery_management_id' => $id))->row_array();
 			if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+			$row = $this->_normalize_recovery_task_row($row);
 			$rules = $this->db->get_where('recovery_management_rules', array('recovery_management_id' => $id))->result_array();
 			$row['campus_ids_arr'] = $this->_ids_from_csv($row['campus_ids']);
 			$row['course_id_arr'] = $this->_ids_from_csv($row['course_id']);
@@ -504,9 +557,14 @@ class Incentiveapi extends CI_Controller {
 				if (!$exists) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
 
 				$campus_ids = $this->_csv_ids(isset($body['campus_ids']) ? $body['campus_ids'] : array());
+				$course_id_in = isset($body['course_id']) ? $body['course_id'] : array();
+				$course_id = is_array($course_id_in) ? $this->_csv_ids($course_id_in) : $exists['course_id'];
+				$designation_id = isset($body['designation_id']) ? $body['designation_id'] : $exists['designation_id'];
 				$min_fine_amount = isset($body['min_fine_amount']) ? $body['min_fine_amount'] : $exists['min_fine_amount'];
 				$fine_amount_percentage = isset($body['fine_amount_percentage']) ? $body['fine_amount_percentage'] : $exists['fine_amount_percentage'];
 
+				$this->db->set('designation_id', $designation_id);
+				$this->db->set('course_id', $course_id);
 				$this->db->set('min_fine_amount', $min_fine_amount);
 				$this->db->set('fine_amount_percentage', $fine_amount_percentage);
 				$this->db->set('campus_ids', $campus_ids);

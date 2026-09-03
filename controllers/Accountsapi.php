@@ -6441,14 +6441,18 @@ class Accountsapi extends CI_Controller {
 		if (!$this->_table_exists('loans')) {
 			$this->_json(array('success' => true, 'loans' => array()));
 		}
+		$has_external = $this->_field_exists('loans', 'is_external');
+		$name_sql = $has_external
+			? "COALESCE(NULLIF(TRIM(loans.borrower_name), ''), CONCAT(users.first_name, ' ', users.last_name))"
+			: "CONCAT(users.first_name, ' ', users.last_name)";
 		$rows = $this->db->query(
 			"SELECT loans.*,
 					users.first_name, users.last_name, users.cnic, users.mobile, users.emergency_no,
 					users.campus_id AS user_campus_id,
-					CONCAT(users.first_name,' ',users.last_name) AS staff_name,
+					" . $name_sql . " AS staff_name,
 					CONCAT(COALESCE(approver.first_name,''),' ',COALESCE(approver.last_name,'')) AS approved_by_name
 			 FROM loans
-			 INNER JOIN users ON loans.user_id = users.user_id
+			 " . ($has_external ? 'LEFT' : 'INNER') . " JOIN users ON loans.user_id = users.user_id
 			 LEFT JOIN users approver ON approver.user_id = loans.updated_by
 			 WHERE loans.status = 1 AND loans.cash_given IS NULL
 			 ORDER BY loans.id DESC"
@@ -6532,14 +6536,21 @@ class Accountsapi extends CI_Controller {
 
 		$campus_id = isset($this->current_user['campus_id']) ? (int)$this->current_user['campus_id'] : 0;
 		$cat = (isset($loan['type']) && $loan['type'] === 'ADVANCE') ? '30' : '31';
+		$is_external = $this->_field_exists('loans', 'is_external')
+			&& (!empty($loan['is_external']) || ((int)(isset($loan['user_id']) ? $loan['user_id'] : 0) === 0 && trim((string)(isset($loan['borrower_name']) ? $loan['borrower_name'] : '')) !== ''));
+		$borrower_label = $is_external
+			? trim((string)(isset($loan['borrower_name']) ? $loan['borrower_name'] : 'External Person'))
+			: 'Employee';
 		$this->db->insert('expenses', array(
 			'campus_id' => $campus_id,
 			'expense_category_id' => $cat,
 			'title' => 'Advance / Loan',
 			'date' => date('Y-m-d'),
 			'amount' => $approve_amount,
-			'purpose' => 'Advance / Loan Given to Employee',
-			'user_id' => (int)$loan['user_id'],
+			'purpose' => $is_external
+				? ('Advance / Loan Given to ' . $borrower_label)
+				: 'Advance / Loan Given to Employee',
+			'user_id' => (int)(isset($loan['user_id']) ? $loan['user_id'] : 0),
 			'loan_id' => $loan_id,
 			'actual_date' => date('Y-m-d H:i:s'),
 			'image' => '',
