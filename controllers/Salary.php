@@ -480,19 +480,16 @@ class Salary  extends CI_Controller{
         $data['employer_contributions'] = $statutory['employer_contributions'];
         $data['apply_statutory_rules'] = $applyStatutoryRules;
         
-        $total_allownce = 0;
-
-        foreach ($alownce as $item) {
-            if ($item['type'] == 0) {
-                $total_allownce += $item['amount'];
-            }
-        }
-        
         /*
          * Income Tax
-         * Ye taxable/gross salary par calculate kar rahe hain.
+         * Taxable base MUST match generate_salary.php JS taxableBase:
+         *   taxableBase = basicSalary + allownces (= staff gross_salary)
+         * Do not use sum of type-0 earning rows here — that includes calculated
+         * incentives, and JS then prorates monthlyTax by salaryBeforeDeductions/gross
+         * again (double-counting incentives into Tax).
          */
-        $income_tax = $this->calculate_income_tax_amount(($basic_salary+$total_allownce), $payroll_date);
+        $taxable_monthly = $gross_salary > 0 ? $gross_salary : $basic_salary;
+        $income_tax = $this->calculate_income_tax_amount($taxable_monthly, $payroll_date);
         
         $data['income_tax'] = $income_tax['amount'];
 
