@@ -120,6 +120,11 @@ class Salary  extends CI_Controller{
         }
         $out['month'] = $month;
         $out['year'] = $year;
+        $out['days_in_month'] = isset($data['counted_days']) ? (int) $data['counted_days'] : (int) cal_days_in_month(
+            CAL_GREGORIAN,
+            (int) date('n', strtotime($year . '-' . $month . '-01')),
+            (int) $year
+        );
         $out['counted_days_default'] = isset($data['counted_days'], $data['leaves'], $data['absent'])
             ? ((float) $data['counted_days'] - (float) $data['leaves'] - (float) $data['absent'])
             : 0;
@@ -144,6 +149,16 @@ class Salary  extends CI_Controller{
 
         $data['from_date'] = date("Y-m-d", strtotime($year.'-'.$month.'-01'));
         $data['to_date'] = date("Y-m-t", strtotime($year.'-'.$month.'-01'));
+        // Guard: if month name parse failed, try numeric period
+        if ($data['from_date'] === '1970-01-01' || !$data['from_date']) {
+            $ts = strtotime($year . '-' . $month . '-01');
+            if (!$ts) {
+                $monthNum = date('n', strtotime('1 ' . $month . ' ' . $year));
+                $ts = mktime(0, 0, 0, (int) $monthNum, 1, (int) $year);
+            }
+            $data['from_date'] = date('Y-m-d', $ts);
+            $data['to_date'] = date('Y-m-t', $ts);
+        }
 
         $data['campus_id'] = $campus_id;
         //GET RECOVERY ADMISSION INCENTIVE HERE;
