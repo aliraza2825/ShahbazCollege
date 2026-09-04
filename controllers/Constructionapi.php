@@ -194,6 +194,7 @@ class Constructionapi extends CI_Controller {
 
 		$this->_ensure_column('construction_projects', 'campus_id', 'INT NULL');
 		$this->_ensure_column('construction_projects', 'progress_percent', 'DECIMAL(5,2) NOT NULL DEFAULT 0');
+		$this->_ensure_column('construction_projects', 'parent_project_id', 'INT NULL DEFAULT NULL');
 
 		$this->db->query("CREATE TABLE IF NOT EXISTS construction_labours (
 			id INT NOT NULL AUTO_INCREMENT,
@@ -402,23 +403,157 @@ class Constructionapi extends CI_Controller {
 		return $this->db->get_where('construction_projects', array('id' => (int)$id))->row_array();
 	}
 
+	private function _project_has_parent_schema()
+	{
+		return $this->db->field_exists('parent_project_id', 'construction_projects');
+	}
+
+	private function _parent_project_id($project)
+	{
+		if (!$this->_project_has_parent_schema()) return 0;
+		$pid = isset($project['parent_project_id']) ? $project['parent_project_id'] : null;
+		return ($pid === null || $pid === '') ? 0 : (int)$pid;
+	}
+
+	private function _project_is_main($project)
+	{
+		return $this->_parent_project_id($project) <= 0;
+	}
+
+	private function _project_children_ids($parent_id)
+	{
+		$parent_id = (int)$parent_id;
+		if ($parent_id <= 0 || !$this->_project_has_parent_schema()) return array();
+		$rows = $this->db->select('id')->from('construction_projects')
+			->where('parent_project_id', $parent_id)->get()->result_array();
+		$ids = array();
+		foreach ($rows as $r) $ids[] = (int)$r['id'];
+		return $ids;
+	}
+
+	private function _project_has_children($project_id)
+	{
+		return count($this->_project_children_ids($project_id)) > 0;
+	}
+
+	/** Main project with sub-projects → parent + all children; leaf → self only. */
+	private function _project_rollup_ids($project_id)
+	{
+		$project_id = (int)$project_id;
+		$children = $this->_project_children_ids($project_id);
+		if (!count($children)) return array($project_id);
+		return array_values(array_unique(array_merge(array($project_id), $children)));
+	}
+
+	private function _project_can_have_expenses($project_id)
+	{
+		$project = $this->_project($project_id);
+		if (!$project) return false;
+		if (!$this->_project_is_main($project)) return true;
+		return !$this->_project_has_children($project_id);
+	}
+
+	private function _validate_parent_project_id($parent_id, $self_id = 0)
+	{
+		$parent_id = (int)$parent_id;
+		$self_id = (int)$self_id;
+		if ($parent_id <= 0) return 0;
+		if ($self_id > 0 && $parent_id === $self_id) {
+			$this->_json(array('success' => false, 'message' => 'Project cannot be its own parent'), 422);
+		}
+		$parent = $this->_project($parent_id);
+		if (!$parent) {
+			$this->_json(array('success' => false, 'message' => 'Parent project not found'), 404);
+		}
+		if (!$this->_project_is_main($parent)) {
+			$this->_json(array('success' => false, 'message' => 'Parent must be a main project'), 422);
+		}
+		if ($self_id > 0 && $this->_project_has_children($self_id)) {
+			$this->_json(array('success' => false, 'message' => 'Cannot set parent: project has sub-projects'), 422);
+		}
+		return $parent_id;
+	}
+
+	private function _sql_in_list($ids)
+	{
+		$ids = array_values(array_unique(array_map('intval', $ids)));
+		if (!count($ids)) return array('sql' => '0', 'params' => array());
+		return array(
+			'sql' => implode(',', array_fill(0, count($ids), '?')),
+			'params' => $ids,
+		);
+	}
+
+	private function _enrich_project_meta(&$r, $name_map = null)
+	{
+		if (!$this->_project_has_parent_schema()) {
+			$r['parent_project_id'] = null;
+			$r['parent_project_name'] = '';
+			$r['is_main'] = true;
+			$r['is_sub_project'] = false;
+			$r['sub_projects_count'] = 0;
+			$r['can_add_expenses'] = true;
+			return;
+		}
+		$pid = isset($r['parent_project_id']) ? $r['parent_project_id'] : null;
+		$parent_id = ($pid === null || $pid === '') ? 0 : (int)$pid;
+		$r['parent_project_id'] = $parent_id > 0 ? $parent_id : null;
+		$r['is_main'] = $parent_id <= 0;
+		$r['is_sub_project'] = $parent_id > 0;
+		if ($name_map !== null && $parent_id > 0) {
+			$r['parent_project_name'] = isset($name_map[$parent_id]) ? $name_map[$parent_id] : '';
+		} elseif ($parent_id > 0) {
+			$parent = $this->_project($parent_id);
+			$r['parent_project_name'] = $parent ? $parent['project_name'] : '';
+		} else {
+			$r['parent_project_name'] = '';
+		}
+		$children = $this->_project_children_ids((int)$r['id']);
+		$r['sub_projects_count'] = count($children);
+		$r['can_add_expenses'] = $r['is_sub_project'] || !count($children);
+	}
+
+	private function _sub_projects_payload($parent_id)
+	{
+		$parent_id = (int)$parent_id;
+		if ($parent_id <= 0 || !$this->_project_has_parent_schema()) return array();
+		$rows = $this->db->order_by('id', 'ASC')
+			->get_where('construction_projects', array('parent_project_id' => $parent_id))
+			->result_array();
+		foreach ($rows as &$r) {
+			$r['status'] = $this->_normalize_project_status(isset($r['status']) ? $r['status'] : 'Active');
+			$sum = $this->_project_summary($r['id']);
+			$r['summary'] = $sum;
+			$budget = (float)(isset($r['budget']) ? $r['budget'] : 0);
+			$expense = (float)$sum['expense_total'];
+			$r['expense_total'] = $expense;
+			$r['remaining'] = $budget - $expense;
+			$r['utilization_pct'] = $budget > 0 ? round(($expense / $budget) * 100, 1) : 0;
+			$this->_enrich_project_meta($r);
+		}
+		unset($r);
+		return $rows;
+	}
+
 	private function _project_summary($project_id)
 	{
 		$project_id = (int)$project_id;
+		$rollup_ids = $this->_project_rollup_ids($project_id);
+		$in = $this->_sql_in_list($rollup_ids);
 		$done_row = $this->db->query(
 			"SELECT COALESCE(SUM(total_amount),0) AS t FROM construction_contracts
-			 WHERE project_id = ? AND status != 'cancelled'",
-			array($project_id)
+			 WHERE project_id IN ({$in['sql']}) AND status != 'cancelled'",
+			$in['params']
 		)->row_array();
 		$done = (float)$done_row['t'];
 		$paid_row = $this->db->query(
-			'SELECT COALESCE(SUM(amount),0) AS t FROM construction_contractor_payments WHERE project_id = ?',
-			array($project_id)
+			"SELECT COALESCE(SUM(amount),0) AS t FROM construction_contractor_payments WHERE project_id IN ({$in['sql']})",
+			$in['params']
 		)->row_array();
 		$contractor_paid = (float)$paid_row['t'];
 		$count_row = $this->db->query(
-			'SELECT COUNT(DISTINCT contractor_id) AS n FROM construction_contracts WHERE project_id = ?',
-			array($project_id)
+			"SELECT COUNT(DISTINCT contractor_id) AS n FROM construction_contracts WHERE project_id IN ({$in['sql']})",
+			$in['params']
 		)->row_array();
 
 		// Include purchase installment expenses linked via purchase_no → project_id
@@ -437,17 +572,17 @@ class Constructionapi extends CI_Controller {
 						END AS src
 					FROM expenses e
 					LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
-					WHERE COALESCE(e.construction_project_id, pr.project_id) = ?
+					WHERE COALESCE(e.construction_project_id, pr.project_id) IN ({$in['sql']})
 				) x GROUP BY src",
-				array($project_id)
+				$in['params']
 			)->result_array();
 		} elseif ($this->db->table_exists('expenses') && $this->db->field_exists('construction_project_id', 'expenses')) {
 			$rows = $this->db->query(
 				"SELECT COALESCE(NULLIF(construction_source,''), 'misc') AS src, COALESCE(SUM(amount),0) AS t
 				 FROM expenses
-				 WHERE construction_project_id = ?
+				 WHERE construction_project_id IN ({$in['sql']})
 				 GROUP BY src",
-				array($project_id)
+				$in['params']
 			)->result_array();
 		} else {
 			$rows = array();
@@ -476,7 +611,7 @@ class Constructionapi extends CI_Controller {
 	/** Contractors linked to a project via contracts (not contractor.project_id). */
 	private function _contractors_for_project($project_id)
 	{
-		$project_id = (int)$project_id;
+		$rollup_ids = $this->_project_rollup_ids((int)$project_id);
 		$this->db->select('construction_contractors.*', false);
 		$this->db->from('construction_contractors');
 		$this->db->join(
@@ -484,7 +619,11 @@ class Constructionapi extends CI_Controller {
 			'construction_contracts.contractor_id = construction_contractors.id',
 			'inner'
 		);
-		$this->db->where('construction_contracts.project_id', $project_id);
+		if (count($rollup_ids) === 1) {
+			$this->db->where('construction_contracts.project_id', $rollup_ids[0]);
+		} else {
+			$this->db->where_in('construction_contracts.project_id', $rollup_ids);
+		}
 		$this->db->group_by('construction_contractors.id');
 		$this->db->order_by('construction_contractors.contractor_name', 'ASC');
 		return $this->db->get()->result_array();
@@ -681,6 +820,9 @@ class Constructionapi extends CI_Controller {
 			if ($this->db->field_exists('progress_percent', 'construction_projects')) {
 				$insert['progress_percent'] = $progress;
 			}
+			if ($this->_project_has_parent_schema() && !empty($body['parent_project_id'])) {
+				$insert['parent_project_id'] = $this->_validate_parent_project_id($body['parent_project_id']);
+			}
 			$this->db->insert('construction_projects', $insert);
 			$this->_json(array('success' => true, 'id' => (int)$this->db->insert_id()));
 		}
@@ -697,8 +839,13 @@ class Constructionapi extends CI_Controller {
 			$this->db->where_in('status', $aliases);
 		}
 		$rows = $this->db->order_by('id', 'DESC')->get('construction_projects')->result_array();
+		$name_map = array();
+		foreach ($rows as $r) {
+			$name_map[(int)$r['id']] = $r['project_name'];
+		}
 		foreach ($rows as &$r) {
 			$r['status'] = $this->_normalize_project_status(isset($r['status']) ? $r['status'] : 'Active');
+			$this->_enrich_project_meta($r, $name_map);
 			$sum = $this->_project_summary($r['id']);
 			$r['summary'] = $sum;
 			$budget = (float)(isset($r['budget']) ? $r['budget'] : 0);
@@ -785,6 +932,14 @@ class Constructionapi extends CI_Controller {
 			if (array_key_exists('campus_id', $body) && (int)$body['campus_id'] > 0) {
 				$upd['campus_id'] = (int)$body['campus_id'];
 			}
+			if ($this->_project_has_parent_schema() && array_key_exists('parent_project_id', $body)) {
+				$raw_parent = $body['parent_project_id'];
+				if ($raw_parent === null || $raw_parent === '' || (int)$raw_parent <= 0) {
+					$upd['parent_project_id'] = null;
+				} else {
+					$upd['parent_project_id'] = $this->_validate_parent_project_id($raw_parent, $id);
+				}
+			}
 			if (!count($upd)) {
 				$this->_json(array('success' => false, 'message' => 'Nothing to update'), 422);
 			}
@@ -792,31 +947,54 @@ class Constructionapi extends CI_Controller {
 			$this->db->where('id', $id)->update('construction_projects', $upd);
 			$project = $this->_project($id);
 			$project['status'] = $this->_normalize_project_status(isset($project['status']) ? $project['status'] : 'Active');
+			$this->_enrich_project_meta($project);
 			$this->_json(array('success' => true, 'message' => 'Project updated', 'data' => $project));
 		}
 
 		$project['status'] = $this->_normalize_project_status(isset($project['status']) ? $project['status'] : 'Active');
+		$this->_enrich_project_meta($project);
 
+		$rollup_ids = $this->_project_rollup_ids($id);
 		$contractors = $this->_contractors_for_project($id);
 		foreach ($contractors as &$c) {
 			$c = $this->_enrich_contractor($c);
 		}
-		$labours = $this->db->get_where('construction_labours', array('project_id' => $id, 'status' => 1))->result_array();
+		unset($c);
+		$this->db->from('construction_labours');
+		if (count($rollup_ids) === 1) {
+			$this->db->where('project_id', $rollup_ids[0]);
+		} else {
+			$this->db->where_in('project_id', $rollup_ids);
+		}
+		$this->db->where('status', 1);
+		$labours = $this->db->get()->result_array();
 		if (!count($labours)) {
-			$labours = $this->db->get_where('construction_labours', array('project_id' => $id))->result_array();
+			$this->db->from('construction_labours');
+			if (count($rollup_ids) === 1) {
+				$this->db->where('project_id', $rollup_ids[0]);
+			} else {
+				$this->db->where_in('project_id', $rollup_ids);
+			}
+			$labours = $this->db->get()->result_array();
 		}
 		foreach ($labours as &$l) {
 			$l = $this->_enrich_labour($l);
 		}
+		unset($l);
+
+		$payload = array(
+			'project' => $project,
+			'summary' => $this->_project_summary($id),
+			'contractors' => $contractors,
+			'labours' => $labours,
+		);
+		if ($project['is_main'] && $project['sub_projects_count'] > 0) {
+			$payload['sub_projects'] = $this->_sub_projects_payload($id);
+		}
 
 		$this->_json(array(
 			'success' => true,
-			'data' => array(
-				'project' => $project,
-				'summary' => $this->_project_summary($id),
-				'contractors' => $contractors,
-				'labours' => $labours,
-			),
+			'data' => $payload,
 		));
 	}
 
@@ -837,6 +1015,7 @@ class Constructionapi extends CI_Controller {
 		$rows = array();
 		$total = 0.0;
 		$title = '';
+		$rollup_ids = $this->_project_rollup_ids($id);
 
 		if ($type === 'expense_total' || $type === 'labour' || $type === 'misc') {
 			$source = $type === 'labour' ? 'labour' : ($type === 'misc' ? 'misc' : '');
@@ -848,7 +1027,11 @@ class Constructionapi extends CI_Controller {
 			$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
 			$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
 			$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
-			$this->db->where('expenses.construction_project_id', $id);
+			if (count($rollup_ids) === 1) {
+				$this->db->where('expenses.construction_project_id', $rollup_ids[0]);
+			} else {
+				$this->db->where_in('expenses.construction_project_id', $rollup_ids);
+			}
 			if ($source !== '') $this->db->where('expenses.construction_source', $source);
 			$this->db->order_by('expenses.date', 'DESC');
 			$this->db->order_by('expenses.expense_id', 'DESC');
@@ -870,7 +1053,11 @@ class Constructionapi extends CI_Controller {
 				'construction_contractors.id = construction_contracts.contractor_id',
 				'left'
 			);
-			$this->db->where('construction_contracts.project_id', $id);
+			if (count($rollup_ids) === 1) {
+				$this->db->where('construction_contracts.project_id', $rollup_ids[0]);
+			} else {
+				$this->db->where_in('construction_contracts.project_id', $rollup_ids);
+			}
 			$this->db->where('construction_contracts.status !=', 'cancelled');
 			$this->db->order_by('construction_contracts.id', 'DESC');
 			$contracts = $this->db->get()->result_array();
@@ -911,7 +1098,11 @@ class Constructionapi extends CI_Controller {
 				'construction_contracts.id = construction_contractor_payments.contract_id',
 				'left'
 			);
-			$this->db->where('construction_contractor_payments.project_id', $id);
+			if (count($rollup_ids) === 1) {
+				$this->db->where('construction_contractor_payments.project_id', $rollup_ids[0]);
+			} else {
+				$this->db->where_in('construction_contractor_payments.project_id', $rollup_ids);
+			}
 			$this->db->order_by('construction_contractor_payments.payment_date', 'DESC');
 			$this->db->order_by('construction_contractor_payments.id', 'DESC');
 			$pays = $this->db->get()->result_array();
@@ -951,7 +1142,11 @@ class Constructionapi extends CI_Controller {
 				'construction_contractors.id = construction_contract_installments.contractor_id',
 				'left'
 			);
-			$this->db->where('construction_contract_installments.project_id', $id);
+			if (count($rollup_ids) === 1) {
+				$this->db->where('construction_contract_installments.project_id', $rollup_ids[0]);
+			} else {
+				$this->db->where_in('construction_contract_installments.project_id', $rollup_ids);
+			}
 			$this->db->where('construction_contract_installments.paid', 0);
 			$this->db->order_by('construction_contract_installments.due_date', 'ASC');
 			$insts = $this->db->get()->result_array();
@@ -2011,7 +2206,12 @@ class Constructionapi extends CI_Controller {
 		$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
 		$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
 		$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
-		$this->db->where('expenses.construction_project_id', $project_id);
+		$rollup_ids = $this->_project_rollup_ids($project_id);
+		if (count($rollup_ids) === 1) {
+			$this->db->where('expenses.construction_project_id', $rollup_ids[0]);
+		} else {
+			$this->db->where_in('expenses.construction_project_id', $rollup_ids);
+		}
 		$this->db->where('expenses.date', $date);
 		$this->db->order_by('expenses.expense_id', 'DESC');
 		$rows = $this->db->get()->result_array();
@@ -2089,8 +2289,10 @@ class Constructionapi extends CI_Controller {
 				  )";
 			$bind = $date_bind;
 			if ($project_id > 0) {
-				$sql .= " AND COALESCE(e.construction_project_id, pr.project_id) = ?";
-				$bind[] = $project_id;
+				$rollup_ids = $this->_project_rollup_ids($project_id);
+				$in = $this->_sql_in_list($rollup_ids);
+				$sql .= " AND COALESCE(e.construction_project_id, pr.project_id) IN ({$in['sql']})";
+				$bind = array_merge($bind, $in['params']);
 			}
 			$sql .= " ORDER BY e.date DESC, e.expense_id DESC";
 			$rows = $this->db->query($sql, $bind)->result_array();
@@ -2102,7 +2304,14 @@ class Constructionapi extends CI_Controller {
 			$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
 			$this->db->where('expenses.construction_project_id IS NOT NULL', null, false);
 			$this->db->where('expenses.construction_project_id >', 0);
-			if ($project_id > 0) $this->db->where('expenses.construction_project_id', $project_id);
+			if ($project_id > 0) {
+				$rollup_ids = $this->_project_rollup_ids($project_id);
+				if (count($rollup_ids) === 1) {
+					$this->db->where('expenses.construction_project_id', $rollup_ids[0]);
+				} else {
+					$this->db->where_in('expenses.construction_project_id', $rollup_ids);
+				}
+			}
 			if ($date !== '') {
 				$this->db->where('expenses.date', $date);
 			} else {
@@ -2361,6 +2570,12 @@ class Constructionapi extends CI_Controller {
 
 		$project = $this->_project($project_id);
 		if (!$project) $this->_json(array('success' => false, 'message' => 'Project not found'), 404);
+		if (!$this->_project_can_have_expenses($project_id)) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'Expenses must be entered on a sub-project. This main project has sub-projects.',
+			), 422);
+		}
 
 		$campus_id = !empty($project['campus_id'])
 			? (int)$project['campus_id']
@@ -2663,6 +2878,9 @@ class Constructionapi extends CI_Controller {
 		$over_budget_names = array();
 
 		foreach ($projects as $p) {
+			if ($this->_project_has_parent_schema() && !$this->_project_is_main($p)) {
+				continue;
+			}
 			$pid = (int)$p['id'];
 			$budget = (float)$p['budget'];
 			$sum = $this->_project_summary($pid);
@@ -2714,6 +2932,10 @@ class Constructionapi extends CI_Controller {
 				'contractor_remaining' => (float)$sum['contractor_remaining'],
 				'expected_completion_date' => isset($p['expected_completion_date']) ? $p['expected_completion_date'] : null,
 				'health' => $health,
+				'is_main' => true,
+				'sub_projects_count' => $this->_project_has_parent_schema()
+					? count($this->_project_children_ids($pid))
+					: 0,
 			);
 		}
 

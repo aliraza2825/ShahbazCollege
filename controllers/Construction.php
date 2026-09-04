@@ -89,6 +89,10 @@ class Construction extends CI_Controller {
             KEY project_manager_id (project_manager_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8");
 
+        if (!$this->db->field_exists('parent_project_id', 'construction_projects')) {
+            $this->db->query('ALTER TABLE construction_projects ADD parent_project_id INT NULL DEFAULT NULL');
+        }
+
         $this->db->query("CREATE TABLE IF NOT EXISTS construction_boq (
             id INT NOT NULL AUTO_INCREMENT,
             project_id INT NOT NULL,
