@@ -3016,7 +3016,7 @@ class Hrapi extends CI_Controller {
 			: "CONCAT(users.first_name, ' ', users.last_name)";
 
 		$this->db->select(
-			'loans.*, users.first_name, users.last_name, ' . $name_sql . ' AS borrower_display_name, '
+			'loans.*, loans.updated_at AS applied_at, users.first_name, users.last_name, ' . $name_sql . ' AS borrower_display_name, '
 			. $remaining_sql . ' AS remaining_installments',
 			false
 		);
