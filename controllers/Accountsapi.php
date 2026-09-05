@@ -5440,11 +5440,6 @@ class Accountsapi extends CI_Controller {
 
 	private function _profit_special_expense($campus_id, $from, $to)
 	{
-		if (function_exists('specialExpense')) {
-			try {
-				return (float)specialExpense($campus_id, $from, $to);
-			} catch (Exception $e) { /* fall through */ }
-		}
 		$campus_id = (int)$campus_id;
 		if (!$this->_table_exists('expenses') || !$this->_table_exists('campus_partners')) return 0.0;
 		$cp = $this->db->query(
