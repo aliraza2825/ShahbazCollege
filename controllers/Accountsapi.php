@@ -5672,7 +5672,9 @@ class Accountsapi extends CI_Controller {
 	public function profit_campuses()
 	{
 		$this->_assert_section('profit_distribution');
-		$to = date('Y-m-d');
+		// Keep the summary aligned with campus_profit, which follows the legacy
+		// closing rule and only calculates through yesterday.
+		$to = date('Y-m-d', strtotime('-1 day'));
 		$sql = 'SELECT campus_id, campus_name, campus_code FROM campuses';
 		if ($this->_field_exists('campuses', 'status')) {
 			$sql .= ' WHERE status = 1';
@@ -5684,8 +5686,13 @@ class Accountsapi extends CI_Controller {
 			$cid = (int)$c['campus_id'];
 			$from = $this->_profit_from_date($cid);
 			$seat = $this->_profit_seat_expense($cid, $from, $to);
-			$recovery = $this->_profit_total_recovery($cid, $from, $to);
-			$expense = (float)$seat['divided_expense'];
+			$expense_share = (float)$seat['divided_expense'];
+			$special = $this->_profit_special_expense($cid, $from, $to);
+			$shift_deduction = $this->_profit_shift_deduction($cid);
+			$expense = $expense_share + $special + $shift_deduction;
+			$regular_recovery = $this->_profit_total_recovery($cid, $from, $to);
+			$shift_earning = $this->_profit_shift_earning($cid);
+			$recovery = $regular_recovery + $shift_earning;
 			$net = $recovery - $expense;
 			$out[] = array(
 				'campus_id' => $cid,
@@ -5696,10 +5703,14 @@ class Accountsapi extends CI_Controller {
 				'to' => $to,
 				'expense_lines' => $seat['expense_lines'],
 				'pool_expense' => $seat['pool_expense'],
-				'divided_expense' => $seat['divided_expense'],
-				'total_expense' => $expense,
-				'total_recovery' => $recovery,
-				'net_profit' => $net,
+				'divided_expense' => $expense_share,
+				'special_expense' => $special,
+				'shift_deduction' => $shift_deduction,
+				'total_expense' => round($expense, 2),
+				'regular_recovery' => round($regular_recovery, 2),
+				'shift_earning' => $shift_earning,
+				'total_recovery' => round($recovery, 2),
+				'net_profit' => round($net, 2),
 				'partners_label' => $this->_profit_partners_labels($cid),
 				'partners' => $this->_profit_partners_list($cid, $net),
 			);
