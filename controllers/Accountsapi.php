@@ -5390,10 +5390,29 @@ class Accountsapi extends CI_Controller {
 		return '2000-01-01';
 	}
 
+	/**
+	 * Categories excluded from a profit-distribution pool.  The exclusions belong
+	 * to the campus whose distribution is being calculated, not necessarily to
+	 * every campus contributing expenses to its seat-share pool.
+	 */
+	private function _profit_special_expense_ids($rules_campus_id)
+	{
+		if (!$this->_table_exists('campus_partners')) return array();
+		$cp = $this->db->query(
+			'SELECT special_expense_ids FROM campus_partners WHERE campus_id = ? LIMIT 1',
+			array((int)$rules_campus_id)
+		)->row_array();
+		if (!$cp || empty($cp['special_expense_ids'])) return array();
+		$ids = json_decode($cp['special_expense_ids'], true);
+		if (!is_array($ids)) return array();
+		return array_values(array_unique(array_filter(array_map('intval', $ids))));
+	}
+
 	/** Safe wrapper matching legacy totalExpense (approved − special categories). */
-	private function _profit_total_expense($campus_id, $from, $to)
+	private function _profit_total_expense($campus_id, $from, $to, $rules_campus_id = null)
 	{
 		$campus_id = (int)$campus_id;
+		$rules_campus_id = $rules_campus_id === null ? $campus_id : (int)$rules_campus_id;
 		if (!$this->_table_exists('expenses')) return 0.0;
 		$dateCol = $this->_field_exists('expenses', 'actual_date') ? 'actual_date' : 'date';
 		$row = $this->db->query(
@@ -5404,28 +5423,17 @@ class Accountsapi extends CI_Controller {
 		)->row_array();
 		$total = (float)(isset($row['amount']) ? $row['amount'] : 0);
 
-		if ($this->_table_exists('campus_partners')) {
-			$cp = $this->db->query(
-				'SELECT special_expense_ids FROM campus_partners WHERE campus_id = ? LIMIT 1',
-				array($campus_id)
+		$ids = $this->_profit_special_expense_ids($rules_campus_id);
+		if (count($ids)) {
+			$in = implode(',', $ids);
+			$spec = $this->db->query(
+				"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
+				 WHERE campus_id = ? AND {$dateCol} >= ? AND {$dateCol} <= ?
+				   AND (approved_status = '1' OR approved_status = 1)
+				   AND expense_category_id IN ({$in})",
+				array($campus_id, $from, $to)
 			)->row_array();
-			if ($cp && !empty($cp['special_expense_ids'])) {
-				$ids = json_decode($cp['special_expense_ids'], true);
-				if (is_array($ids) && count($ids)) {
-					$ids = array_values(array_filter(array_map('intval', $ids)));
-					if (count($ids)) {
-						$in = implode(',', $ids);
-						$spec = $this->db->query(
-							"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
-							 WHERE campus_id = ? AND {$dateCol} >= ? AND {$dateCol} <= ?
-							   AND (approved_status = '1' OR approved_status = 1)
-							   AND expense_category_id IN ({$in})",
-							array($campus_id, $from, $to)
-						)->row_array();
-						$total -= (float)(isset($spec['amount']) ? $spec['amount'] : 0);
-					}
-				}
-			}
+			$total -= (float)(isset($spec['amount']) ? $spec['amount'] : 0);
 		}
 		return $total;
 	}
@@ -5566,7 +5574,7 @@ class Accountsapi extends CI_Controller {
 				if ($port_campus === $campus_id) $my_seats = $seat;
 				$seats += $seat;
 				$share_ids[] = $port_campus;
-				$exp = $this->_profit_total_expense($port_campus, $from, $to);
+				$exp = $this->_profit_total_expense($port_campus, $from, $to, $campus_id);
 				$pool += $exp;
 				$c = $this->db->query(
 					'SELECT campus_name, campus_code FROM campuses WHERE campus_id = ? LIMIT 1',
@@ -5583,7 +5591,7 @@ class Accountsapi extends CI_Controller {
 			}
 		} else {
 			// No partners row — treat this campus alone
-			$exp = $this->_profit_total_expense($campus_id, $from, $to);
+			$exp = $this->_profit_total_expense($campus_id, $from, $to, $campus_id);
 			$pool = $exp;
 			$my_seats = 1;
 			$seats = 1;
@@ -5924,7 +5932,7 @@ class Accountsapi extends CI_Controller {
 		}
 		$rows = array();
 		foreach ($this->_profit_share_campus_ids($campus_id) as $cid) {
-			$part = $this->_profit_total_expense_rows((int)$cid, $from, $to);
+			$part = $this->_profit_total_expense_rows((int)$cid, $from, $to, $campus_id);
 			if (is_array($part) && count($part)) {
 				$rows = array_merge($rows, $part);
 			}
@@ -5935,20 +5943,13 @@ class Accountsapi extends CI_Controller {
 	/**
 	 * Approved expenses for profit total drill-down (excludes special categories).
 	 */
-	private function _profit_total_expense_rows($campus_id, $from, $to)
+	private function _profit_total_expense_rows($campus_id, $from, $to, $rules_campus_id = null)
 	{
 		if (!$this->_table_exists('expenses')) return array();
 
-		$special_ids = array();
-		if ($this->_table_exists('campus_partners')) {
-			$partner = $this->db->get_where('campus_partners', array('campus_id' => $campus_id))->row_array();
-			if ($partner && !empty($partner['special_expense_ids'])) {
-				$decoded = json_decode($partner['special_expense_ids'], true);
-				if (is_array($decoded)) {
-					$special_ids = array_map('intval', $decoded);
-				}
-			}
-		}
+		$special_ids = $this->_profit_special_expense_ids(
+			$rules_campus_id === null ? $campus_id : $rules_campus_id
+		);
 
 		$this->db->select(
 			'expenses.*, campuses.campus_name, expense_category.name AS category_name, expense_category.name AS name',
@@ -6695,4 +6696,3 @@ class Accountsapi extends CI_Controller {
 		$this->_json(array('success' => true, 'items' => $rows));
 	}
 }
-
