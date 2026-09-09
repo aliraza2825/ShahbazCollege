@@ -934,7 +934,7 @@ class Dashboard_service {
         $paypro_payment = $this->ci->db->get_where('settlement_payments', array('id' => $row['settlement_payment_id']))->row_array();
         if (!$paypro_payment) return false;
         $stats = $this->ci->db
-            ->select('bank_reconciliation_statement.*, accounts.account_title, accounts.account_name')
+            ->select('bank_reconciliation_statement.*, pay_pro_settlement.paid_amount, pay_pro_settlement.link_amount, pay_pro_settlement.card_amount, accounts.account_title, accounts.account_name')
             ->from('bank_reconciliation_statement')
             ->join('pay_pro_settlement', 'pay_pro_settlement.id = bank_reconciliation_statement.paypro_id', 'inner')
             ->join('accounts', 'accounts.id = bank_reconciliation_statement.account_id', 'inner')
@@ -943,9 +943,12 @@ class Dashboard_service {
         foreach ($stats as $stat) {
             $credit = (int) str_replace(',', '', $stat['credit']);
             $via = isset($paypro_payment['paid_via']) ? $paypro_payment['paid_via'] : '';
+            $link_amount = (int) (isset($stat['link_amount']) ? $stat['link_amount'] : 0);
+            $paid_amount = (int) (isset($stat['paid_amount']) ? $stat['paid_amount'] : 0);
+            $card_amount = (int) (isset($stat['card_amount']) ? $stat['card_amount'] : 0);
             if ($via === '1LINK' || $via === '1Link' || $via === 'MBL') {
-                if ($credit === (int) $stat['link_amount'] || $credit === (int) $stat['paid_amount']) return true;
-            } elseif ($credit === (int) $stat['card_amount']) {
+                if (($link_amount > 0 && $credit === $link_amount) || ($paid_amount > 0 && $credit === $paid_amount)) return true;
+            } elseif ($card_amount > 0 && $credit === $card_amount) {
                 return true;
             }
         }
