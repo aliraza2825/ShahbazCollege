@@ -912,7 +912,9 @@ class Dashboard_service {
             $links[] = array('label' => 'See Application', 'url' => base_url().'uploads/'.$row['fine_application']);
         }
         if ($this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '') && !empty($row['settlement_id'])) {
-            $links[] = array('label' => 'PayPro Details', 'url' => site_url('excel_import/entries/'.$row['settlement_id']));
+            // POS has the React settlement detail view; keep dashboard users
+            // inside the new app instead of opening the legacy Excel Import.
+            $links[] = array('label' => 'PayPro Details', 'url' => '/accounts/paypro?settlement_id='.(int) $row['settlement_id']);
         }
         return $links;
     }
