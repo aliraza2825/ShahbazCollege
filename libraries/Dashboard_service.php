@@ -577,11 +577,9 @@ class Dashboard_service {
         $rows = $this->ci->db->get()->result_array();
         $out = array();
         foreach ($rows as $row) {
-            if ($this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '')) {
-                $can = array('can_clear' => false, 'reason' => 'PayPro payment — open details before clearing');
-            } else {
-                $can = array('can_clear' => true, 'reason' => '');
-            }
+            // Evaluate the bank-reconciliation tag here as well. Previously the
+            // list blocked every PayPro payment even after it had been tagged.
+            $can = $this->_can_clear_payment($row);
             $out[] = array(
                 'kind' => 'student',
                 'payment_id' => (int) $row['id'],
@@ -662,7 +660,7 @@ class Dashboard_service {
     private function _load_contractor_fee_rows($ids)
     {
         if (empty($ids)) return array();
-        $this->ci->db->select('payments.id, payments.challan_no, payments.paid_date, payments.actual_paid_date, payments.actual_amount, payments.amount, payments.fee_pay_through, payments.contract_id, contractors.name AS contractor_name, contractors.contractor_id_from_college, campuses.campus_id, campuses.campus_name');
+        $this->ci->db->select('payments.id, payments.challan_no, payments.paid_date, payments.actual_paid_date, payments.actual_amount, payments.amount, payments.fee_pay_through, payments.settlement_id, payments.settlement_payment_id, payments.contract_id, contractors.name AS contractor_name, contractors.contractor_id_from_college, campuses.campus_id, campuses.campus_name');
         $this->ci->db->from('payments');
         $this->ci->db->join('contracts', 'contracts.contract_id=payments.contract_id', 'inner');
         $this->ci->db->join('contractors', 'contractors.contractor_id=contracts.contractor_id', 'inner');
@@ -672,6 +670,7 @@ class Dashboard_service {
         $rows = $this->ci->db->get()->result_array();
         $out = array();
         foreach ($rows as $row) {
+            $can = $this->_can_clear_payment($row);
             $contract_name = '';
             if (!empty($row['contract_id'])) {
                 $c = $this->ci->db->get_where('contracts', array('contract_id' => $row['contract_id']))->row_array();
@@ -689,10 +688,8 @@ class Dashboard_service {
                 'paid_date' => $row['paid_date'],
                 'amount' => $row['actual_amount'],
                 'fee_pay_through' => $row['fee_pay_through'],
-                'can_clear' => !$this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : ''),
-                'clear_block_reason' => $this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '')
-                    ? 'PayPro payment — open details before clearing'
-                    : '',
+                'can_clear' => $can['can_clear'],
+                'clear_block_reason' => $can['reason'],
             );
         }
         return $out;
