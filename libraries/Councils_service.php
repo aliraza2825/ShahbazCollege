@@ -53,7 +53,7 @@ class Councils_service {
         $is_admin = $user && $user['role'] === 'Admin';
         $acc = $is_admin ? array() : $this->_access_row($user);
 
-        $this->ci->db->select('course_id, course_name, course_type, status');
+        $this->ci->db->select('course_id, course_name, course_type, course_duration_year, course_duration_month, course_semester, status');
         $this->ci->db->from('courses');
         if (!$is_admin && !empty($acc['council_report_courses'])) {
             $ids = array_values(array_filter(array_map('intval', explode(',', $acc['council_report_courses']))));
