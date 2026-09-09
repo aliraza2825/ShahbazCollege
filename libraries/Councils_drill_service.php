@@ -568,6 +568,19 @@ class Councils_drill_service {
             return array('success' => false, 'message' => 'Council sequence not found');
         }
 
+        // Token-authenticated users have first_name/last_name (not the legacy
+        // session-only `name` field). Expenses require a non-null audit name.
+        $actor_name = trim(isset($user['name']) ? $user['name'] : '');
+        if ($actor_name === '') {
+            $actor_name = trim(
+                (isset($user['first_name']) ? $user['first_name'] : '') . ' ' .
+                (isset($user['last_name']) ? $user['last_name'] : '')
+            );
+        }
+        if ($actor_name === '') {
+            $actor_name = 'User #' . (int) $user['user_id'];
+        }
+
         $created = 0;
         foreach ($student_ids as $student_id) {
             $st_detail = $this->ci->db
@@ -596,8 +609,8 @@ class Councils_drill_service {
             $this->ci->db->set('payment_type', $data['payment_type']);
             $this->ci->db->set('class_id', $st_detail->class_id);
             $this->ci->db->set('roll_no', $st_detail->roll_no);
-            $this->ci->db->set('add_by', $user['name']);
-            $this->ci->db->set('last_edit', $user['name']);
+            $this->ci->db->set('add_by', $actor_name);
+            $this->ci->db->set('last_edit', $actor_name);
             $this->ci->db->set('add_by_id', $user['user_id']);
             $this->ci->db->set('approved_status', 1);
             $this->ci->db->set('paid_type', $data['payment_type'] === 'cash' ? 'cash' : 'bank');
