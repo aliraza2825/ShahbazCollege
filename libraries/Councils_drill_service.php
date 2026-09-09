@@ -1386,15 +1386,74 @@ class Councils_drill_service {
 
     private function _petty_cash_balance($user)
     {
-        $query = $this->ci->db->get_where('petty_cash_college_wise', array(
-            'assign_to' => $user['user_id'],
-        ))->result_array();
-
-        if (count($query) > 0) {
-            $this->ci->load->helper('custom');
-            return (float) my_pettycash();
+        $user_id = isset($user['user_id']) ? (int) $user['user_id'] : 0;
+        if ($user_id <= 0 || !$this->ci->db->table_exists('petty_cash_college_wise')) {
+            return 0.0;
         }
-        return 0;
+
+        // The drill API is authenticated by token and may be running as an
+        // impersonated user. Do not use my_pettycash(): it reads the PHP
+        // session user, which can be the administrator instead.
+        $cash = $this->ci->db->get_where('petty_cash_college_wise', array(
+            'assign_to' => $user_id,
+            'petty_status' => 1,
+        ))->row_array();
+        if (!$cash || empty($cash['id'])) {
+            $cash = $this->ci->db->get_where('petty_cash_college_wise', array(
+                'assign_to' => $user_id,
+            ))->row_array();
+        }
+        if (!$cash || empty($cash['id'])) {
+            return 0.0;
+        }
+
+        return $this->_petty_live_balance((int) $cash['id']);
+    }
+
+    /** Matches the active petty-cash balance shown in the POS header. */
+    private function _petty_live_balance($petty_id)
+    {
+        $petty = $this->ci->db->get_where('petty_cash_college_wise', array(
+            'id' => (int) $petty_id,
+        ))->row_array();
+        if (!$petty) {
+            return 0.0;
+        }
+
+        $as_of = date('Y-m-d') . ' 23:59:59';
+        $given_date = !empty($petty['given_date']) ? $petty['given_date'] : '1970-01-01';
+        $assign_to = (int) $petty['assign_to'];
+        $expense_amount = 0.0;
+        $reversal_amount = 0.0;
+        $debit = 0.0;
+        $credit = 0.0;
+
+        if ($this->ci->db->table_exists('expenses')) {
+            $row = $this->ci->db->query(
+                "SELECT SUM(amount) AS amount FROM expenses WHERE add_by_id = ? AND actual_date >= ? AND actual_date <= ? AND paid_type = 'cash' AND expense_id NOT IN (SELECT expense_id FROM bank_reconciliation_statement WHERE expense_id IS NOT NULL)",
+                array($assign_to, $given_date, $as_of)
+            )->row_array();
+            $expense_amount = (float) (isset($row['amount']) ? $row['amount'] : 0);
+        }
+
+        if ($this->ci->db->table_exists('cash_reversal')) {
+            $row = $this->ci->db->query(
+                'SELECT SUM(cash_reversal.amount) AS amount FROM cash_reversal INNER JOIN expenses ON expenses.expense_id = cash_reversal.expense_id WHERE expenses.add_by_id = ? AND cash_reversal.created_at >= ? AND cash_reversal.created_at <= ?',
+                array($assign_to, $given_date . ' 00:00:00', $as_of)
+            )->row_array();
+            $reversal_amount = (float) (isset($row['amount']) ? $row['amount'] : 0);
+        }
+
+        if ($this->ci->db->table_exists('petty_cash_history')) {
+            $row = $this->ci->db->query(
+                "SELECT SUM(CASE WHEN debit_credit = 'D' THEN amount_given ELSE 0 END) AS debit_amount, SUM(CASE WHEN debit_credit = 'C' THEN amount_given ELSE 0 END) AS credit_amount FROM petty_cash_history WHERE transaction_pettycash_account = ? AND created_at <= ?",
+                array((int) $petty['id'], $as_of)
+            )->row_array();
+            $debit = (float) (isset($row['debit_amount']) ? $row['debit_amount'] : 0);
+            $credit = (float) (isset($row['credit_amount']) ? $row['credit_amount'] : 0);
+        }
+
+        return round(((float) $petty['opening_balance'] + $debit + $reversal_amount) - $credit - $expense_amount, 2);
     }
 
     private function _upload_image($field, $subdir, $prefix_subdir = false)
