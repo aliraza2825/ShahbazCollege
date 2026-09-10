@@ -493,7 +493,7 @@ class Expensesapi extends CI_Controller {
             'from_date' => isset($body['from_date']) ? $body['from_date'] : $this->input->get('from_date'),
             'to_date' => isset($body['to_date']) ? $body['to_date'] : $this->input->get('to_date'),
             'campus_id' => isset($body['campus_id']) ? $body['campus_id'] : $this->input->get('campus_id'),
-            'category_id' => isset($body['category_id']) ? $body['category_id'] : (isset($body['categories']) ? $body['categories'] : $this->input->get('category_id')),
+            'category_ids' => isset($body['category_ids']) ? $body['category_ids'] : (isset($body['categories']) ? $body['categories'] : (isset($body['category_id']) ? $body['category_id'] : $this->input->get('category_id'))),
         );
         $this->_json($this->service->report_subhead($this->current_user, $filters));
     }
