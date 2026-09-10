@@ -2445,8 +2445,10 @@ class Hrapi extends CI_Controller {
 		$id = (int)$id;
 		$body = $this->_body();
 
-		$designation_id = isset($body['designation_id']) ? $body['designation_id'] : '';
-		if (is_array($designation_id)) $designation_id = implode(',', $designation_id);
+		$designation_ids = isset($body['designation_id']) ? $body['designation_id'] : array();
+		if (!is_array($designation_ids)) $designation_ids = explode(',', (string)$designation_ids);
+		$designation_ids = array_values(array_unique(array_filter(array_map('intval', $designation_ids))));
+		$designation_id = implode(',', $designation_ids);
 
 		$password = null;
 		if (isset($body['password']) && trim((string)$body['password']) !== '') {
@@ -2570,6 +2572,16 @@ class Hrapi extends CI_Controller {
 				$phone = trim((string)$phone);
 				if ($phone === '') continue;
 				$this->db->insert('users_phones', array('user_id' => $id, 'phone' => $phone));
+			}
+		}
+
+		// Keep the user's effective access in sync whenever Staff changes their
+		// designation(s). This deliberately uses the same merge/revoke logic as
+		// Access → Update designation access.
+		if (!empty($designation_ids)) {
+			$this->load->model('Accesses', 'accesses');
+			foreach ($designation_ids as $did) {
+				$this->accesses->updateUsersAccess($did);
 			}
 		}
 
