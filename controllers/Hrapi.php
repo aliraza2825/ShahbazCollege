@@ -886,10 +886,39 @@ class Hrapi extends CI_Controller {
 		));
 	}
 
+	/** Staff profile photo from teacher_documents (same rule as Posapi login avatar). */
+	private function _staff_photo_urls_for_ids(array $user_ids)
+	{
+		$user_ids = array_values(array_unique(array_filter(array_map('intval', $user_ids))));
+		$out = array();
+		if (!count($user_ids) || !$this->db->table_exists('teacher_documents')) {
+			return $out;
+		}
+		$this->db->select('teacher_id, image, type');
+		$this->db->from('teacher_documents');
+		$this->db->where_in('teacher_id', $user_ids);
+		$this->db->order_by('id', 'DESC');
+		$rows = $this->db->get()->result_array();
+		foreach ($rows as $row) {
+			$uid = (int)$row['teacher_id'];
+			if (isset($out[$uid])) continue;
+			$image = isset($row['image']) ? trim((string)$row['image']) : '';
+			if ($image === '') continue;
+			$type = strtolower(trim(isset($row['type']) ? (string)$row['type'] : ''));
+			if ($type === 'sign' || $type === 'signature') continue;
+			$ext = strtolower(pathinfo($image, PATHINFO_EXTENSION));
+			if ($ext !== '' && !in_array($ext, array('jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'), true)) {
+				continue;
+			}
+			$out[$uid] = rtrim(base_url(), '/') . '/uploads/' . str_replace('%2F', '/', rawurlencode($image));
+		}
+		return $out;
+	}
+
 	/** Active staff grouped by designation_id (users.designation_id CSV). */
 	private function _staff_by_designation_map()
 	{
-		$this->db->select('users.user_id, users.first_name, users.last_name, users.designation_id, users.campus_id, campuses.campus_name');
+		$this->db->select('users.user_id, users.first_name, users.last_name, users.designation_id, users.campus_id, users.email, users.mobile, campuses.campus_name');
 		$this->db->from('users');
 		$this->db->join('campuses', 'campuses.campus_id=users.campus_id', 'left');
 		$this->db->where('users.status', '1');
@@ -897,15 +926,25 @@ class Hrapi extends CI_Controller {
 		$this->db->order_by('users.last_name', 'ASC');
 		$rows = $this->db->get()->result_array();
 
+		$user_ids = array();
+		foreach ($rows as $r) {
+			$user_ids[] = (int)$r['user_id'];
+		}
+		$photo_urls = $this->_staff_photo_urls_for_ids($user_ids);
+
 		$by = array();
 		foreach ($rows as $r) {
+			$uid = (int)$r['user_id'];
 			$name = trim((string)$r['first_name'] . ' ' . (string)$r['last_name']);
-			if ($name === '') $name = 'User #' . (int)$r['user_id'];
+			if ($name === '') $name = 'User #' . $uid;
 			$entry = array(
-				'user_id' => (int)$r['user_id'],
+				'user_id' => $uid,
 				'name' => $name,
 				'campus_id' => (int)$r['campus_id'],
 				'campus_name' => isset($r['campus_name']) ? (string)$r['campus_name'] : '',
+				'email' => isset($r['email']) ? trim((string)$r['email']) : '',
+				'phone' => isset($r['mobile']) ? trim((string)$r['mobile']) : '',
+				'image_url' => isset($photo_urls[$uid]) ? $photo_urls[$uid] : null,
 			);
 			foreach (explode(',', (string)$r['designation_id']) as $did) {
 				$did = (int)trim($did);
@@ -2645,12 +2684,18 @@ class Hrapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'File too large (max 8MB)'), 422);
 		}
 
-		$dir = FCPATH . 'uploads/';
-		if (!is_dir($dir)) {
-			@mkdir($dir, 0755, true);
+		$this->load->library('upload');
+		$this->upload->initialize(array(
+			'upload_path' => FCPATH . 'uploads/',
+			'allowed_types' => implode('|', $allowed),
+			'file_name' => uniqid('staff_doc_', true) . ($ext !== '' ? '.' . $ext : ''),
+		));
+		if (!$this->upload->do_upload('teacher_document')) {
+			$this->_json(array('success' => false, 'message' => 'Upload failed: ' . strip_tags($this->upload->display_errors('', ''))), 500);
 		}
-		$filename = uniqid('staff_doc_', true) . ($ext !== '' ? '.' . $ext : '');
-		if (!move_uploaded_file($_FILES['teacher_document']['tmp_name'], $dir . $filename)) {
+		$uploaded = $this->upload->data();
+		$filename = isset($uploaded['file_name']) ? $uploaded['file_name'] : '';
+		if ($filename === '') {
 			$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
 		}
 
@@ -2838,6 +2883,14 @@ class Hrapi extends CI_Controller {
 		}
 		return (int)(isset($loan['user_id']) ? $loan['user_id'] : 0) === 0
 			&& trim((string)(isset($loan['borrower_name']) ? $loan['borrower_name'] : '')) !== '';
+	}
+
+	/** External-person loans are a finance-admin-only workflow. */
+	private function _assert_external_loan_admin($loan)
+	{
+		if ($this->_loan_is_external($loan) && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'Only an admin can manage external person loans'), 403);
+		}
 	}
 
 	private function _loan_borrower_staff_payload($loan, $user = null)
@@ -3034,6 +3087,14 @@ class Hrapi extends CI_Controller {
 		);
 		$this->db->from('loans');
 		$this->db->join('users', 'loans.user_id=users.user_id', $has_external ? 'left' : 'inner');
+		// An external-person loan must never be exposed to HR/Accounts access roles.
+		if (!$this->_is_admin()) {
+			if ($has_external) {
+				$this->db->where('(COALESCE(loans.is_external, 0) = 0 AND loans.user_id <> 0)', null, false);
+			} else {
+				$this->db->where('loans.user_id <> 0', null, false);
+			}
+		}
 
 		if (!$can_approve) {
 			$this->db->where('loans.user_id', (int)$this->current_user['user_id']);
@@ -3080,6 +3141,7 @@ class Hrapi extends CI_Controller {
 		if (!$loan || (int)$loan['status'] !== 1) {
 			$this->_json(array('success' => false, 'message' => 'Approved loan not found'), 404);
 		}
+		$this->_assert_external_loan_admin($loan);
 
 		$can_approve = $this->_is_admin() || $this->_access_flag('loan_approval');
 		if (!$can_approve && (int)$loan['user_id'] !== (int)$this->current_user['user_id']) {
@@ -3184,6 +3246,7 @@ class Hrapi extends CI_Controller {
 		}
 
 		$is_external = $this->_loan_is_external($loan);
+		$this->_assert_external_loan_admin($loan);
 		if ($payment_method === 'petty') {
 			if (!$is_external) {
 				$this->_json(array('success' => false, 'message' => 'Petty cash receive is only for external loans'), 422);
@@ -3279,8 +3342,8 @@ class Hrapi extends CI_Controller {
 		$reason = isset($body['reason']) ? $body['reason'] : '';
 
 		if ($is_external) {
-			if (!$can_apply_for_others) {
-				$this->_json(array('success' => false, 'message' => 'Only HR can create external person loans'), 403);
+			if (!$this->_is_admin()) {
+				$this->_json(array('success' => false, 'message' => 'Only an admin can create external person loans'), 403);
 			}
 			$borrower_name = trim((string)(isset($body['borrower_name']) ? $body['borrower_name'] : ''));
 			if ($borrower_name === '' || $amount <= 0) {
@@ -3342,6 +3405,9 @@ class Hrapi extends CI_Controller {
 		}
 		$id = (int)$id;
 		if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
+		$loan = $this->db->get_where('loans', array('id' => $id))->row_array();
+		if (!$loan) $this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
+		$this->_assert_external_loan_admin($loan);
 		$body = $this->_body();
 		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
 		$in_month = isset($body['in_month']) ? (int)$body['in_month'] : 0;
