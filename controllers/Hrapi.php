@@ -2467,6 +2467,8 @@ class Hrapi extends CI_Controller {
 		$row = $this->db->get_where('users', array('user_id' => $id))->row_array();
 		if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
 		unset($row['password']);
+		$photo_urls = $this->_staff_photo_urls_for_ids(array($id));
+		$row['profile_image_url'] = isset($photo_urls[$id]) ? $photo_urls[$id] : null;
 
 		$phones = $this->db->get_where('users_phones', array('user_id' => $id))->result_array();
 
@@ -2670,15 +2672,25 @@ class Hrapi extends CI_Controller {
 
 		$type = isset($_POST['type']) ? trim((string)$_POST['type']) : '';
 		if ($type === '') $this->_json(array('success' => false, 'message' => 'Document type required'), 422);
+		if (strtolower($type) === 'photo') {
+			$this->db->where('teacher_id', $user_id);
+			$this->db->where('type', 'Photo');
+			$this->db->delete('teacher_documents');
+		}
 
 		if (empty($_FILES['teacher_document']['name']) || !is_uploaded_file($_FILES['teacher_document']['tmp_name'])) {
 			$this->_json(array('success' => false, 'message' => 'File required'), 422);
 		}
 
 		$ext = strtolower(pathinfo($_FILES['teacher_document']['name'], PATHINFO_EXTENSION));
-		$allowed = array('gif', 'jpg', 'jpeg', 'png', 'pdf', 'webp');
+		$allowed = strtolower($type) === 'photo'
+			? array('gif', 'jpg', 'jpeg', 'png', 'webp')
+			: array('gif', 'jpg', 'jpeg', 'png', 'pdf', 'webp');
 		if ($ext !== '' && !in_array($ext, $allowed, true)) {
-			$this->_json(array('success' => false, 'message' => 'Invalid file type'), 422);
+			$this->_json(array(
+				'success' => false,
+				'message' => strtolower($type) === 'photo' ? 'Profile photo must be an image (JPG, PNG, WebP)' : 'Invalid file type',
+			), 422);
 		}
 		if ($_FILES['teacher_document']['size'] > 8 * 1024 * 1024) {
 			$this->_json(array('success' => false, 'message' => 'File too large (max 8MB)'), 422);
@@ -2705,7 +2717,12 @@ class Hrapi extends CI_Controller {
 			'type' => $type,
 		));
 		$id = (int)$this->db->insert_id();
-		$this->_json(array('success' => true, 'id' => $id, 'image' => $filename));
+		$image_url = null;
+		if (strtolower($type) === 'photo') {
+			$urls = $this->_staff_photo_urls_for_ids(array($user_id));
+			$image_url = isset($urls[$user_id]) ? $urls[$user_id] : null;
+		}
+		$this->_json(array('success' => true, 'id' => $id, 'image' => $filename, 'image_url' => $image_url));
 	}
 
 	/** Delete a staff document by id. */

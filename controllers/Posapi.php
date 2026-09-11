@@ -547,7 +547,7 @@ class Posapi extends CI_Controller {
 			return null;
 		}
 
-		return rtrim(base_url(), '/') . '/uploads/' . rawurlencode($pick);
+		return rtrim(base_url(), '/') . '/uploads/' . str_replace('%2F', '/', rawurlencode($pick));
 	}
 
 	private function _user_payload($user)
@@ -919,7 +919,67 @@ class Posapi extends CI_Controller {
 				'username' => isset($user['username']) ? $user['username'] : '',
 				'role' => isset($user['role']) ? $user['role'] : '',
 				'designations' => $designations,
+				'image_url' => $this->_user_image_url($user),
 			),
+		));
+	}
+
+	/** Upload / replace signed-in user's profile photo (teacher_documents type Photo). */
+	public function profile_photo_upload()
+	{
+		$user_id = (int) $this->current_user['user_id'];
+		if (empty($_FILES['photo']['name']) || !is_uploaded_file($_FILES['photo']['tmp_name'])) {
+			$this->_json(array('success' => false, 'message' => 'Photo file required'), 422);
+		}
+
+		$ext = strtolower(pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION));
+		$allowed = array('gif', 'jpg', 'jpeg', 'png', 'webp');
+		if ($ext !== '' && !in_array($ext, $allowed, true)) {
+			$this->_json(array('success' => false, 'message' => 'Invalid image type'), 422);
+		}
+		if ($_FILES['photo']['size'] > 8 * 1024 * 1024) {
+			$this->_json(array('success' => false, 'message' => 'File too large (max 8MB)'), 422);
+		}
+
+		if ($this->db->table_exists('teacher_documents')) {
+			$this->db->where('teacher_id', $user_id);
+			$this->db->where('type', 'Photo');
+			$this->db->delete('teacher_documents');
+		}
+
+		$this->load->library('upload');
+		$this->upload->initialize(array(
+			'upload_path' => FCPATH . 'uploads/',
+			'allowed_types' => implode('|', $allowed),
+			'file_name' => uniqid('staff_photo_', true) . ($ext !== '' ? '.' . $ext : ''),
+		));
+		if (!$this->upload->do_upload('photo')) {
+			$this->_json(array('success' => false, 'message' => 'Upload failed: ' . strip_tags($this->upload->display_errors('', ''))), 500);
+		}
+		$uploaded = $this->upload->data();
+		$filename = isset($uploaded['file_name']) ? $uploaded['file_name'] : '';
+		if ($filename === '') {
+			$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
+		}
+
+		if ($this->db->table_exists('teacher_documents')) {
+			$this->db->insert('teacher_documents', array(
+				'teacher_id' => $user_id,
+				'image' => $filename,
+				'type' => 'Photo',
+			));
+		}
+
+		$row = $this->db->get_where('users', array('user_id' => $user_id))->row_array();
+		if ($row) {
+			$this->current_user = $row;
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'message' => 'Profile photo updated',
+			'image_url' => $this->_user_image_url($this->current_user),
+			'user' => $this->_user_payload($this->current_user),
 		));
 	}
 
@@ -1133,7 +1193,7 @@ class Posapi extends CI_Controller {
 		$filename = trim((string)$filename);
 		if ($filename === '') return null;
 		if (preg_match('#^https?://#i', $filename)) return $filename;
-		return rtrim(base_url(), '/') . '/pos_images/' . rawurlencode($filename);
+		return rtrim(base_url(), '/') . '/pos_images/' . str_replace('%2F', '/', rawurlencode($filename));
 	}
 
 	private function _decorate_images(&$rows)
@@ -1153,12 +1213,8 @@ class Posapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Permission denied'), 403);
 		}
 
-		$dir = FCPATH . 'pos_images/';
-		if (!is_dir($dir)) {
-			@mkdir($dir, 0755, true);
-		}
-
 		$filename = '';
+		$this->load->library('s3_direct_storage');
 
 		// Multipart file
 		if (!empty($_FILES['image']['name']) && is_uploaded_file($_FILES['image']['tmp_name'])) {
@@ -1171,7 +1227,8 @@ class Posapi extends CI_Controller {
 				$this->_json(array('success' => false, 'message' => 'Max 5MB image'), 422);
 			}
 			$filename = 'pos_' . date('YmdHis') . '_' . mt_rand(1000, 9999) . '.' . $ext;
-			if (!move_uploaded_file($_FILES['image']['tmp_name'], $dir . $filename)) {
+			$filename = $this->s3_direct_storage->put_uploaded_file('image', 'pos_images', $filename);
+			if ($filename === false) {
 				$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
 			}
 		} else {
@@ -1200,7 +1257,8 @@ class Posapi extends CI_Controller {
 				$this->_json(array('success' => false, 'message' => 'Max 5MB image'), 422);
 			}
 			$filename = 'pos_' . date('YmdHis') . '_' . mt_rand(1000, 9999) . '.' . $ext;
-			if (file_put_contents($dir . $filename, $bin) === false) {
+			$filename = $this->s3_direct_storage->put_contents($bin, 'pos_images', $filename, 'image/' . $ext);
+			if ($filename === false) {
 				$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
 			}
 		}
@@ -1388,7 +1446,7 @@ class Posapi extends CI_Controller {
 		$base = rtrim(base_url(), '/');
 		foreach ($rows as &$row) {
 			$img = isset($row['product_image']) ? trim($row['product_image']) : '';
-			$row['image_url'] = $img !== '' ? $base . '/inventory_images/' . rawurlencode($img) : null;
+			$row['image_url'] = $img !== '' ? $base . '/inventory_images/' . str_replace('%2F', '/', rawurlencode($img)) : null;
 			if ($campus_id > 0) {
 				$row['campus_id'] = $campus_id;
 			}
@@ -1469,7 +1527,7 @@ class Posapi extends CI_Controller {
 			foreach ($items as &$row) {
 				$row['type'] = 'item';
 				$img = isset($row['product_image']) ? trim($row['product_image']) : '';
-				$row['image_url'] = $img !== '' ? $base . '/inventory_images/' . rawurlencode($img) : null;
+				$row['image_url'] = $img !== '' ? $base . '/inventory_images/' . str_replace('%2F', '/', rawurlencode($img)) : null;
 			}
 		}
 
@@ -1590,7 +1648,7 @@ class Posapi extends CI_Controller {
 			if ($row['stock'] <= 0) $out_of_stock++;
 			$img = isset($row['product_image']) ? trim((string)$row['product_image']) : '';
 			$row['image_url'] = $img !== ''
-				? rtrim(base_url(), '/') . '/inventory_images/' . rawurlencode($img)
+				? rtrim(base_url(), '/') . '/inventory_images/' . str_replace('%2F', '/', rawurlencode($img))
 				: null;
 		}
 		unset($row);
@@ -1795,7 +1853,7 @@ class Posapi extends CI_Controller {
 		$base = rtrim(base_url(), '/');
 		foreach ($rows as &$row) {
 			$img = isset($row['product_image']) ? trim($row['product_image']) : '';
-			$row['image_url'] = $img !== '' ? $base . '/inventory_images/' . rawurlencode($img) : null;
+			$row['image_url'] = $img !== '' ? $base . '/inventory_images/' . str_replace('%2F', '/', rawurlencode($img)) : null;
 		}
 
 		$this->_json(array('success' => true, 'data' => $rows));
@@ -1989,7 +2047,7 @@ class Posapi extends CI_Controller {
 			if ($online !== '') {
 				$row['image_url'] = $online;
 			} elseif ($photo !== '') {
-				$row['image_url'] = $base . '/uploads/' . rawurlencode($photo);
+				$row['image_url'] = $base . '/uploads/' . str_replace('%2F', '/', rawurlencode($photo));
 			} else {
 				$row['image_url'] = null;
 			}
@@ -2183,7 +2241,7 @@ class Posapi extends CI_Controller {
 			if (!empty($photo_row['online_image'])) {
 				$image_url = $photo_row['online_image'];
 			} elseif (!empty($photo_row['image'])) {
-				$image_url = $base . '/uploads/' . rawurlencode($photo_row['image']);
+				$image_url = $base . '/uploads/' . str_replace('%2F', '/', rawurlencode($photo_row['image']));
 			}
 		}
 
