@@ -74,6 +74,13 @@ class Inventoryapi extends CI_Controller {
 		return $name !== '' ? $name : 'POS';
 	}
 
+	private function _bank_debit($row)
+	{
+		if (!$row) return 0.0;
+		$value = isset($row['debit']) ? $row['debit'] : 0;
+		return (float)str_replace(',', '', (string)$value);
+	}
+
 	/** Extend product_history with destination + batch for move audit. */
 	private function _ensure_product_history_move_columns()
 	{
@@ -119,6 +126,9 @@ class Inventoryapi extends CI_Controller {
 			'gate_approve_by' => "ALTER TABLE `purchase_requests` ADD `gate_approve_by` VARCHAR(255) NULL DEFAULT NULL",
 			'gate_approve_at' => "ALTER TABLE `purchase_requests` ADD `gate_approve_at` DATETIME NULL DEFAULT NULL",
 			'gate_received_qty' => "ALTER TABLE `purchase_requests` ADD `gate_received_qty` INT(11) NOT NULL DEFAULT 0",
+			// Gate can receive a line across several days. Keep the stock/GRN total
+			// separately so every received batch is entered exactly once.
+			'grn_received_qty' => "ALTER TABLE `purchase_requests` ADD `grn_received_qty` INT(11) NOT NULL DEFAULT 0",
 			'grn_by' => "ALTER TABLE `purchase_requests` ADD `grn_by` VARCHAR(255) NULL DEFAULT NULL",
 			'grn_at' => "ALTER TABLE `purchase_requests` ADD `grn_at` DATETIME NULL DEFAULT NULL",
 			'cancelled_by' => "ALTER TABLE `purchase_requests` ADD `cancelled_by` VARCHAR(255) NULL DEFAULT NULL",
@@ -136,19 +146,24 @@ class Inventoryapi extends CI_Controller {
 	/** Log of partial gate receives (multi-day entries by security). */
 	private function _ensure_gate_receive_table()
 	{
-		if ($this->db->table_exists('purchase_gate_receives')) return;
-		$this->db->query("CREATE TABLE `purchase_gate_receives` (
-			`id` INT(11) NOT NULL AUTO_INCREMENT,
-			`purchase_request_id` INT(11) NOT NULL,
-			`purchase_no` VARCHAR(255) NOT NULL,
-			`quantity` INT(11) NOT NULL DEFAULT 0,
-			`received_by` VARCHAR(255) NULL DEFAULT NULL,
-			`received_at` DATETIME NULL DEFAULT NULL,
-			`comment` VARCHAR(255) NULL DEFAULT NULL,
-			PRIMARY KEY (`id`),
-			KEY `purchase_request_id` (`purchase_request_id`),
-			KEY `purchase_no` (`purchase_no`)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+		if (!$this->db->table_exists('purchase_gate_receives')) {
+			$this->db->query("CREATE TABLE `purchase_gate_receives` (
+				`id` INT(11) NOT NULL AUTO_INCREMENT,
+				`purchase_request_id` INT(11) NOT NULL,
+				`purchase_no` VARCHAR(255) NOT NULL,
+				`quantity` INT(11) NOT NULL DEFAULT 0,
+				`received_by` VARCHAR(255) NULL DEFAULT NULL,
+				`received_at` DATETIME NULL DEFAULT NULL,
+				`comment` VARCHAR(255) NULL DEFAULT NULL,
+				`images_json` TEXT NULL DEFAULT NULL,
+				PRIMARY KEY (`id`),
+				KEY `purchase_request_id` (`purchase_request_id`),
+				KEY `purchase_no` (`purchase_no`)
+			) ENGINE=InnoDB DEFAULT CHARSET=utf8");
+		}
+		if (!$this->db->field_exists('images_json', 'purchase_gate_receives')) {
+			$this->db->query('ALTER TABLE `purchase_gate_receives` ADD `images_json` TEXT NULL DEFAULT NULL');
+		}
 	}
 
 	private function _auth_user()
@@ -264,7 +279,7 @@ class Inventoryapi extends CI_Controller {
 	{
 		$file = trim((string)$file);
 		if ($file === '') return null;
-		return rtrim(base_url(), '/') . '/inventory_images/' . rawurlencode($file);
+		return rtrim(base_url(), '/') . '/inventory_images/' . str_replace('%2F', '/', rawurlencode($file));
 	}
 
 	/**
@@ -473,12 +488,8 @@ class Inventoryapi extends CI_Controller {
 	/** Upload product_image / purchase_slip into inventory_images/ */
 	public function upload_file()
 	{
-		$dir = FCPATH . 'inventory_images/';
-		if (!is_dir($dir)) {
-			@mkdir($dir, 0755, true);
-		}
-
 		$filename = '';
+		$this->load->library('s3_direct_storage');
 		if (!empty($_FILES['file']['name']) && is_uploaded_file($_FILES['file']['tmp_name'])) {
 			$ext = strtolower(pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION));
 			$allowed = array('jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf');
@@ -489,8 +500,9 @@ class Inventoryapi extends CI_Controller {
 				$this->_json(array('success' => false, 'message' => 'Max 8MB file'), 422);
 			}
 			$filename = 'inv_' . date('YmdHis') . '_' . mt_rand(1000, 9999) . '.' . $ext;
-			if (!move_uploaded_file($_FILES['file']['tmp_name'], $dir . $filename)) {
-				$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
+			$filename = $this->s3_direct_storage->put_uploaded_file('file', 'inventory_images', $filename);
+			if ($filename === false) {
+				$this->_json(array('success' => false, 'message' => $this->s3_direct_storage->last_error()), 500);
 			}
 		} else {
 			$body = $this->_body();
@@ -512,8 +524,9 @@ class Inventoryapi extends CI_Controller {
 				$this->_json(array('success' => false, 'message' => 'Invalid file data'), 422);
 			}
 			$filename = 'inv_' . date('YmdHis') . '_' . mt_rand(1000, 9999) . '.' . $ext;
-			if (file_put_contents($dir . $filename, $bin) === false) {
-				$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
+			$filename = $this->s3_direct_storage->put_contents($bin, 'inventory_images', $filename, isset($mime) ? $mime : 'application/octet-stream');
+			if ($filename === false) {
+				$this->_json(array('success' => false, 'message' => $this->s3_direct_storage->last_error()), 500);
 			}
 		}
 
@@ -1691,6 +1704,10 @@ class Inventoryapi extends CI_Controller {
 		$payments = array();
 		if ($this->db->table_exists('payment_aggrements')) {
 			$payments = $this->db->get_where('payment_aggrements', array('purchase_no' => $purchase_no))->result_array();
+			foreach ($payments as &$payment) {
+				$payment['image_url'] = $this->_img_url(isset($payment['image']) ? $payment['image'] : '');
+			}
+			unset($payment);
 		}
 
 		$all_approved = true;
@@ -1989,6 +2006,17 @@ class Inventoryapi extends CI_Controller {
 			$this->db->order_by('purchase_gate_receives.received_at', 'DESC');
 			$this->db->order_by('purchase_gate_receives.id', 'DESC');
 			$gate_receives = $this->db->get()->result_array();
+			foreach ($gate_receives as &$receive) {
+				$files = !empty($receive['images_json']) ? json_decode($receive['images_json'], true) : array();
+				if (!is_array($files)) $files = array();
+				$receive['image_files'] = array_values($files);
+				$receive['image_urls'] = array();
+				foreach ($receive['image_files'] as $file) {
+					$url = $this->_img_url($file);
+					if ($url) $receive['image_urls'][] = $url;
+				}
+			}
+			unset($receive);
 		}
 
 		// Enrich lines with remaining gate qty for UI
@@ -2574,6 +2602,10 @@ class Inventoryapi extends CI_Controller {
 		$paid_type = isset($body['paid_type']) ? trim((string)$body['paid_type']) : 'cash';
 		if ($paid_type !== 'bank') $paid_type = 'cash';
 		$transaction_id = isset($body['transaction_id']) ? (int)$body['transaction_id'] : 0;
+		$proof_image = isset($body['proof_image']) ? trim((string)$body['proof_image']) : '';
+		if ($proof_image !== '' && preg_match('#^(s3/)?[A-Za-z0-9][A-Za-z0-9._-]*$#', $proof_image) !== 1) {
+			$this->_json(array('success' => false, 'message' => 'Invalid payment proof image'), 422);
+		}
 		$expense_date = isset($body['date']) ? trim((string)$body['date']) : date('Y-m-d');
 		if ($expense_date === '') $expense_date = date('Y-m-d');
 
@@ -2637,12 +2669,33 @@ class Inventoryapi extends CI_Controller {
 		}
 		$expense_category_id = (int)$default_expense_category[0]['expense_category_id'];
 
+		$bank_row = null;
 		if ($paid_type === 'bank') {
 			if (!$transaction_id) {
 				$this->_json(array(
 					'success' => false,
 					'message' => 'Select a bank transaction for this payment.',
 				), 422);
+			}
+			if (!$this->db->table_exists('bank_reconciliation_statement')) {
+				$this->_json(array('success' => false, 'message' => 'Bank statement entries are unavailable'), 500);
+			}
+			$bank_row = $this->db->get_where('bank_reconciliation_statement', array('id' => $transaction_id))->row_array();
+			if (!$bank_row) {
+				$this->_json(array('success' => false, 'message' => 'Bank statement entry not found'), 404);
+			}
+			if (!empty($bank_row['expense_id'])) {
+				$this->_json(array('success' => false, 'message' => 'This bank statement entry is already tagged'), 422);
+			}
+			$bank_debit = $this->_bank_debit($bank_row);
+			if ($bank_debit <= 0 || abs($bank_debit - $amount) > 0.01) {
+				$this->_json(array(
+					'success' => false,
+					'message' => 'Selected bank debit must exactly match installment amount ' . number_format($amount, 2),
+				), 422);
+			}
+			if (!empty($bank_row['trans_date'])) {
+				$expense_date = date('Y-m-d', strtotime($bank_row['trans_date']));
 			}
 		} else {
 			$petty = $this->db->get_where('petty_cash_college_wise', array(
@@ -2676,7 +2729,7 @@ class Inventoryapi extends CI_Controller {
 			'date' => $expense_date,
 			'actual_date' => $now,
 			'title' => 'Purchase Order',
-			'image' => '',
+			'image' => $proof_image,
 			'amount' => $amount,
 			'add_by' => $name,
 			'add_by_id' => $user_id,
@@ -2692,7 +2745,7 @@ class Inventoryapi extends CI_Controller {
 			'class' => 0,
 			'council_exam_no' => '',
 			'clear_by' => '',
-			'upload_image' => 0,
+			'upload_image' => $proof_image !== '' ? 1 : 0,
 		);
 		// Link to construction project when PR is project-tagged (for expense daily closing)
 		if ($purchase_no !== '' && $this->db->table_exists('purchase_requests')
@@ -2723,10 +2776,18 @@ class Inventoryapi extends CI_Controller {
 			$this->db->update('petty_cash_college_wise');
 		} else {
 			$this->db->where('id', $transaction_id)
+				->where('(expense_id IS NULL OR expense_id = 0)', null, false)
 				->update('bank_reconciliation_statement', array('expense_id' => $expense_id));
+			if ($this->db->affected_rows() < 1) {
+				$this->db->where('expense_id', $expense_id)->delete('expenses');
+				$this->_json(array('success' => false, 'message' => 'This bank statement entry was tagged by someone else'), 409);
+			}
 		}
 
 		$upd['paid_type'] = $paid_type;
+		if ($proof_image !== '' && $this->db->field_exists('image', 'payment_aggrements')) {
+			$upd['image'] = $proof_image;
+		}
 		$this->db->where($pk_col, $pk)->update('payment_aggrements', $upd);
 		$this->_json(array(
 			'success' => true,
@@ -2739,6 +2800,64 @@ class Inventoryapi extends CI_Controller {
 			'paid_by' => $name,
 			'paid_at' => $now,
 		));
+	}
+
+	/** Active bank accounts for inventory-payment bank reconciliation. */
+	public function bank_accounts()
+	{
+		if (!$this->db->table_exists('accounts')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$rows = $this->db->query(
+			"SELECT id, account_name, account_title FROM accounts
+			 WHERE type = '1' OR type = 1 ORDER BY account_title ASC, account_name ASC"
+		)->result_array();
+		$out = array();
+		foreach ($rows as $row) {
+			$title = trim((string)(isset($row['account_title']) ? $row['account_title'] : ''));
+			$name = trim((string)(isset($row['account_name']) ? $row['account_name'] : ''));
+			$out[] = array(
+				'id' => (int)$row['id'],
+				'account_name' => $name,
+				'account_title' => $title,
+				// account_name holds the bank's actual name; keep the account title as
+				// supporting detail so duplicate titles remain distinguishable.
+				'label' => $name !== ''
+					? ($title !== '' ? $name . ' (' . $title . ')' : $name)
+					: ($title !== '' ? $title : ('Account #' . $row['id'])),
+			);
+		}
+		$this->_json(array('success' => true, 'data' => $out));
+	}
+
+	/** Untagged statement debit rows used to pay an inventory installment. */
+	public function bank_day_entries()
+	{
+		$account_id = (int)$this->input->get('account_id');
+		$date = trim((string)$this->input->get('date'));
+		if ($account_id <= 0 || $date === '') {
+			$this->_json(array('success' => false, 'message' => 'account_id and date required'), 422);
+		}
+		if (!$this->db->table_exists('bank_reconciliation_statement')) {
+			$this->_json(array('success' => true, 'data' => array()));
+		}
+		$rows = $this->db->query(
+			"SELECT id, account_id, trans_date, description, reference_no, statement_no, debit, credit, balance
+			 FROM bank_reconciliation_statement
+			 WHERE account_id = ? AND DATE(trans_date) = ?
+			   AND (expense_id IS NULL OR expense_id = 0)
+			   AND CAST(REPLACE(COALESCE(debit, '0'), ',', '') AS DECIMAL(18,2)) > 0
+			 ORDER BY id ASC LIMIT 500",
+			array($account_id, $date)
+		)->result_array();
+		foreach ($rows as &$row) {
+			$row['id'] = (int)$row['id'];
+			$row['account_id'] = (int)$row['account_id'];
+			$row['debit'] = $this->_bank_debit($row);
+			$row['trans_date'] = !empty($row['trans_date']) ? date('Y-m-d', strtotime($row['trans_date'])) : $date;
+		}
+		unset($row);
+		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
 	/** Reduce / correct installment amount before pay (e.g. partial vendor discount). */
@@ -2853,6 +2972,13 @@ class Inventoryapi extends CI_Controller {
 		$name = $this->_actor_name();
 		$now = date('Y-m-d H:i:s');
 		$comment = isset($body['comment']) ? trim((string)$body['comment']) : '';
+		$image_files = isset($body['image_files']) && is_array($body['image_files'])
+			? $body['image_files'] : array();
+		$image_files = array_slice(array_values(array_unique(array_filter($image_files, function ($file) {
+			$file = trim((string)$file);
+			return preg_match('#^(s3/)?[A-Za-z0-9][A-Za-z0-9._-]*$#', $file) === 1;
+		}))), 0, 8);
+		$image_files_json = count($image_files) ? json_encode($image_files) : null;
 
 		$items = array();
 		if (isset($body['items']) && is_array($body['items']) && count($body['items'])) {
@@ -2923,11 +3049,42 @@ class Inventoryapi extends CI_Controller {
 			}
 			$new_got = $got + $qty;
 			$fully = $new_got >= $ordered ? 1 : 0;
+			/*
+			 * A gate approval is the physical receipt confirmation. Stock the exact
+			 * received batch immediately (including partial deliveries), rather than
+			 * waiting for the whole line to arrive. This is intentionally before the
+			 * line is marked fully approved: $approval remains the "all received"
+			 * flag used by the journey UI.
+			 */
+			$grn_got = isset($pr['grn_received_qty']) ? (int)$pr['grn_received_qty'] : 0;
+			if ($grn_got < 0) $grn_got = 0;
+			$stock_qty = min($qty, max(0, $ordered - $grn_got));
+			if ($stock_qty <= 0) {
+				$this->_json(array('success' => false, 'message' => 'This received quantity is already entered in stock (line ' . $pr_id . ')'), 409);
+			}
+			$sale_amount = (float)(isset($pr['purchase_price']) ? $pr['purchase_price'] : 0);
+			for ($i = 0; $i < $stock_qty; $i++) {
+				$this->db->insert('products', $this->_product_insert_row(array(
+					'product_name_id' => $pr['product_name_id'],
+					'campus_id' => (int)$pr['campus_id'],
+					'room_id' => (int)$pr['room_id'],
+					'subroom_id' => (int)$pr['subroom_id'],
+					'sale_amount' => $sale_amount,
+					'saleable' => 0,
+					'purchase_no' => isset($pr['purchase_no']) ? $pr['purchase_no'] : '',
+					'estimated_price' => (int)round($sale_amount),
+				)));
+			}
+			$new_grn_got = $grn_got + $stock_qty;
 			$this->db->where('purchase_request_id', $pr_id)->update('purchase_requests', array(
 				'gate_received_qty' => $new_got,
 				'gate_approval' => $fully,
+				'grn_received_qty' => $new_grn_got,
+				'approval' => $new_grn_got >= $ordered ? 1 : 0,
 				'gate_approve_by' => $name,
 				'gate_approve_at' => $now,
+				'grn_by' => $name,
+				'grn_at' => $now,
 			));
 			$this->db->insert('purchase_gate_receives', array(
 				'purchase_request_id' => $pr_id,
@@ -2936,13 +3093,16 @@ class Inventoryapi extends CI_Controller {
 				'received_by' => $name,
 				'received_at' => $now,
 				'comment' => $comment,
+				'images_json' => $image_files_json,
 			));
 			$updated++;
 			if ($fully) $completed++;
 			$entries[] = array(
 				'purchase_request_id' => $pr_id,
 				'quantity' => $qty,
+				'grn_quantity' => $stock_qty,
 				'gate_received_qty' => $new_got,
+				'grn_received_qty' => $new_grn_got,
 				'gate_approval' => $fully,
 			);
 		}
@@ -2955,8 +3115,8 @@ class Inventoryapi extends CI_Controller {
 			'received_at' => $now,
 			'entries' => $entries,
 			'message' => $completed === $updated && $updated > 0
-				? 'Gate entry saved — selected lines fully received'
-				: 'Gate entry saved — more can arrive later',
+				? 'Gate entry saved — GRN created and received stock added to inventory'
+				: 'Gate entry saved — received stock added to inventory; more can arrive later',
 		));
 	}
 

@@ -103,7 +103,7 @@ $autoload['helper'] = array('url', 'file', 'custom_helper', 'pos_auth_helper');
 | config files.  Otherwise, leave it blank.
 |
 */
-$autoload['config'] = array();
+$autoload['config'] = array('s3_direct');
 
 /*
 | -------------------------------------------------------------------
