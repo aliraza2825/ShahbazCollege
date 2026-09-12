@@ -236,18 +236,15 @@ class Accountsapi extends CI_Controller {
 		}
 		if (!$fileKey) return '';
 
-		$dir = FCPATH . 'uploads/';
-		if (!is_dir($dir)) {
-			@mkdir($dir, 0777, true);
-		}
 		$ext = pathinfo($_FILES[$fileKey]['name'], PATHINFO_EXTENSION);
 		$filename = 'proof_' . date('YmdHis') . '_' . mt_rand(1000, 9999);
 		if ($ext !== '') $filename .= '.' . preg_replace('/[^a-zA-Z0-9]/', '', $ext);
-		$dest = $dir . $filename;
-		if (!move_uploaded_file($_FILES[$fileKey]['tmp_name'], $dest)) {
+		$this->load->library('s3_direct_storage');
+		$stored = $this->s3_direct_storage->put_uploaded_file($fileKey, 'uploads', $filename);
+		if ($stored === false) {
 			return '';
 		}
-		return $filename;
+		return $stored;
 	}
 
 	private function _parse_account_name($accountName)
@@ -3008,6 +3005,13 @@ class Accountsapi extends CI_Controller {
 		)->row_array();
 
 		$closed = $this->_closing_for_date($campus_id, $date);
+		$flags = $this->_closing_flags();
+		$transfer_campuses = array();
+		if (!empty($flags['can_dailyclosing'])) {
+			$transfer_campuses = $this->db->query(
+				'SELECT campus_id, campus_name FROM campuses ORDER BY campus_name ASC'
+			)->result_array();
+		}
 		if ($closed) {
 			$ccid = $closed['campus_closing_id'];
 			$fees = $this->_closing_detail_fees_by_ccid($ccid);
@@ -3074,6 +3078,8 @@ class Accountsapi extends CI_Controller {
 				'receivable_amount' => isset($closed['receivable_amount'])
 					? (float)$closed['receivable_amount']
 					: (float)$closed['closed_amount'],
+				'can_transfer_fee' => false,
+				'transfer_campuses' => array(),
 			));
 		}
 
@@ -3180,7 +3186,51 @@ class Accountsapi extends CI_Controller {
 			'fee_ids' => $bundle['fee_ids'],
 			'sale_ids' => $bundle['sale_ids'],
 			'loan_ids' => $bundle['loan_ids'],
+			'can_transfer_fee' => !empty($flags['can_dailyclosing']),
+			'transfer_campuses' => $transfer_campuses,
 		));
+	}
+
+	/** Legacy Closing::transfer_fee — transfer an open-day fee to another campus. */
+	public function closing_transfer_fee()
+	{
+		$this->_assert_section('dailyclosing');
+		$body = $this->_body();
+		$fee_id = isset($body['fee_id']) ? (int)$body['fee_id'] : 0;
+		$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+		if ($fee_id <= 0 || $campus_id <= 0) {
+			$this->_json(array('success' => false, 'message' => 'Fee and destination campus are required'), 400);
+		}
+
+		$campus = $this->db->query('SELECT campus_id FROM campuses WHERE campus_id = ? LIMIT 1', array($campus_id))->row_array();
+		if (!$campus) $this->_json(array('success' => false, 'message' => 'Selected campus was not found'), 404);
+
+		$fee = $this->db->query('SELECT id, closing_id, merged_challan FROM payments WHERE id = ? LIMIT 1', array($fee_id))->row_array();
+		if (!$fee) $this->_json(array('success' => false, 'message' => 'Fee record was not found'), 404);
+		if (!empty($fee['closing_id'])) {
+			$this->_json(array('success' => false, 'message' => 'A fee already included in a closing cannot be transferred'), 422);
+		}
+
+		$this->db->trans_start();
+		if (!empty($fee['merged_challan'])) {
+			$locked = $this->db->query(
+				"SELECT COUNT(*) AS total FROM payments WHERE merged_challan = ? AND closing_id IS NOT NULL AND closing_id != '' AND closing_id != '0'",
+				array($fee['merged_challan'])
+			)->row_array();
+			if (!empty($locked['total'])) {
+				$this->db->trans_complete();
+				$this->_json(array('success' => false, 'message' => 'This merged challan already contains a closed fee'), 422);
+			}
+			$this->db->where('merged_challan', $fee['merged_challan'])->update('payments', array('submitted_fee_campus_id' => $campus_id));
+		} else {
+			$this->db->where('id', $fee_id)->update('payments', array('submitted_fee_campus_id' => $campus_id));
+		}
+		$moved = (int)$this->db->affected_rows();
+		$this->db->trans_complete();
+		if ($this->db->trans_status() === false) {
+			$this->_json(array('success' => false, 'message' => 'Could not transfer fee'), 500);
+		}
+		$this->_json(array('success' => true, 'moved' => $moved, 'message' => 'Fee transferred to selected campus'));
 	}
 
 	/**
@@ -4305,17 +4355,17 @@ class Accountsapi extends CI_Controller {
 			$key = !empty($_FILES['file']['tmp_name']) ? 'file' : 'statement';
 			$tmp = $_FILES[$key]['tmp_name'];
 			$name = $_FILES[$key]['name'];
-			$dir = FCPATH . 'statements/';
-			if (!is_dir($dir)) @mkdir($dir, 0777, true);
 			$ext = pathinfo($name, PATHINFO_EXTENSION);
 			$stored = 'stmt_' . date('YmdHis') . '_' . mt_rand(1000, 9999) . ($ext ? '.' . $ext : '');
-			if (!@move_uploaded_file($tmp, $dir . $stored)) {
-				$this->_json(array('success' => false, 'message' => 'Failed to store upload'), 500);
-			}
-			$file_name = $stored;
-			$parsed = $this->_brs_parse_csv_lines($account_id, $dir . $stored);
+			$parsed = $this->_brs_parse_csv_lines($account_id, $tmp);
 			if (isset($parsed['error'])) {
 				$this->_json(array('success' => false, 'message' => $parsed['error']), 400);
+			}
+			$this->load->library('s3_direct_storage');
+			$mime = !empty($_FILES[$key]['type']) ? $_FILES[$key]['type'] : 'text/csv';
+			$file_name = $this->s3_direct_storage->put_file($tmp, 'statements', $stored, $mime);
+			if ($file_name === false) {
+				$this->_json(array('success' => false, 'message' => 'Failed to store upload'), 500);
 			}
 			$lines = $parsed;
 		} else {
@@ -5023,6 +5073,11 @@ class Accountsapi extends CI_Controller {
 		}
 		$my_loan = $this->db->query('SELECT * FROM loans WHERE id = ? LIMIT 1', array($loan_id))->row_array();
 		if (!$my_loan) $this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
+		$is_external_loan = $this->_field_exists('loans', 'is_external')
+			&& (!empty($my_loan['is_external']) || ((int)(isset($my_loan['user_id']) ? $my_loan['user_id'] : 0) === 0 && trim((string)(isset($my_loan['borrower_name']) ? $my_loan['borrower_name'] : '')) !== ''));
+		if ($is_external_loan && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'Only an admin can issue an external person loan'), 403);
+		}
 
 		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('loan_id' => $loan_id));
 
@@ -6452,6 +6507,12 @@ class Accountsapi extends CI_Controller {
 		$name_sql = $has_external
 			? "COALESCE(NULLIF(TRIM(loans.borrower_name), ''), CONCAT(users.first_name, ' ', users.last_name))"
 			: "CONCAT(users.first_name, ' ', users.last_name)";
+		$external_visibility_sql = '';
+		if (!$this->_is_admin()) {
+			$external_visibility_sql = $has_external
+				? ' AND (COALESCE(loans.is_external, 0) = 0 AND loans.user_id <> 0)'
+				: ' AND loans.user_id <> 0';
+		}
 		$rows = $this->db->query(
 			"SELECT loans.*,
 					users.first_name, users.last_name, users.cnic, users.mobile, users.emergency_no,
@@ -6461,7 +6522,8 @@ class Accountsapi extends CI_Controller {
 			 FROM loans
 			 " . ($has_external ? 'LEFT' : 'INNER') . " JOIN users ON loans.user_id = users.user_id
 			 LEFT JOIN users approver ON approver.user_id = loans.updated_by
-			 WHERE loans.status = 1 AND loans.cash_given IS NULL
+			 WHERE loans.status = 1 AND loans.cash_given IS NULL"
+				. $external_visibility_sql . "
 			 ORDER BY loans.id DESC"
 		)->result_array();
 		$out = array();
@@ -6493,6 +6555,11 @@ class Accountsapi extends CI_Controller {
 
 		$loan = $this->db->query('SELECT * FROM loans WHERE id = ? LIMIT 1', array($loan_id))->row_array();
 		if (!$loan) $this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
+		$is_external_loan = $this->_field_exists('loans', 'is_external')
+			&& (!empty($loan['is_external']) || ((int)(isset($loan['user_id']) ? $loan['user_id'] : 0) === 0 && trim((string)(isset($loan['borrower_name']) ? $loan['borrower_name'] : '')) !== ''));
+		if ($is_external_loan && !$this->_is_admin()) {
+			$this->_json(array('success' => false, 'message' => 'Only an admin can issue an external person loan'), 403);
+		}
 
 		$default_amount = isset($loan['amount_approved']) && $loan['amount_approved'] !== '' && $loan['amount_approved'] !== null
 			? (float)$loan['amount_approved']
