@@ -556,7 +556,7 @@ class Reports_service {
             'data' => array(
                 'classes' => $classes,
                 'backup_date' => $date,
-                's3_base' => 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com/backup/' . $date . '/',
+                's3_base' => 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com/backup/' . $date . '/',
             ),
         );
     }

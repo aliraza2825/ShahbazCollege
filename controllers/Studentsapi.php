@@ -178,7 +178,7 @@ class Studentsapi extends CI_Controller {
 		if (!$url) {
 			return null;
 		}
-		$bucket = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+		$bucket = 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
 		$cloudfront = 'https://d10iw6eujrfvyr.cloudfront.net';
 		return str_replace($bucket, $cloudfront, $url);
 	}

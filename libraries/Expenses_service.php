@@ -120,7 +120,7 @@ class Expenses_service {
     {
         if (!empty($expense['online_image'])) {
             return str_replace(
-                'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com',
+                'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com',
                 'https://d10iw6eujrfvyr.cloudfront.net',
                 $expense['online_image']
             );
@@ -912,7 +912,7 @@ class Expenses_service {
             $image_url = null;
             if (!empty($exp['online_image'])) {
                 $image_url = str_replace(
-                    'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com',
+                    'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com',
                     'https://d10iw6eujrfvyr.cloudfront.net',
                     $exp['online_image']
                 );

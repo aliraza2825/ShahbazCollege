@@ -580,7 +580,7 @@ function profitAmount($campus_id, $from_date, $till_date)
 
 function getStudentResultRemarks($cnic,$course_id = '')
 {
-    $bucket_address = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+    $bucket_address = 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
     $cloudfront_address = 'https://d10iw6eujrfvyr.cloudfront.net';
 
     $ci =& get_instance();

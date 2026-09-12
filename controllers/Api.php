@@ -1513,7 +1513,7 @@ class Api extends CI_Controller {
 			{
 				if($document['online_image']!='')
 				{
-					$bucket_address = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+					$bucket_address = 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
 					$cloudfront_address = 'https://d10iw6eujrfvyr.cloudfront.net';
 					$link = str_replace($bucket_address,$cloudfront_address,$document['online_image']);
 					$links = array($document['type'],$link);
@@ -3437,7 +3437,7 @@ class Api extends CI_Controller {
 		$this->db->where(array('type'=>$type));
 		$gallery = $this->db->get()->result_array();
 
-		$bucket_address = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+		$bucket_address = 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
 		$cloudfront_address = 'https://d10iw6eujrfvyr.cloudfront.net';
 		$images = array();
 		$i=0;
@@ -3487,7 +3487,7 @@ class Api extends CI_Controller {
 				$my_result[$i]['result_remarks'] = $result['result_remarks'];
 				if($result['online_result_image']!='')
 				{
-					$bucket_address = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+					$bucket_address = 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
 					$cloudfront_address = 'https://d10iw6eujrfvyr.cloudfront.net';
 					$my_result[$i]['result_image'] = str_replace($bucket_address,$cloudfront_address,$result['online_result_image']);
 				}
@@ -3525,7 +3525,7 @@ class Api extends CI_Controller {
 			$my_documents[$i][] = $document['type'];
 			if($document['online_image']!='')
 			{
-				$bucket_address = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+				$bucket_address = 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
 				$cloudfront_address = 'https://d10iw6eujrfvyr.cloudfront.net';
 				$link = str_replace($bucket_address,$cloudfront_address,$document['online_image']);
 				$my_documents[$i][] = $link;
@@ -3609,7 +3609,7 @@ class Api extends CI_Controller {
 
 		$campus_details = array();
 
-		$bucket_address = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+		$bucket_address = 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
 		$cloudfront_address = 'https://d10iw6eujrfvyr.cloudfront.net';
 
 		$i=0;

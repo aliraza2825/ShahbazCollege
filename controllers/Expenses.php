@@ -1159,7 +1159,7 @@ class Expenses extends CI_Controller {
             if($expense['online_image']=='' && $expense['image']!=''):
                 $html.='<a class="btn btn-default" href="'.base_url().'uploads/'.$expense['image'].'" target="_blank"><i class="fa fa-image"></i> Image</a>';
             elseif($expense['online_image']!='' && $expense['image']!=''):
-                $bucket_address= 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+                $bucket_address= 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
                 $cloudfront_address= 'https://d10iw6eujrfvyr.cloudfront.net';
                 $html.='<a class="btn btn-default" href="'.str_replace($bucket_address,$cloudfront_address,$expense['online_image']).'" target="_blank"><i class="fa fa-image"></i> Image</a>';
             endif;
@@ -1429,7 +1429,7 @@ class Expenses extends CI_Controller {
             if($expense['online_image']=='' && $expense['image']!=''):
                 $html.='<a class="btn btn-default" href="'.base_url().'uploads/'.$expense['image'].'" target="_blank"><i class="fa fa-image"></i> Image</a>';
             elseif($expense['online_image']!='' && $expense['image']!=''):
-                $bucket_address= 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+                $bucket_address= 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
                 $cloudfront_address= 'https://d10iw6eujrfvyr.cloudfront.net';
                 $html.='<a class="btn btn-default" href="'.str_replace($bucket_address,$cloudfront_address,$expense['online_image']).'" target="_blank"><i class="fa fa-image"></i> Image</a>';
             endif;

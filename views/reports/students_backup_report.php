@@ -155,7 +155,7 @@
 										$filename = $class['name'].'('.date('Y-m-d').').csv';
 										if($class['backup_date']==date('Y-m-d'))
 										{
-											echo '<a href="https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com/backup/'.$backup_date.'/'.str_replace(' ','%2520',$class['name']).'('.$backup_date.').csv" target="_blank" class="btn green">Download</a>';
+											echo '<a href="https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com/backup/'.$backup_date.'/'.str_replace(' ','%2520',$class['name']).'('.$backup_date.').csv" target="_blank" class="btn green">Download</a>';
 										}
 									?>
 								</td>

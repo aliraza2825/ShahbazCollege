@@ -2371,7 +2371,7 @@ class Posapi extends CI_Controller {
 		}
 
 		$base = rtrim(base_url(), '/');
-		$bucket = 'https://shahbazcollegebucket.s3.ca-central-1.amazonaws.com';
+		$bucket = 'https://shahbazcollege-legacy-uploads.s3.ap-south-1.amazonaws.com';
 		$cloudfront = 'https://d10iw6eujrfvyr.cloudfront.net';
 
 		if ($cnic !== '') {
