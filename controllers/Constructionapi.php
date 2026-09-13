@@ -351,7 +351,7 @@ class Constructionapi extends CI_Controller {
 	{
 		if (!$filename) return null;
 		if (preg_match('/^https?:\\/\\//i', $filename)) return $filename;
-		return $this->_asset_base() . '/uploads/construction/' . rawurlencode($filename);
+		return $this->_asset_base() . '/uploads/construction/' . str_replace('%2F', '/', rawurlencode($filename));
 	}
 
 	/** Legacy expenses store files under /uploads/ (not construction/). */
@@ -359,7 +359,7 @@ class Constructionapi extends CI_Controller {
 	{
 		if (!$filename) return null;
 		if (preg_match('/^https?:\\/\\//i', $filename)) return $filename;
-		return $this->_asset_base() . '/uploads/' . rawurlencode($filename);
+		return $this->_asset_base() . '/uploads/' . str_replace('%2F', '/', rawurlencode($filename));
 	}
 
 	private function _upload_expense_image($field = 'image')
@@ -467,6 +467,9 @@ class Constructionapi extends CI_Controller {
 		}
 		if (!$this->_project_is_main($parent)) {
 			$this->_json(array('success' => false, 'message' => 'Parent must be a main project'), 422);
+		}
+		if ($this->_normalize_project_status(isset($parent['status']) ? $parent['status'] : 'Active') !== 'Active') {
+			$this->_json(array('success' => false, 'message' => 'Parent project must be active'), 422);
 		}
 		if ($self_id > 0 && $this->_project_has_children($self_id)) {
 			$this->_json(array('success' => false, 'message' => 'Cannot set parent: project has sub-projects'), 422);
@@ -797,7 +800,17 @@ class Constructionapi extends CI_Controller {
 			$body = $this->_body();
 			$name = isset($body['project_name']) ? trim($body['project_name']) : '';
 			if ($name === '') $this->_json(array('success' => false, 'message' => 'project_name required'), 422);
-			$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : (int)$this->current_user['campus_id'];
+			$parent_id = 0;
+			$parent = null;
+			if ($this->_project_has_parent_schema() && !empty($body['parent_project_id'])) {
+				$parent_id = $this->_validate_parent_project_id($body['parent_project_id']);
+				$parent = $this->_project($parent_id);
+			}
+			// Sub-projects always inherit their parent's campus. Never trust a
+			// submitted campus_id for them.
+			$campus_id = $parent
+				? (int)$parent['campus_id']
+				: (isset($body['campus_id']) ? (int)$body['campus_id'] : (int)$this->current_user['campus_id']);
 			if ($campus_id < 1) {
 				$this->_json(array('success' => false, 'message' => 'Campus is required'), 422);
 			}
@@ -820,8 +833,8 @@ class Constructionapi extends CI_Controller {
 			if ($this->db->field_exists('progress_percent', 'construction_projects')) {
 				$insert['progress_percent'] = $progress;
 			}
-			if ($this->_project_has_parent_schema() && !empty($body['parent_project_id'])) {
-				$insert['parent_project_id'] = $this->_validate_parent_project_id($body['parent_project_id']);
+			if ($parent_id > 0) {
+				$insert['parent_project_id'] = $parent_id;
 			}
 			$this->db->insert('construction_projects', $insert);
 			$this->_json(array('success' => true, 'id' => (int)$this->db->insert_id()));
@@ -938,7 +951,18 @@ class Constructionapi extends CI_Controller {
 					$upd['parent_project_id'] = null;
 				} else {
 					$upd['parent_project_id'] = $this->_validate_parent_project_id($raw_parent, $id);
+					$parent = $this->_project($upd['parent_project_id']);
+					$upd['campus_id'] = $parent ? (int)$parent['campus_id'] : 0;
 				}
+			}
+			// Existing sub-projects also keep their campus in sync with their
+			// parent, including API calls that try to update campus_id directly.
+			$current_parent_id = isset($upd['parent_project_id'])
+				? (int)$upd['parent_project_id']
+				: $this->_parent_project_id($project);
+			if ($current_parent_id > 0) {
+				$parent = $this->_project($current_parent_id);
+				if ($parent) $upd['campus_id'] = (int)$parent['campus_id'];
 			}
 			if (!count($upd)) {
 				$this->_json(array('success' => false, 'message' => 'Nothing to update'), 422);
@@ -1000,14 +1024,14 @@ class Constructionapi extends CI_Controller {
 
 	/**
 	 * Detail rows for project summary tiles.
-	 * GET project_ledger/{id}?type=expense_total|contractor_done|contractor_paid|remaining|labour|misc
+	 * GET project_ledger/{id}?type=expense_total|contractor_done|contractor_paid|remaining|labour|misc|purchase
 	 */
 	public function project_ledger($id = 0)
 	{
 		$id = (int)$id;
 		if (!$this->_project($id)) $this->_json(array('success' => false, 'message' => 'Project not found'), 404);
 		$type = trim((string)$this->input->get('type'));
-		$allowed = array('expense_total', 'contractor_done', 'contractor_paid', 'remaining', 'labour', 'misc');
+		$allowed = array('expense_total', 'contractor_done', 'contractor_paid', 'remaining', 'labour', 'misc', 'purchase');
 		if (!in_array($type, $allowed, true)) {
 			$this->_json(array('success' => false, 'message' => 'type required: ' . implode('|', $allowed)), 422);
 		}
@@ -1017,31 +1041,16 @@ class Constructionapi extends CI_Controller {
 		$title = '';
 		$rollup_ids = $this->_project_rollup_ids($id);
 
-		if ($type === 'expense_total' || $type === 'labour' || $type === 'misc') {
-			$source = $type === 'labour' ? 'labour' : ($type === 'misc' ? 'misc' : '');
-			$this->db->select(
-				'expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name',
-				false
-			);
-			$this->db->from('expenses');
-			$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
-			$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
-			$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
-			if (count($rollup_ids) === 1) {
-				$this->db->where('expenses.construction_project_id', $rollup_ids[0]);
-			} else {
-				$this->db->where_in('expenses.construction_project_id', $rollup_ids);
-			}
-			if ($source !== '') $this->db->where('expenses.construction_source', $source);
-			$this->db->order_by('expenses.date', 'DESC');
-			$this->db->order_by('expenses.expense_id', 'DESC');
-			$rows = $this->db->get()->result_array();
-			foreach ($rows as &$r) {
+		if ($type === 'expense_total' || $type === 'labour' || $type === 'misc' || $type === 'purchase') {
+			$source = $type === 'labour' ? 'labour' : ($type === 'misc' ? 'misc' : ($type === 'purchase' ? 'purchase' : ''));
+			$rows = $this->_project_expense_query_rows($rollup_ids, $source);
+			foreach ($rows as $r) {
 				$total += (float)$r['amount'];
-				$this->_decorate_expense_row($r);
-				$r['row_kind'] = 'expense';
 			}
-			$title = $type === 'labour' ? 'Labour expenses' : ($type === 'misc' ? 'Misc expenses' : 'All expenses');
+			if ($type === 'labour') $title = 'Labour expenses';
+			elseif ($type === 'misc') $title = 'Misc expenses';
+			elseif ($type === 'purchase') $title = 'Purchase expenses (paid)';
+			else $title = 'All expenses';
 		} elseif ($type === 'contractor_done') {
 			$this->db->select(
 				'construction_contracts.*, construction_contractors.contractor_name',
@@ -1245,6 +1254,78 @@ class Constructionapi extends CI_Controller {
 			}
 		}
 		return isset($cache[$id]) ? $cache[$id] : '';
+	}
+
+	/**
+	 * Construction expenses for project rollup — includes purchase cash-outs linked via purchase_no → PR.project_id.
+	 * @param string $source_filter '' | labour | misc | purchase
+	 */
+	private function _project_expense_query_rows($rollup_ids, $source_filter = '')
+	{
+		$rollup_ids = array_values(array_unique(array_filter(array_map('intval', (array)$rollup_ids))));
+		if (!count($rollup_ids)) return array();
+
+		$in = $this->_sql_in_list($rollup_ids);
+		$pr_join = $this->_purchase_project_join_sql();
+		$rows = array();
+
+		if ($pr_join) {
+			$sql = "SELECT e.*,
+					cc.contractor_name, cl.labour_name,
+					COALESCE(cp.project_name, cp2.project_name) AS project_name,
+					COALESCE(e.construction_project_id, pr.project_id) AS linked_project_id,
+					CASE
+						WHEN e.construction_source IN ('contractor','labour','misc','purchase') THEN e.construction_source
+						WHEN pr.project_id IS NOT NULL AND pr.project_id > 0 THEN 'purchase'
+						ELSE COALESCE(NULLIF(e.construction_source,''), 'misc')
+					END AS construction_source_resolved,
+					(SELECT v.name FROM payment_aggrements pa
+					 LEFT JOIN vendors v ON v.id = pa.vendor_id
+					 WHERE pa.purchase_no = e.purchase_no
+					 ORDER BY pa.paid DESC, pa.date DESC LIMIT 1) AS vendor_name
+				FROM expenses e
+				LEFT JOIN construction_contractors cc ON cc.id = e.construction_contractor_id
+				LEFT JOIN construction_labours cl ON cl.id = e.construction_labour_id
+				LEFT JOIN construction_projects cp ON cp.id = e.construction_project_id
+				LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
+				LEFT JOIN construction_projects cp2 ON cp2.id = pr.project_id
+				WHERE (
+					(e.construction_project_id IS NOT NULL AND e.construction_project_id > 0)
+					OR (pr.project_id IS NOT NULL AND pr.project_id > 0)
+				)
+				AND COALESCE(e.construction_project_id, pr.project_id) IN ({$in['sql']})
+				ORDER BY e.date DESC, e.expense_id DESC";
+			$rows = $this->db->query($sql, $in['params'])->result_array();
+		} else {
+			$this->db->select(
+				'expenses.*, construction_contractors.contractor_name, construction_labours.labour_name, construction_projects.project_name',
+				false
+			);
+			$this->db->from('expenses');
+			$this->db->join('construction_contractors', 'construction_contractors.id = expenses.construction_contractor_id', 'left');
+			$this->db->join('construction_labours', 'construction_labours.id = expenses.construction_labour_id', 'left');
+			$this->db->join('construction_projects', 'construction_projects.id = expenses.construction_project_id', 'left');
+			if (count($rollup_ids) === 1) {
+				$this->db->where('expenses.construction_project_id', $rollup_ids[0]);
+			} else {
+				$this->db->where_in('expenses.construction_project_id', $rollup_ids);
+			}
+			$this->db->order_by('expenses.date', 'DESC');
+			$this->db->order_by('expenses.expense_id', 'DESC');
+			$rows = $this->db->get()->result_array();
+		}
+
+		$out = array();
+		foreach ($rows as $r) {
+			$this->_decorate_expense_row($r);
+			$src = isset($r['construction_source']) ? $r['construction_source'] : 'misc';
+			if ($source_filter !== '') {
+				if ($src !== $source_filter) continue;
+			}
+			$r['row_kind'] = 'expense';
+			$out[] = $r;
+		}
+		return $out;
 	}
 
 	private function _decorate_expense_row(&$r)
