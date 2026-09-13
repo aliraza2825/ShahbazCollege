@@ -58,15 +58,30 @@ class HblApi extends CI_Controller
     private function validateToken()
     {
         $token = $this->getBearerToken();
-        $expectedToken = trim($this->config->item('hbl_api_token'));
+        $testToken = trim($this->config->item('hbl_test_api_token'));
+        $productionToken = trim($this->config->item('hbl_production_api_token'));
 
-        if (empty($token) || $token !== $expectedToken) {
+        if (!empty($productionToken) && hash_equals($productionToken, $token)) {
+            return 'production';
+        }
+
+        if (!empty($testToken) && hash_equals($testToken, $token)) {
+            return 'test';
+        }
+
+        if (empty($token)) {
             $this->jsonResponse([
                 'ReturnValue' => '2',
                 'message' => 'INVALID_USERNAME_OR_PASSWORD'
             ], 401);
             exit;
         }
+
+        $this->jsonResponse([
+            'ReturnValue' => '2',
+            'message' => 'INVALID_USERNAME_OR_PASSWORD'
+        ], 401);
+        exit;
     }
 
     private function sanitizeString($value)
@@ -82,6 +97,16 @@ class HblApi extends CI_Controller
     private function nowDateTime()
     {
         return date('Y-m-d H:i:s');
+    }
+
+    /** Lightweight connectivity check for the configured HBL API base URL. */
+    public function index()
+    {
+        return $this->jsonResponse([
+            'success' => true,
+            'message' => 'HBL API is online',
+            'endpoints' => array('inquiry', 'payment')
+        ]);
     }
 
     /**
@@ -164,7 +189,7 @@ class HblApi extends CI_Controller
     public function payment()
     {
         try {
-            $this->validateToken();
+            $requestMode = $this->validateToken();
             $input = $this->getJsonInput();
 
             $transactionId   = isset($input['p_TransactionId']) ? $this->sanitizeString($input['p_TransactionId']) : '';
@@ -225,6 +250,14 @@ class HblApi extends CI_Controller
                 ]);
             }
 
+            // Test calls verify the full request but must never alter a real bill.
+            if ($requestMode === 'test') {
+                return $this->jsonResponse([
+                    'ReturnValue' => '0',
+                    'message' => 'SUCCESS'
+                ]);
+            }
+
             $updateData = [
                 'paid'             => 1,
                 'paid_date'        => $this->todayDate(),
@@ -268,7 +301,7 @@ class HblApi extends CI_Controller
     public function reverse()
     {
         try {
-            $this->validateToken();
+            $requestMode = $this->validateToken();
             $input = $this->getJsonInput();
 
             $originalTransactionId = isset($input['p_OriginalTransactionId']) ? $this->sanitizeString($input['p_OriginalTransactionId']) : '';
@@ -280,6 +313,14 @@ class HblApi extends CI_Controller
                     'message' => 'EXCEPTION',
                     'detail' => 'Missing required parameters'
                 ], 400);
+            }
+
+            // A test payment is never written, so its reversal is simulated too.
+            if ($requestMode === 'test') {
+                return $this->jsonResponse([
+                    'ReturnValue' => '0',
+                    'message' => 'SUCCESS'
+                ]);
             }
 
             // Agar reverse transaction id already use ho chuki hai
