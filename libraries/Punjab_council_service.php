@@ -196,7 +196,6 @@ class Punjab_council_service {
 
     public function upload_roll_slip_images($post)
     {
-        if (!is_dir(FCPATH . 'rollno_slips')) mkdir(FCPATH . 'rollno_slips', 0777, true);
         $exam_no = $post['council_exam_no'];
         $class = $post['class'];
         $count = 0;
@@ -206,10 +205,12 @@ class Punjab_council_service {
         foreach ($_FILES['files']['name'] as $key => $name) {
             if (empty($name)) continue;
             $tmp = $_FILES['files']['tmp_name'][$key];
-            $target = FCPATH . 'rollno_slips/' . basename($name);
-            if (!move_uploaded_file($tmp, $target)) continue;
+            $mime = !empty($_FILES['files']['type'][$key]) ? $_FILES['files']['type'][$key] : 'application/octet-stream';
+            $this->ci->load->library('s3_direct_storage');
+            $stored = $this->ci->s3_direct_storage->put_file($tmp, 'rollno_slips', basename($name), $mime);
+            if ($stored === false) continue;
             $image_name = strtok(basename($name), '.');
-            $this->ci->db->set('slip_image', basename($name));
+            $this->ci->db->set('slip_image', $stored);
             $this->ci->db->where("council_exam_no = '$exam_no' and class = '$class' and roll_no = '$image_name'");
             $this->ci->db->update('punjab_council_roll_number');
             $count++;
@@ -279,8 +280,8 @@ class Punjab_council_service {
     {
         $class = $post['class'];
         $exam = $post['council_exam_no'];
-        $dir = FCPATH . 'results/result_' . $class . '_' . $exam . '/';
-        if (!is_dir($dir)) mkdir($dir, 0777, true);
+        $s3dir = 'results/result_' . $class . '_' . $exam;
+        $this->ci->load->library('s3_direct_storage');
         $linked = 0;
         if (empty($_FILES['filefield']['name']) || !is_array($_FILES['filefield']['name'])) {
             return array('success' => false, 'message' => 'No images uploaded');
@@ -292,9 +293,9 @@ class Punjab_council_service {
                 'roll_no' => $roll, 'class' => $class, 'course_id' => (isset($post['course_id']) ? $post['course_id'] : 1), 'council_exam_no' => $exam,
             ))->result_array();
             if (!count($exists)) continue;
-            $dest = $dir . basename($name);
-            if (move_uploaded_file($_FILES['filefield']['tmp_name'][$key], $dest)) {
-                $this->ci->db->set('result_image', 'results/result_' . $class . '_' . $exam . '/' . basename($name));
+            $stored = $this->ci->s3_direct_storage->put_file($_FILES['filefield']['tmp_name'][$key], $s3dir, basename($name), 'image/jpeg');
+            if ($stored !== false) {
+                $this->ci->db->set('result_image', $s3dir . '/' . $stored);
                 $this->ci->db->where('roll_no', $roll);
                 $this->ci->db->where('class', $class);
                 $this->ci->db->where('council_exam_no', $exam);

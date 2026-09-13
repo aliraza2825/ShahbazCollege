@@ -1116,14 +1116,18 @@ class Expenses_service {
 
         $from_date = !empty($filters['from_date']) ? $filters['from_date'] : date('Y-m-d');
         $to_date = !empty($filters['to_date']) ? $filters['to_date'] : date('Y-m-d');
-        $campus_id = isset($filters['campus_id']) ? (int) $filters['campus_id'] : 0;
+        $campus_ids = isset($filters['campus_ids']) ? $filters['campus_ids'] : (isset($filters['campus_id']) ? $filters['campus_id'] : array());
+        if (!is_array($campus_ids)) {
+            $campus_ids = explode(',', (string) $campus_ids);
+        }
+        $campus_ids = array_values(array_unique(array_filter(array_map('intval', $campus_ids))));
         $category_ids = isset($filters['category_ids']) ? $filters['category_ids'] : (isset($filters['category_id']) ? $filters['category_id'] : array());
         if (!is_array($category_ids)) {
             $category_ids = explode(',', (string) $category_ids);
         }
         $category_ids = array_values(array_unique(array_filter(array_map('intval', $category_ids))));
 
-        if ($campus_id <= 0 || empty($category_ids)) {
+        if (empty($campus_ids) || empty($category_ids)) {
             return array(
                 'success' => true,
                 'from_date' => $from_date,
@@ -1133,33 +1137,36 @@ class Expenses_service {
             );
         }
 
-        $campus = $this->ci->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
         $rows = array();
-        foreach ($category_ids as $category_id) {
-            $head = $this->ci->db->get_where('expense_category', array('expense_category_id' => $category_id))->row_array();
-            if (!$head) {
-                continue;
-            }
-            $sub_heads = $this->ci->db->get_where('expense_category', array('sub_of' => $category_id))->result_array();
-            $details = count($sub_heads) > 0
-                ? $this->subhead_breakdown($category_id, $campus_id, $from_date, $to_date)
-                : array();
-            $total = 0;
-            if (count($sub_heads) > 0) {
-                foreach ($details as $d) {
-                    $total += $d['amount'];
+        foreach ($campus_ids as $campus_id) {
+            $campus = $this->ci->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
+            if (!$campus) continue;
+            foreach ($category_ids as $category_id) {
+                $head = $this->ci->db->get_where('expense_category', array('expense_category_id' => $category_id))->row_array();
+                if (!$head) {
+                    continue;
                 }
-            } else {
-                $total = $this->sum_category_expenses($category_id, $campus_id, $from_date, $to_date);
+                $sub_heads = $this->ci->db->get_where('expense_category', array('sub_of' => $category_id))->result_array();
+                $details = count($sub_heads) > 0
+                    ? $this->subhead_breakdown($category_id, $campus_id, $from_date, $to_date)
+                    : array();
+                $total = 0;
+                if (count($sub_heads) > 0) {
+                    foreach ($details as $d) {
+                        $total += $d['amount'];
+                    }
+                } else {
+                    $total = $this->sum_category_expenses($category_id, $campus_id, $from_date, $to_date);
+                }
+                $rows[] = array(
+                    'head_name' => $head['name'],
+                    'category_id' => $category_id,
+                    'campus_id' => $campus_id,
+                    'campus_name' => $campus['campus_name'],
+                    'details' => $details,
+                    'total_amount' => $total,
+                );
             }
-            $rows[] = array(
-                'head_name' => $head['name'],
-                'category_id' => $category_id,
-                'campus_id' => $campus_id,
-                'campus_name' => $campus ? $campus['campus_name'] : '',
-                'details' => $details,
-                'total_amount' => $total,
-            );
         }
 
         $grand = 0;

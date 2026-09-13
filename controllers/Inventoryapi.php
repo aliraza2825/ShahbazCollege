@@ -29,7 +29,7 @@ class Inventoryapi extends CI_Controller {
 		$this->_access();
 		$this->_inventory_campus_ids();
 		$this->_pr_campus_ids();
-		if (!$this->_can_inventory()) {
+		if (!$this->_can_use_inventory_api()) {
 			$this->_json(array('success' => false, 'message' => 'No inventory access'), 403);
 		}
 	}
@@ -200,6 +200,54 @@ class Inventoryapi extends CI_Controller {
 		return $row && !empty($row['inventory']);
 	}
 
+	/** Construction module users — PR journey from project pages without full inventory menu. */
+	private function _can_construction()
+	{
+		return $this->_access_flag('construction_sidebar')
+			|| $this->_access_flag('construction_site_expense')
+			|| $this->_access_flag('construction_projects');
+	}
+
+	private function _can_use_inventory_api()
+	{
+		return $this->_can_inventory() || $this->_can_construction();
+	}
+
+	/** Campuses used on construction projects (for PR create/list when user has no inventory_campuses). */
+	private function _construction_campus_ids()
+	{
+		if (!$this->db->table_exists('construction_projects')) return array();
+		$ids = array();
+		foreach ($this->db->query(
+			'SELECT DISTINCT campus_id FROM construction_projects WHERE campus_id IS NOT NULL AND campus_id > 0'
+		)->result_array() as $row) {
+			$ids[] = (int)$row['campus_id'];
+		}
+		return array_values(array_unique($ids));
+	}
+
+	private function _assert_construction_project_access($project_id)
+	{
+		$project_id = (int)$project_id;
+		if ($project_id <= 0) return;
+		if ($this->_is_admin() || $this->_can_inventory()) return;
+		if (!$this->_can_construction()) {
+			$this->_json(array('success' => false, 'message' => 'No construction access'), 403);
+		}
+		if (!$this->db->table_exists('construction_projects')) {
+			$this->_json(array('success' => false, 'message' => 'Project not found'), 404);
+		}
+		$p = $this->db->get_where('construction_projects', array('id' => $project_id))->row_array();
+		if (!$p) {
+			$this->_json(array('success' => false, 'message' => 'Project not found'), 404);
+		}
+		$campus_id = (int)(isset($p['campus_id']) ? $p['campus_id'] : 0);
+		$allowed = $this->_inventory_campus_ids();
+		if ($campus_id > 0 && count($allowed) && !in_array($campus_id, $allowed, true)) {
+			$this->_json(array('success' => false, 'message' => 'No access to this project campus'), 403);
+		}
+	}
+
 	private function _inventory_campus_ids()
 	{
 		if ($this->inventory_campus_ids !== null) return $this->inventory_campus_ids;
@@ -216,6 +264,9 @@ class Inventoryapi extends CI_Controller {
 					$id = (int)trim($id);
 					if ($id > 0) $ids[] = $id;
 				}
+			}
+			if ($this->_can_construction()) {
+				$ids = array_merge($ids, $this->_construction_campus_ids());
 			}
 		}
 		$this->inventory_campus_ids = array_values(array_unique($ids));
@@ -1459,15 +1510,20 @@ class Inventoryapi extends CI_Controller {
 		if ($final === '0' || $final === '1') {
 			$this->db->where('purchase_requests.final', (int)$final);
 		}
+		$filter_by_project = false;
 		if ($project_id > 0 && $this->db->field_exists('project_id', 'purchase_requests')) {
+			$this->_assert_construction_project_access($project_id);
 			$this->db->where('purchase_requests.project_id', $project_id);
+			$filter_by_project = true;
 		}
 		$has_project = trim((string)$this->input->get('has_project'));
 		if ($has_project === '1' && $this->db->field_exists('project_id', 'purchase_requests')) {
 			$this->db->where('purchase_requests.project_id IS NOT NULL', null, false);
 			$this->db->where('purchase_requests.project_id >', 0);
 		}
-		$this->_apply_campus_filter('purchase_requests.campus_id', $campus_id, true);
+		if (!$filter_by_project) {
+			$this->_apply_campus_filter('purchase_requests.campus_id', $campus_id, true);
+		}
 		$this->db->order_by('purchase_requests.purchase_request_id', 'DESC');
 		$this->db->limit(500);
 		$this->_json(array('success' => true, 'data' => $this->db->get()->result_array()));
@@ -1485,6 +1541,9 @@ class Inventoryapi extends CI_Controller {
 		$name = trim($this->current_user['first_name'] . ' ' . $this->current_user['last_name']);
 		// Optional construction project (header or per-line)
 		$header_project_id = isset($body['project_id']) ? (int)$body['project_id'] : 0;
+		if ($header_project_id > 0) {
+			$this->_assert_construction_project_access($header_project_id);
+		}
 		foreach ($lines as $line) {
 			$campus_id = (int)$line['campus_id'];
 			$this->_assert_campus_access($campus_id, true);

@@ -85,21 +85,20 @@ class Expenses extends CI_Controller {
     {
         \Tinify\setKey("jcsTy5mwDNZypg4wZnvZQ7THGKVq6gXN"); //pass your actual API key
         $supported_image = array('image/gif', 'image/jpg', 'image/jpeg', 'image/png');
-        if (in_array($_FILES['img']['type'], $supported_image)) {
+        if (!empty($_FILES['img']['tmp_name']) && in_array($_FILES['img']['type'], $supported_image)) {
 
-            $src_file_name = $_FILES['img']['name'];
-
-            if (!file_exists(getcwd().'/uploads')) {
-
-                mkdir(getcwd().'/uploads', 0777);
+            $src_file_name = basename($_FILES['img']['name']);
+            $optimized = tempnam(sys_get_temp_dir(), 'expense_');
+            $source = \Tinify\fromFile($_FILES['img']['tmp_name']);
+            $source->toFile($optimized);
+            $this->load->library('s3_direct_storage');
+            $image = $this->s3_direct_storage->put_file($optimized, 'uploads', $src_file_name, $_FILES['img']['type']);
+            @unlink($optimized);
+            if ($image === false) {
+                $this->session->set_flashdata('error', 'Expense image could not be uploaded. Please try again.');
+                redirect('expenses/edit_expense/'.$id);
+                return;
             }
-
-            move_uploaded_file($_FILES['img']['tmp_name'], getcwd().'/uploads/'.$src_file_name);
-
-            //optimize image using TinyPNG
-            $source = \Tinify\fromFile(getcwd().'/uploads/'.$src_file_name);
-            $source->toFile(getcwd().'/uploads/'.$src_file_name);
-            $image=$src_file_name;
             $data = $this->input->post();
 
         } else {

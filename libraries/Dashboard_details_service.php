@@ -1151,18 +1151,60 @@ class Dashboard_details_service {
             $end_date = date('Y-m-t');
         }
         $rows = $this->ci->dashboards->newExpenses($start_date, $end_date, $date_type);
-        $total = $this->ci->dashboards->getTotalExpenses($start_date, $end_date);
+        $total = $this->ci->dashboards->getTotalExpenses($start_date, $end_date, $date_type);
+		// Expenses store the selected leaf. Build the complete path from the
+		// category tree once, so Category → Sub-category → ... is visible without
+		// adding one query per report row.
+		$category_rows = $this->ci->db->select('expense_category_id, name, sub_of')->get('expense_category')->result_array();
+		$category_by_id = array();
+		foreach ($category_rows as $category_row) {
+			$category_by_id[(int) $category_row['expense_category_id']] = $category_row;
+		}
         $out = array();
         foreach ($rows as $r) {
+			$category_parts = array();
+			$category_id = isset($r['expense_category_id']) ? (int) $r['expense_category_id'] : 0;
+			$category_guard = 0;
+			while ($category_id > 0 && isset($category_by_id[$category_id]) && $category_guard < 20) {
+				$category = $category_by_id[$category_id];
+				array_unshift($category_parts, isset($category['name']) ? $category['name'] : '');
+				$parent_id = isset($category['sub_of']) ? (int) $category['sub_of'] : 0;
+				if ($parent_id <= 0 || $parent_id === $category_id) break;
+				$category_id = $parent_id;
+				$category_guard++;
+			}
+			$paid_type = strtolower(trim(isset($r['paid_type']) ? $r['paid_type'] : ''));
+			if ($paid_type === '') {
+				$paid_type = strtolower(trim(isset($r['payment_type']) ? $r['payment_type'] : ''));
+			}
+			$payment_source = '';
+			if ($paid_type === 'cash') {
+				$holder = trim(isset($r['petty_cash_holder']) ? $r['petty_cash_holder'] : '');
+				$petty_id = isset($r['petty_cash_id']) ? (int) $r['petty_cash_id'] : 0;
+				if ($holder !== '' || $petty_id > 0) {
+					$payment_source = 'Petty Cash' . ($petty_id > 0 ? ' #' . $petty_id : '') . ($holder !== '' ? ' — ' . $holder : '');
+				}
+			} elseif ($paid_type === 'bank') {
+				$payment_source = trim((isset($r['bank_account_title']) ? $r['bank_account_title'] : '') . ' · ' . (isset($r['bank_account_name']) ? $r['bank_account_name'] : ''), " ·");
+			}
+			// Bank-tagged expenses belong to the bank statement transaction date.
+			// Cash and legacy untagged records keep their own expense date.
+			$expense_date = isset($r['date']) ? $r['date'] : '';
+			if ($paid_type === 'bank' && !empty($r['bank_transaction_date'])) {
+				$expense_date = $r['bank_transaction_date'];
+			}
             $out[] = array(
                 'expense_id' => (int) $r['expense_id'],
                 'campus_name' => isset($r['campus_name']) ? $r['campus_name'] : '',
+				'category_path' => implode(' → ', array_filter($category_parts, 'strlen')),
                 'title' => isset($r['title']) ? $r['title'] : '',
                 'purpose' => isset($r['purpose']) ? $r['purpose'] : '',
                 'amount' => isset($r['amount']) ? $r['amount'] : 0,
-                'date' => isset($r['date']) ? $r['date'] : '',
+				'date' => $expense_date,
                 'actual_date' => isset($r['actual_date']) ? $r['actual_date'] : '',
                 'add_by' => isset($r['add_by']) ? $r['add_by'] : '',
+				'paid_type' => $paid_type,
+				'payment_source' => $payment_source,
             );
         }
         return array(

@@ -1153,34 +1153,18 @@ class Accounts extends CI_Controller {
 
     public function upload_bank_statement()
     {
-        //load the helper
-        $this->load->helper('form');
-
-        //Configure
-        //set the path where the files uploaded will be copied. NOTE if using linux, set the folder to permission 777
-        $config['upload_path'] = 'statements/';
-
-        // set the filter image types
-        $config['allowed_types'] = '*';
-
-        //load the upload library
-        $this->load->library('upload', $config);
-        $this->upload->initialize($config);
-        $this->upload->set_allowed_types('*');
-        $data['upload_data'] = '';
-
-        //if not successful, set the error message
-        if (!$this->upload->do_upload('statement')) {
-            $data = array('msg' => $this->upload->display_errors());
-            $this->session->set_flashdata('error', $this->upload->display_errors());
-            redirect('accounts/uploadstatement');
-            $file = '';
-        }
-        else {
-            //else, set the success message
-            $data['upload_data'] = $this->upload->data();
-            if($data['upload_data']['file_name']){
-                $file = $data['upload_data']['file_name'];
+        $file = '';
+        $statement_path = '';
+        if (!empty($_FILES['statement']['tmp_name']) && is_uploaded_file($_FILES['statement']['tmp_name'])) {
+            $original = basename($_FILES['statement']['name']);
+            $ext = pathinfo($original, PATHINFO_EXTENSION);
+            $stored_name = 'stmt_' . date('YmdHis') . '_' . mt_rand(1000, 9999) . ($ext ? '.' . preg_replace('/[^a-zA-Z0-9]/', '', $ext) : '');
+            $this->load->library('s3_direct_storage');
+            $file = $this->s3_direct_storage->put_uploaded_file('statement', 'statements', $stored_name);
+            if ($file !== false) {
+                $statement_path = $_FILES['statement']['tmp_name'];
+            } else {
+                $file = '';
             }
         }
 
@@ -1197,7 +1181,7 @@ class Accounts extends CI_Controller {
             $maxid = $this->db->insert_id();
 
             try {
-                $file = fopen($config['upload_path'].'/'.$file,"r");
+                $file = fopen($statement_path,"r");
                 $row=1;
                 while(! feof($file))
                 {

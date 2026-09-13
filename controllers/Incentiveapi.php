@@ -998,7 +998,11 @@ class Incentiveapi extends CI_Controller {
 		$range = $this->student_detail_report->date_range_for_students($student_ids);
 		$months = $this->student_detail_report->month_list($range['startdate'], $range['enddate']);
 		if (count($months) > 36) $months = array_slice($months, -36);
-		$detail = $this->student_detail_report->enrich($pack['rows'], $months);
+		// Show every older unpaid installment again in the recovery month. This
+		// makes the month's recovery target include arrears, while the normal
+		// student detail report remains unchanged.
+		$recovery_month = date('Y-m', strtotime($to_date));
+		$detail = $this->student_detail_report->enrich($pack['rows'], $months, $recovery_month);
 
 		$kpi = $this->_recovery_kpi($d);
 		$total_pages = max(1, (int)ceil($pack['total'] / $page_size));
@@ -1013,6 +1017,7 @@ class Incentiveapi extends CI_Controller {
 			'months' => $months,
 			'footer_must' => $detail['footer_must'],
 			'footer_paid' => $detail['footer_paid'],
+			'recovery_month' => $recovery_month,
 			'startdate' => $range['startdate'],
 			'enddate' => $range['enddate'],
 			'kpi_total_students' => $kpi['total_students'],

@@ -52,8 +52,16 @@ class Student_detail_report {
 		);
 	}
 
-	public function enrich($students, $months)
+	/**
+	 * $carry_forward_month is used by incentive recovery only.  It places the
+	 * still-unpaid balance of every earlier installment in that month's cell,
+	 * without removing the original installment from its own due month.
+	 */
+	public function enrich($students, $months, $carry_forward_month = null)
 	{
+		$carry_forward_month = preg_match('/^\\d{4}-\\d{2}$/', (string)$carry_forward_month)
+			? (string)$carry_forward_month
+			: null;
 		$out = array();
 		$footer_must = array();
 		$footer_paid = array();
@@ -76,6 +84,7 @@ class Student_detail_report {
 			$due_by_month = array();
 			$paid_by_month = array();
 			$paid_transactions = array();
+			$carry_forward_items = array();
 			$row_must = 0;
 			$row_paid = 0;
 
@@ -108,6 +117,19 @@ class Student_detail_report {
 						);
 						if (isset($footer_must[$due_ym])) {
 							$footer_must[$due_ym] += $amt;
+						}
+						// Recovery users need the outstanding amount again in the
+						// selected month so they can see what is recoverable today.
+						if ($carry_forward_month && $due_ym < $carry_forward_month) {
+							$balance = max(0, $amt - $act);
+							if ($balance > 0) {
+								$carry_forward_items[] = array(
+									'dead_line' => $p['dead_line'],
+									'due_month' => $due_ym,
+									'amount' => $balance,
+									'payment_plan' => $plan,
+								);
+							}
 						}
 					} elseif ($display_paid > 0) {
 						if (!isset($due_by_month[$due_ym])) $due_by_month[$due_ym] = array();
@@ -203,6 +225,29 @@ class Student_detail_report {
 				if (isset($footer_must[$ym])) {
 					$footer_must[$ym] += (float)$bucket['amount'];
 				}
+			}
+
+			if ($carry_forward_month && count($carry_forward_items) && isset($footer_must[$carry_forward_month])) {
+				$carry_amount = 0;
+				$carry_months = array();
+				foreach ($carry_forward_items as $item) {
+					$carry_amount += (float)$item['amount'];
+					if (!in_array($item['due_month'], $carry_months, true)) {
+						$carry_months[] = $item['due_month'];
+					}
+				}
+				sort($carry_months);
+				if (!isset($due_by_month[$carry_forward_month])) $due_by_month[$carry_forward_month] = array();
+				$due_by_month[$carry_forward_month][] = array(
+					'amount' => $carry_amount,
+					'actual_amount' => 0,
+					'unpaid_style' => true,
+					'payment_plan' => 'Previous pending installments',
+					'installment_months' => $carry_months,
+					'installment_details' => $carry_forward_items,
+					'cell_kind' => 'carry_forward',
+				);
+				$footer_must[$carry_forward_month] += $carry_amount;
 			}
 
 			$month_cells = array();

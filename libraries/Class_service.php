@@ -460,7 +460,7 @@ class Class_service {
             if (!empty($r['online_image'])) {
                 $map[$sid] = $r['online_image'];
             } elseif (!empty($r['image'])) {
-                $map[$sid] = $base . '/uploads/' . rawurlencode($r['image']);
+                $map[$sid] = $base . '/uploads/' . str_replace('%2F', '/', rawurlencode($r['image']));
             }
         }
         return $map;

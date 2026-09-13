@@ -189,7 +189,7 @@ class Studentsapi extends CI_Controller {
 			return $this->_cdn_url($online);
 		}
 		if (!empty($local)) {
-			return $this->_asset_base() . '/uploads/' . rawurlencode($local);
+			return $this->_asset_base() . '/uploads/' . str_replace('%2F', '/', rawurlencode($local));
 		}
 		return null;
 	}
@@ -203,7 +203,10 @@ class Studentsapi extends CI_Controller {
 	{
 		if (!$row) return null;
 		if (!empty($row['online_image'])) return $row['online_image'];
-		if (!empty($row['image'])) return $this->_asset_base() . '/uploads/' . rawurlencode($row['image']);
+		if (!empty($row['image'])) {
+			// Keep the direct-S3 path separator intact (`s3/filename`).
+			return $this->_asset_base() . '/uploads/' . str_replace('%2F', '/', rawurlencode($row['image']));
+		}
 		return null;
 	}
 
@@ -2730,12 +2733,18 @@ class Studentsapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'File too large (max 8MB)'), 422);
 		}
 
-		$dir = FCPATH . 'uploads/';
-		if (!is_dir($dir)) {
-			@mkdir($dir, 0755, true);
+		$this->load->library('upload');
+		$this->upload->initialize(array(
+			'upload_path' => FCPATH . 'uploads/',
+			'allowed_types' => implode('|', $allowed),
+			'file_name' => uniqid('student_doc_', true) . ($ext !== '' ? '.' . $ext : ''),
+		));
+		if (!$this->upload->do_upload('clock_image')) {
+			$this->_json(array('success' => false, 'message' => 'Upload failed: ' . strip_tags($this->upload->display_errors('', ''))), 500);
 		}
-		$filename = uniqid('student_doc_', true) . ($ext !== '' ? '.' . $ext : '');
-		if (!move_uploaded_file($_FILES['clock_image']['tmp_name'], $dir . $filename)) {
+		$uploaded = $this->upload->data();
+		$filename = isset($uploaded['file_name']) ? $uploaded['file_name'] : '';
+		if ($filename === '') {
 			$this->_json(array('success' => false, 'message' => 'Upload failed'), 500);
 		}
 
@@ -5067,7 +5076,7 @@ class Studentsapi extends CI_Controller {
 		$course = $this->db->get_where('courses', array('course_id' => $student['course_id']))->row_array();
 		$logo_url = null;
 		if (!empty($student['logo'])) {
-			$logo_url = $this->_asset_base() . '/uploads/' . rawurlencode($student['logo']);
+			$logo_url = $this->_asset_base() . '/uploads/' . str_replace('%2F', '/', rawurlencode($student['logo']));
 		}
 
 		$total_fee = (float) (isset($student['total_fee']) ? $student['total_fee'] : 0)
@@ -5165,7 +5174,7 @@ class Studentsapi extends CI_Controller {
 		$campus = $this->db->get_where('campuses', array('campus_id' => $c['campus_id']))->row_array();
 		$logo_url = null;
 		if ($campus && !empty($campus['logo'])) {
-			$logo_url = $this->_asset_base() . '/uploads/' . rawurlencode($campus['logo']);
+			$logo_url = $this->_asset_base() . '/uploads/' . str_replace('%2F', '/', rawurlencode($campus['logo']));
 		}
 
 		$photo_url = null;

@@ -8,6 +8,23 @@ class CollegeApi extends CI_Controller {
         $this->load->model('student');
     }
 
+    /**
+     * Compatibility wrapper for legacy API methods which expect move_uploaded_file()
+     * to update a relative uploads/ path stored in the database.
+     */
+    private function _move_upload_to_s3($tmp_name, &$destination)
+    {
+        if (empty($tmp_name) || !is_uploaded_file($tmp_name)) return false;
+        $file_name = basename($destination);
+        if ($file_name === '') return false;
+        $mime = function_exists('mime_content_type') ? @mime_content_type($tmp_name) : 'application/octet-stream';
+        $this->load->library('s3_direct_storage');
+        $stored = $this->s3_direct_storage->put_file($tmp_name, 'uploads', $file_name, $mime ?: 'application/octet-stream');
+        if ($stored === false) return false;
+        $destination = 'uploads/' . $stored;
+        return true;
+    }
+
     public function StudentLogin(){
 
         $roll_no = $this->input->post('roll_no');
@@ -516,7 +533,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
                     $cnic_front_image_file_name = $target_dir .basename($_FILES["cnic_front_image"]["name"]);
                     $cnic_back_image_file_name = $target_dir .basename($_FILES["cnic_back_image"]["name"]);
 
-                    if (move_uploaded_file($_FILES["student_image"]["tmp_name"], $student_image_file_name) && move_uploaded_file($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name) && move_uploaded_file($_FILES["cnic_front_image"]["tmp_name"], $cnic_front_image_file_name) && move_uploaded_file($_FILES["cnic_back_image"]["tmp_name"], $cnic_back_image_file_name)){
+                    if ($this->_move_upload_to_s3($_FILES["student_image"]["tmp_name"], $student_image_file_name) && $this->_move_upload_to_s3($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name) && $this->_move_upload_to_s3($_FILES["cnic_front_image"]["tmp_name"], $cnic_front_image_file_name) && $this->_move_upload_to_s3($_FILES["cnic_back_image"]["tmp_name"], $cnic_back_image_file_name)){
 
 
 
@@ -543,7 +560,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
 
                     $b_form_image_file_name = $target_dir .basename($_FILES["b_form_image"]["name"]);
 
-                    if (move_uploaded_file($_FILES["student_image"]["tmp_name"], $student_image_file_name) && move_uploaded_file($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name) && move_uploaded_file($_FILES["b_form_image"]["tmp_name"], $b_form_image_file_name)){
+                    if ($this->_move_upload_to_s3($_FILES["student_image"]["tmp_name"], $student_image_file_name) && $this->_move_upload_to_s3($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name) && $this->_move_upload_to_s3($_FILES["b_form_image"]["tmp_name"], $b_form_image_file_name)){
 
                         $success = 1;
                         $message = "Successfully Uploaded";
@@ -587,7 +604,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
                     $cnic_front_image_file_name = $target_dir .basename($_FILES["cnic_front_image"]["name"]);
                     $cnic_back_image_file_name = $target_dir .basename($_FILES["cnic_back_image"]["name"]);
 
-                    if (move_uploaded_file($_FILES["student_image"]["tmp_name"], $student_image_file_name) && move_uploaded_file($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name) && move_uploaded_file($_FILES["cnic_front_image"]["tmp_name"], $cnic_front_image_file_name) && move_uploaded_file($_FILES["cnic_back_image"]["tmp_name"], $cnic_back_image_file_name)){
+                    if ($this->_move_upload_to_s3($_FILES["student_image"]["tmp_name"], $student_image_file_name) && $this->_move_upload_to_s3($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name) && $this->_move_upload_to_s3($_FILES["cnic_front_image"]["tmp_name"], $cnic_front_image_file_name) && $this->_move_upload_to_s3($_FILES["cnic_back_image"]["tmp_name"], $cnic_back_image_file_name)){
 
                         $success = 1;
                         $message = "Successfully Uploaded";
@@ -612,7 +629,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
                     $b_form_image_file_name = $target_dir .basename($_FILES["b_form_image"]["name"]);
 
 
-                    if (move_uploaded_file($_FILES["student_image"]["tmp_name"], $student_image_file_name) && move_uploaded_file($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name) && move_uploaded_file($_FILES["b_form_image"]["tmp_name"], $b_form_image_file_name)){
+                    if ($this->_move_upload_to_s3($_FILES["student_image"]["tmp_name"], $student_image_file_name) && $this->_move_upload_to_s3($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name) && $this->_move_upload_to_s3($_FILES["b_form_image"]["tmp_name"], $b_form_image_file_name)){
 
                         $success = 1;
                         $message = "Successfully Uploaded";
@@ -668,7 +685,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
 
         if (isset($_FILES["student_image"])){
             $student_image_file_name = $target_dir .basename($_FILES["student_image"]["name"]);
-            if (move_uploaded_file($_FILES["student_image"]["tmp_name"], $student_image_file_name)){
+            if ($this->_move_upload_to_s3($_FILES["student_image"]["tmp_name"], $student_image_file_name)){
                 $this->db->set(array(
                     'student_image'=>$student_image_file_name,
                 ));
@@ -679,7 +696,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
 
         if (isset($_FILES["matriculation_result_image"])){
             $matriculation_result_image_file_name = $target_dir .basename($_FILES["matriculation_result_image"]["name"]);
-            if (move_uploaded_file($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name)){
+            if ($this->_move_upload_to_s3($_FILES["matriculation_result_image"]["tmp_name"], $matriculation_result_image_file_name)){
                 $this->db->set(array(
                     'matriculation_result'=>$matriculation_result_image_file_name,
                 ));
@@ -690,7 +707,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
 
         if (isset($_FILES["cnic_front_image"])){
             $cnic_front_image_file_name = $target_dir .basename($_FILES["cnic_front_image"]["name"]);
-            if (move_uploaded_file($_FILES["cnic_front_image"]["tmp_name"], $cnic_front_image_file_name)){
+            if ($this->_move_upload_to_s3($_FILES["cnic_front_image"]["tmp_name"], $cnic_front_image_file_name)){
                 $this->db->set(array(
                     'cnic_front'=>$cnic_front_image_file_name,
                 ));
@@ -701,7 +718,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
 
         if (isset($_FILES["cnic_back_image"])){
             $cnic_back_image_file_name = $target_dir .basename($_FILES["cnic_back_image"]["name"]);
-            if (move_uploaded_file($_FILES["cnic_back_image"]["tmp_name"], $cnic_back_image_file_name)){
+            if ($this->_move_upload_to_s3($_FILES["cnic_back_image"]["tmp_name"], $cnic_back_image_file_name)){
                 $this->db->set(array(
                     'cnic_back'=>$cnic_back_image_file_name,
                 ));
@@ -712,7 +729,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
 
         if (isset($_FILES["b_form_image"])){
             $b_form_image_file_name = $target_dir .basename($_FILES["b_form_image"]["name"]);
-            if (move_uploaded_file($_FILES["b_form_image"]["tmp_name"], $b_form_image_file_name)){
+            if ($this->_move_upload_to_s3($_FILES["b_form_image"]["tmp_name"], $b_form_image_file_name)){
                 $this->db->set(array(
                     'b_form'=>$b_form_image_file_name,
                 ));
@@ -800,7 +817,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
         if (isset($_FILES["signatures"])){
 
 
-            if (move_uploaded_file($_FILES["signatures"]["tmp_name"], $signatures)){
+            if ($this->_move_upload_to_s3($_FILES["signatures"]["tmp_name"], $signatures)){
 
                 $success = 1;
                 $message = "Successfully Uploaded";
@@ -2062,7 +2079,7 @@ INNER JOIN student_docs ON student_docs.application_id = admission_applications.
         if (isset($_FILES["cv"])){
 
 
-            if (move_uploaded_file($_FILES["cv"]["tmp_name"], $cv)){
+            if ($this->_move_upload_to_s3($_FILES["cv"]["tmp_name"], $cv)){
 
                 $success = 1;
                 $message = "Successfully Uploaded";

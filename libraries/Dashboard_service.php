@@ -466,7 +466,7 @@ class Dashboard_service {
 
     private function _is_paypro_payment($fee_pay_through)
     {
-        return strtolower((string) $fee_pay_through) === 'pay_pro';
+        return strtolower(trim((string) $fee_pay_through)) === 'pay_pro';
     }
 
     public function fee_status_detail($payment_id)
@@ -566,8 +566,9 @@ class Dashboard_service {
     private function _load_student_fee_rows($ids)
     {
         if (empty($ids)) return array();
-        $this->ci->db->select('payments.id, payments.challan_no, payments.paid_date, payments.actual_paid_date, payments.actual_amount, payments.amount, payments.fee_pay_through, payments.settlement_id, payments.settlement_payment_id, students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile, students.emergency_no, classes.name AS class_name, courses.course_name, campuses.campus_id, campuses.campus_name');
+        $this->ci->db->select('payments.id, payments.challan_no, payments.paid_date, payments.actual_paid_date, payments.actual_amount, payments.amount, payments.fee_pay_through, payments.settlement_id, payments.settlement_payment_id, pay_pro_settlement.settlement_date, students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile, students.emergency_no, classes.name AS class_name, courses.course_name, campuses.campus_id, campuses.campus_name');
         $this->ci->db->from('payments');
+        $this->ci->db->join('pay_pro_settlement', 'pay_pro_settlement.id=payments.settlement_id', 'left');
         $this->ci->db->join('students', 'payments.student_id=students.student_id', 'inner');
         $this->ci->db->join('classes', 'classes.class_id=students.class_id', 'inner');
         $this->ci->db->join('courses', 'courses.course_id=classes.course_id', 'left');
@@ -592,6 +593,7 @@ class Dashboard_service {
                 'course_name' => $row['course_name'],
                 'submit_date' => $row['actual_paid_date'],
                 'paid_date' => $row['paid_date'],
+                'settlement_date' => $this->_is_paypro_payment($row['fee_pay_through']) ? $row['settlement_date'] : null,
                 'amount' => $row['actual_amount'],
                 'fee_pay_through' => $row['fee_pay_through'],
                 'can_clear' => $can['can_clear'],
@@ -660,8 +662,9 @@ class Dashboard_service {
     private function _load_contractor_fee_rows($ids)
     {
         if (empty($ids)) return array();
-        $this->ci->db->select('payments.id, payments.challan_no, payments.paid_date, payments.actual_paid_date, payments.actual_amount, payments.amount, payments.fee_pay_through, payments.settlement_id, payments.settlement_payment_id, payments.contract_id, contractors.name AS contractor_name, contractors.contractor_id_from_college, campuses.campus_id, campuses.campus_name');
+        $this->ci->db->select('payments.id, payments.challan_no, payments.paid_date, payments.actual_paid_date, payments.actual_amount, payments.amount, payments.fee_pay_through, payments.settlement_id, payments.settlement_payment_id, payments.contract_id, pay_pro_settlement.settlement_date, contractors.name AS contractor_name, contractors.contractor_id_from_college, campuses.campus_id, campuses.campus_name');
         $this->ci->db->from('payments');
+        $this->ci->db->join('pay_pro_settlement', 'pay_pro_settlement.id=payments.settlement_id', 'left');
         $this->ci->db->join('contracts', 'contracts.contract_id=payments.contract_id', 'inner');
         $this->ci->db->join('contractors', 'contractors.contractor_id=contracts.contractor_id', 'inner');
         $this->ci->db->join('campuses', 'contracts.campus_id=campuses.campus_id', 'inner');
@@ -686,6 +689,7 @@ class Dashboard_service {
                 'campus_name' => $row['campus_name'],
                 'submit_date' => $row['actual_paid_date'],
                 'paid_date' => $row['paid_date'],
+                'settlement_date' => $this->_is_paypro_payment($row['fee_pay_through']) ? $row['settlement_date'] : null,
                 'amount' => $row['actual_amount'],
                 'fee_pay_through' => $row['fee_pay_through'],
                 'can_clear' => $can['can_clear'],
@@ -699,8 +703,9 @@ class Dashboard_service {
 
     private function _student_detail($payment)
     {
-        $this->ci->db->select('students.*, classes.name AS class_name, courses.course_name, campuses.campus_name, payments.*');
+        $this->ci->db->select('students.*, classes.name AS class_name, courses.course_name, campuses.campus_name, payments.*, pay_pro_settlement.settlement_date');
         $this->ci->db->from('payments');
+        $this->ci->db->join('pay_pro_settlement', 'pay_pro_settlement.id=payments.settlement_id', 'left');
         $this->ci->db->join('students', 'payments.student_id=students.student_id', 'inner');
         $this->ci->db->join('classes', 'classes.class_id=students.class_id', 'inner');
         $this->ci->db->join('courses', 'courses.course_id=classes.course_id', 'left');
@@ -727,6 +732,7 @@ class Dashboard_service {
             ),
             'submit_date' => $row['actual_paid_date'],
             'paid_date' => $row['paid_date'],
+            'settlement_date' => $this->_is_paypro_payment($row['fee_pay_through']) ? $row['settlement_date'] : null,
             'fee_details' => $fee_lines,
             'paid_fee_details' => $paid_lines,
             'can_clear' => $can['can_clear'],
@@ -737,8 +743,9 @@ class Dashboard_service {
 
     private function _contractor_detail($payment)
     {
-        $this->ci->db->select('payments.*, contractors.name AS contractor_name, contractors.contractor_id_from_college, contracts.contract_name, campuses.campus_name');
+        $this->ci->db->select('payments.*, pay_pro_settlement.settlement_date, contractors.name AS contractor_name, contractors.contractor_id_from_college, contracts.contract_name, campuses.campus_name');
         $this->ci->db->from('payments');
+        $this->ci->db->join('pay_pro_settlement', 'pay_pro_settlement.id=payments.settlement_id', 'left');
         $this->ci->db->join('contracts', 'contracts.contract_id=payments.contract_id', 'inner');
         $this->ci->db->join('contractors', 'contractors.contractor_id=contracts.contractor_id', 'inner');
         $this->ci->db->join('campuses', 'contracts.campus_id=campuses.campus_id', 'inner');
@@ -757,6 +764,7 @@ class Dashboard_service {
             ),
             'submit_date' => $row['actual_paid_date'],
             'paid_date' => $row['paid_date'],
+            'settlement_date' => $this->_is_paypro_payment($row['fee_pay_through']) ? $row['settlement_date'] : null,
             'fee_details' => $this->_build_contractor_fee_lines($row),
             'paid_fee_details' => $this->_build_paid_fee_lines($row),
             'can_clear' => true,
@@ -869,6 +877,9 @@ class Dashboard_service {
         if (!empty($row['removed_fine'])) $lines[] = 'Removed Current Installment Fine: '.$row['removed_fine'];
 
         $lines[] = 'Paid Date: '.$row['paid_date'];
+        if ($this->_is_paypro_payment(isset($row['fee_pay_through']) ? $row['fee_pay_through'] : '') && !empty($row['settlement_date'])) {
+            $lines[] = 'Settlement Date: '.$row['settlement_date'];
+        }
         $lines[] = 'Paid Date System: '.(isset($row['updated_at']) ? $row['updated_at'] : '');
         $lines[] = 'Fee Pay Through: '.$row['fee_pay_through'];
 

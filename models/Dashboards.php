@@ -228,30 +228,55 @@ class Dashboards extends CI_Model {
 	public function newExpenses($start_date, $end_date,$date_type)
 	{
 		$access = checkUserAccess();
+		$date_type = $date_type === 'date' ? 'date' : 'actual_date';
+		// A bank-tagged expense is dated by its bank statement transaction, not
+		// by the date originally entered on the expense record.
+		$date_column = $date_type === 'date'
+			? "COALESCE((SELECT DATE(brs.trans_date) FROM bank_reconciliation_statement AS brs WHERE brs.expense_id = e.expense_id OR FIND_IN_SET(e.expense_id, brs.salary_expense_ids) ORDER BY brs.trans_date ASC LIMIT 1), e.date)"
+			: 'e.actual_date';
 		
+		/*
+		 * Keep the payment source with every row.  Cash expenses are paid from
+		 * the submitter's petty cash; bank expenses are linked through the bank
+		 * reconciliation statement.  The joins are left joins so older expenses
+		 * (which were saved before those links existed) still appear in the report.
+		 */
+		$select = "SELECT e.*, c.campus_name as campus_name,
+			(SELECT pc.id FROM petty_cash_college_wise AS pc WHERE pc.assign_to = e.add_by_id ORDER BY pc.id DESC LIMIT 1) AS petty_cash_id,
+			(SELECT CONCAT_WS(' ', pu.first_name, pu.last_name) FROM petty_cash_college_wise AS pc INNER JOIN users AS pu ON pu.user_id = pc.assign_to WHERE pc.assign_to = e.add_by_id ORDER BY pc.id DESC LIMIT 1) AS petty_cash_holder,
+			(SELECT a.account_title FROM bank_reconciliation_statement AS brs INNER JOIN accounts AS a ON a.id = brs.account_id WHERE brs.expense_id = e.expense_id OR FIND_IN_SET(e.expense_id, brs.salary_expense_ids) LIMIT 1) AS bank_account_title,
+			(SELECT a.account_name FROM bank_reconciliation_statement AS brs INNER JOIN accounts AS a ON a.id = brs.account_id WHERE brs.expense_id = e.expense_id OR FIND_IN_SET(e.expense_id, brs.salary_expense_ids) LIMIT 1) AS bank_account_name,
+			(SELECT brs.trans_date FROM bank_reconciliation_statement AS brs WHERE brs.expense_id = e.expense_id OR FIND_IN_SET(e.expense_id, brs.salary_expense_ids) ORDER BY brs.trans_date ASC LIMIT 1) AS bank_transaction_date
+			FROM expenses AS e
+			INNER JOIN campuses AS c ON c.campus_id = e.campus_id
+			WHERE " . $date_column . " >= '$start_date' AND " . $date_column . " <= '$end_date'";
 		if($this->session->userdata('role')!='Admin')
 		{
-			$qry = "SELECT e.*, c.campus_name as campus_name FROM expenses as e INNER JOIN campuses as c ON c.campus_id=e.campus_id WHERE e.".$date_type.">='$start_date' AND e.".$date_type."<='$end_date' AND c.campus_id IN (".@$access[0]['campus_ids'].")";
+			$qry = $select . " AND c.campus_id IN (".@$access[0]['campus_ids'].")";
 		}
 		else
 		{
-			$qry = "SELECT e.*, c.campus_name as campus_name FROM expenses as e INNER JOIN campuses as c ON c.campus_id=e.campus_id WHERE e.".$date_type.">='$start_date' AND e.".$date_type."<='$end_date'";
+			$qry = $select;
 		}
 		$query = $this->db->query($qry)->result_array();
 		return $query;
 	}
 	
-	public function getTotalExpenses($start_date, $end_date)
+	public function getTotalExpenses($start_date, $end_date, $date_type = 'date')
 	{
 		$access = checkUserAccess();
+		$date_type = $date_type === 'actual_date' ? 'actual_date' : 'date';
+		$date_column = $date_type === 'date'
+			? "COALESCE((SELECT DATE(brs.trans_date) FROM bank_reconciliation_statement AS brs WHERE brs.expense_id = e.expense_id OR FIND_IN_SET(e.expense_id, brs.salary_expense_ids) ORDER BY brs.trans_date ASC LIMIT 1), e.date)"
+			: 'DATE(e.actual_date)';
 		
 		if($this->session->userdata('role')!='Admin')
 		{
-			$qry = "SELECT sum(e.amount) as total_expenses FROM expenses as e INNER JOIN campuses as c ON c.campus_id=e.campus_id WHERE e.date>='$start_date' AND e.date<='$end_date' AND c.campus_id IN (".@$access[0]['campus_ids'].")";
+			$qry = "SELECT sum(e.amount) as total_expenses FROM expenses as e INNER JOIN campuses as c ON c.campus_id=e.campus_id WHERE " . $date_column . " >= '$start_date' AND " . $date_column . " <= '$end_date' AND c.campus_id IN (".@$access[0]['campus_ids'].")";
 		}
 		else
 		{
-			$qry = "SELECT sum(amount) as total_expenses FROM expenses WHERE date>='$start_date' AND date<='$end_date'";
+			$qry = "SELECT sum(e.amount) as total_expenses FROM expenses as e WHERE " . $date_column . " >= '$start_date' AND " . $date_column . " <= '$end_date'";
 		}
 		$query = $this->db->query($qry)->result_array();
 		return $query;

@@ -47,37 +47,10 @@ class Punjab_council_roll_number extends CI_Controller {
 
     public function upload_roll_no()
     {
-        //load the helper
-        $this->load->helper('form');
-
-        //Configure
-        //set the path where the files uploaded will be copied. NOTE if using linux, set the folder to permission 777
-        $config['upload_path'] = 'results/';
-
-        // set the filter image types
-        $config['allowed_types'] = 'csv';
-
-        //load the upload library
-        $this->load->library('upload', $config);
-
-        $this->upload->initialize($config);
-
-        $this->upload->set_allowed_types('csv');
-
-        $data['upload_data'] = '';
-
-        //if not successful, set the error message
-        if (!$this->upload->do_upload('roll_no')) {
-            $data = array('msg' => $this->upload->display_errors());
-            $file = '';
-        }
-        else
-        {
-            //else, set the success message
-            $data['upload_data'] = $this->upload->data();
-            if($data['upload_data']['file_name']){
-                $file = $data['upload_data']['file_name'];
-            }
+        $file = '';
+        if (!empty($_FILES['roll_no']['tmp_name']) && is_uploaded_file($_FILES['roll_no']['tmp_name'])) {
+            $ext = strtolower(pathinfo($_FILES['roll_no']['name'], PATHINFO_EXTENSION));
+            if ($ext === 'csv') $file = $_FILES['roll_no']['tmp_name'];
         }
 
         if($file=='')
@@ -87,7 +60,7 @@ class Punjab_council_roll_number extends CI_Controller {
         }
         else
         {
-            $file = fopen('/home/shahbazc/public_html/lahore-campus/results/'.$file,"r");
+            $file = fopen($file,"r");
             $row=1;
             while(! feof($file))
             {
@@ -229,38 +202,10 @@ class Punjab_council_roll_number extends CI_Controller {
 
     public function upload_result()
     {
-        //load the helper
-        $this->load->helper('form');
-
-        //Configure
-        //set the path where the files uploaded will be copied. NOTE if using linux, set the folder to permission 777
-        $config['upload_path'] = 'results/';
-
-        // set the filter image types
-        $config['allowed_types'] = 'csv';
-
-        //load the upload library
-        $this->load->library('upload', $config);
-
-        $this->upload->initialize($config);
-
-        $this->upload->set_allowed_types('csv');
-
-        $data['upload_data'] = '';
-
-        //if not successful, set the error message
-        if (!$this->upload->do_upload('roll_no')) {
-            $data = array('msg' => $this->upload->display_errors());
-            $file = '';
-
-        }
-        else
-        {
-            //else, set the success message
-            $data['upload_data'] = $this->upload->data();
-            if($data['upload_data']['file_name']){
-                $file = $data['upload_data']['file_name'];
-            }
+        $file = '';
+        if (!empty($_FILES['roll_no']['tmp_name']) && is_uploaded_file($_FILES['roll_no']['tmp_name'])) {
+            $ext = strtolower(pathinfo($_FILES['roll_no']['name'], PATHINFO_EXTENSION));
+            if ($ext === 'csv') $file = $_FILES['roll_no']['tmp_name'];
         }
 
         if($file=='')
@@ -270,7 +215,7 @@ class Punjab_council_roll_number extends CI_Controller {
         }
         else
         {
-            $file = fopen('/home/shahbazc/public_html/lahore-campus/results/'.$file,"r");
+            $file = fopen($file,"r");
             $updated_rows = 0;
             while(! feof($file))
             {
@@ -1365,10 +1310,6 @@ class Punjab_council_roll_number extends CI_Controller {
 
     function upload_roll_no_images()
     {
-        if (!is_dir(getcwd().'/rollno_slips')) {
-            mkdir(getcwd().'/rollno_slips', 0777);
-        }
-
         $exam_no = $this->input->post('council_exam_no');
         $class = $this->input->post('class');
         $targetDir = "rollno_slips/";
@@ -1386,10 +1327,12 @@ class Punjab_council_roll_number extends CI_Controller {
                 // Check whether file type is valid
                 $fileType = pathinfo($targetFilePath, PATHINFO_EXTENSION);
                 if(in_array($fileType, $allowTypes)){
-                    // Upload file to server
-                    if(move_uploaded_file($_FILES["files"]["tmp_name"][$key], $targetFilePath)){
+                    $this->load->library('s3_direct_storage');
+                    $mime = !empty($_FILES['files']['type'][$key]) ? $_FILES['files']['type'][$key] : 'application/octet-stream';
+                    $stored = $this->s3_direct_storage->put_file($_FILES["files"]["tmp_name"][$key], 'rollno_slips', $fileName, $mime);
+                    if($stored !== false){
                         // Image db insert sql
-                        array_push($images,$fileName);
+                        array_push($images,array('original' => $fileName, 'stored' => $stored));
                     }else{
                         $errorUpload .= $_FILES['files']['name'][$key].' | ';
                     }
@@ -1404,8 +1347,8 @@ class Punjab_council_roll_number extends CI_Controller {
             if(count($images)>0){
                 foreach ($images as $image)
                 {
-                    $image_name = strtok($image, '.');
-                    $this->db->set("slip_image",$image);
+                    $image_name = strtok($image['original'], '.');
+                    $this->db->set("slip_image",$image['stored']);
                     $this->db->where("council_exam_no = '$exam_no' and class = '$class' and roll_no = '$image_name'");
                     $this->db->update("punjab_council_roll_number");
                 }

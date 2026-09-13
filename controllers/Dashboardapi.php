@@ -400,7 +400,9 @@ class Dashboardapi extends CI_Controller {
 		$this->_require_perm('month_expense');
 		$this->_json(array(
 			'success' => true,
-			'data' => $this->details->expenses_report($this->current_user, $this->input->get('start_date'), $this->input->get('end_date'), $this->input->get('date_type') ?: 'actual_date'),
+			// The dashboard report is always filtered by the actual expense date.
+			// Bank statement dates are display-only in this report.
+			'data' => $this->details->expenses_report($this->current_user, $this->input->get('start_date'), $this->input->get('end_date'), 'actual_date'),
 		));
 	}
 
