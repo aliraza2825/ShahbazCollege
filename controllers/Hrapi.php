@@ -3161,7 +3161,12 @@ class Hrapi extends CI_Controller {
 		$this->_assert_external_loan_admin($loan);
 
 		$can_approve = $this->_is_admin() || $this->_access_flag('loan_approval');
-		if (!$can_approve && (int)$loan['user_id'] !== (int)$this->current_user['user_id']) {
+		$can_accounts_issue = $this->_access_flag('loan_approval_accounts');
+		if (
+			!$can_approve
+			&& !$can_accounts_issue
+			&& (int)$loan['user_id'] !== (int)$this->current_user['user_id']
+		) {
 			$this->_json(array('success' => false, 'message' => 'Forbidden'), 403);
 		}
 

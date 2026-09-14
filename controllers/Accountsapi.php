@@ -6536,7 +6536,10 @@ class Accountsapi extends CI_Controller {
 			$row['status_label'] = $status_label;
 			$row['months_applied'] = isset($row['months']) ? $row['months'] : (isset($row['in_month']) ? $row['in_month'] : null);
 			$row['amount_applied'] = isset($row['amount_applied']) ? $row['amount_applied'] : (isset($row['amount']) ? $row['amount'] : 0);
-			$row['detail_url'] = site_url('loans/loans_detail_view/' . (int)$row['id']);
+			$row['loan_id'] = (int)$row['id'];
+			if (!empty($row['undertaken_img'])) {
+				$row['undertaken_image_url'] = rtrim(base_url(), '/') . '/uploads/' . ltrim((string)$row['undertaken_img'], '/');
+			}
 			$out[] = $row;
 		}
 		$this->_json(array('success' => true, 'loans' => $out));
@@ -6552,6 +6555,11 @@ class Accountsapi extends CI_Controller {
 		$body = $this->_body();
 		$loan_id = (int)(isset($body['id']) ? $body['id'] : (isset($body['loan_id']) ? $body['loan_id'] : 0));
 		if ($loan_id <= 0) $this->_json(array('success' => false, 'message' => 'id required'), 400);
+
+		$proof_image = $this->_upload_proof();
+		if ($proof_image === '') {
+			$this->_json(array('success' => false, 'message' => 'Proof image is required'), 422);
+		}
 
 		$loan = $this->db->query('SELECT * FROM loans WHERE id = ? LIMIT 1', array($loan_id))->row_array();
 		if (!$loan) $this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
@@ -6627,7 +6635,7 @@ class Accountsapi extends CI_Controller {
 			'user_id' => (int)(isset($loan['user_id']) ? $loan['user_id'] : 0),
 			'loan_id' => $loan_id,
 			'actual_date' => date('Y-m-d H:i:s'),
-			'image' => '',
+			'image' => $proof_image,
 			'approved_status' => '1',
 			'add_by_id' => $uid,
 			'add_by' => $this->_actor_name(),
