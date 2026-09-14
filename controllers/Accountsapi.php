@@ -223,28 +223,43 @@ class Accountsapi extends CI_Controller {
 			|| $this->_can_access_account_id($accountId, 'allowed_bank_account_ids');
 	}
 
-	/** Save multipart image/proof/record to uploads/; returns filename or '' */
-	private function _upload_proof()
+	/** Save one uploaded field to uploads/; returns stored filename or ''. */
+	private function _upload_named($fileKey, $filenamePrefix = 'proof_')
 	{
-		$fileKey = null;
-		if (!empty($_FILES['image']['name']) && is_uploaded_file($_FILES['image']['tmp_name'])) {
-			$fileKey = 'image';
-		} elseif (!empty($_FILES['proof']['name']) && is_uploaded_file($_FILES['proof']['tmp_name'])) {
-			$fileKey = 'proof';
-		} elseif (!empty($_FILES['record']['name']) && is_uploaded_file($_FILES['record']['tmp_name'])) {
-			$fileKey = 'record';
+		if (empty($_FILES[$fileKey]['name']) || !is_uploaded_file($_FILES[$fileKey]['tmp_name'])) {
+			return '';
 		}
-		if (!$fileKey) return '';
-
 		$ext = pathinfo($_FILES[$fileKey]['name'], PATHINFO_EXTENSION);
-		$filename = 'proof_' . date('YmdHis') . '_' . mt_rand(1000, 9999);
+		$filename = $filenamePrefix . date('YmdHis') . '_' . mt_rand(1000, 9999);
 		if ($ext !== '') $filename .= '.' . preg_replace('/[^a-zA-Z0-9]/', '', $ext);
 		$this->load->library('s3_direct_storage');
 		$stored = $this->s3_direct_storage->put_uploaded_file($fileKey, 'uploads', $filename);
-		if ($stored === false) {
-			return '';
+		return $stored === false ? '' : $stored;
+	}
+
+	/** Save multipart image/proof/record to uploads/; returns filename or '' */
+	private function _upload_proof()
+	{
+		foreach (array('image', 'proof', 'record') as $key) {
+			$stored = $this->_upload_named($key, 'proof_');
+			if ($stored !== '') return $stored;
 		}
-		return $stored;
+		return '';
+	}
+
+	private function _ensure_loan_cash_given_voice_column()
+	{
+		if (!$this->_table_exists('loans')) return;
+		if (!$this->_field_exists('loans', 'cash_given_voice')) {
+			$this->db->query('ALTER TABLE `loans` ADD `cash_given_voice` VARCHAR(255) NULL DEFAULT NULL');
+		}
+	}
+
+	private function _uploads_public_url($filename)
+	{
+		$file = trim((string)$filename);
+		if ($file === '') return '';
+		return rtrim(base_url(), '/') . '/uploads/' . ltrim($file, '/');
 	}
 
 	private function _parse_account_name($accountName)
@@ -6556,10 +6571,18 @@ class Accountsapi extends CI_Controller {
 		$loan_id = (int)(isset($body['id']) ? $body['id'] : (isset($body['loan_id']) ? $body['loan_id'] : 0));
 		if ($loan_id <= 0) $this->_json(array('success' => false, 'message' => 'id required'), 400);
 
-		$proof_image = $this->_upload_proof();
+		$proof_image = $this->_upload_named('proof');
+		if ($proof_image === '') {
+			$proof_image = $this->_upload_named('image');
+		}
 		if ($proof_image === '') {
 			$this->_json(array('success' => false, 'message' => 'Proof image is required'), 422);
 		}
+		$voice_file = $this->_upload_named('audio', 'loan_voice_');
+		if ($voice_file === '') {
+			$voice_file = $this->_upload_named('voice', 'loan_voice_');
+		}
+		$this->_ensure_loan_cash_given_voice_column();
 
 		$loan = $this->db->query('SELECT * FROM loans WHERE id = ? LIMIT 1', array($loan_id))->row_array();
 		if (!$loan) $this->_json(array('success' => false, 'message' => 'Loan not found'), 404);
@@ -6595,11 +6618,15 @@ class Accountsapi extends CI_Controller {
 		}
 
 		$amountavg = $approve_amount / $months;
-		$this->db->where('id', $loan_id)->update('loans', array(
+		$loan_patch = array(
 			'cash_given' => $approve_amount,
 			'give_through' => 'cash',
 			'cash_given_by' => $uid,
-		));
+		);
+		if ($voice_file !== '' && $this->_field_exists('loans', 'cash_given_voice')) {
+			$loan_patch['cash_given_voice'] = $voice_file;
+		}
+		$this->db->where('id', $loan_id)->update('loans', $loan_patch);
 
 		$time = date('Y-m-d');
 		for ($i = 1; $i <= $months; $i++) {

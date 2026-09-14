@@ -3228,6 +3228,23 @@ class Hrapi extends CI_Controller {
 			$closing_campuses = $this->db->get()->result_array();
 		}
 
+		$disbursement = array(
+			'proof_image_url' => '',
+			'voice_url' => '',
+		);
+		if ($this->db->table_exists('expenses')) {
+			$exp = $this->db->query(
+				'SELECT image FROM expenses WHERE loan_id = ? AND loan_id > 0 ORDER BY expense_id DESC LIMIT 1',
+				array($id)
+			)->row_array();
+			if ($exp && !empty($exp['image'])) {
+				$disbursement['proof_image_url'] = rtrim(base_url(), '/') . '/uploads/' . ltrim($exp['image'], '/');
+			}
+		}
+		if (!empty($loan['cash_given_voice'])) {
+			$disbursement['voice_url'] = rtrim(base_url(), '/') . '/uploads/' . ltrim($loan['cash_given_voice'], '/');
+		}
+
 		$this->_json(array(
 			'success' => true,
 			'data' => array(
@@ -3242,6 +3259,7 @@ class Hrapi extends CI_Controller {
 				'installments' => $out_installments,
 				'closing_campuses' => $closing_campuses,
 				'petty_cash_accounts' => $is_external ? $this->_loan_petty_cash_options() : array(),
+				'disbursement' => $disbursement,
 			),
 		));
 	}
