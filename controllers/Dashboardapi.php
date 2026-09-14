@@ -352,6 +352,26 @@ class Dashboardapi extends CI_Controller {
 		));
 	}
 
+	public function council_workflow_date_requests()
+	{
+		$this->_require_perm('council_workflow_date_requests');
+		$result = $this->service->council_workflow_date_requests($this->current_user);
+		if (empty($result['success'])) $this->_json($result, 403);
+		$this->_json(array('success' => true, 'data' => array('rows' => $result['rows'])));
+	}
+
+	public function review_council_workflow_date_request()
+	{
+		$this->_require_perm('council_workflow_date_requests');
+		$body = $this->_body();
+		$result = $this->service->review_council_workflow_date_request(
+			$this->current_user,
+			isset($body['id']) ? $body['id'] : 0,
+			!empty($body['approve'])
+		);
+		$this->_action_result($result);
+	}
+
 	public function approve_fee_reversal()
 	{
 		$this->_require_perm('fee_reversal_requests');

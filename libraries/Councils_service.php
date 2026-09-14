@@ -182,8 +182,37 @@ class Councils_service {
         ))->row_array();
 
         if ($existing) {
-            $this->ci->db->where('id', (int) $existing['id'])->update('council_report_workflow_schedules', $row);
+            if ($existing['scheduled_date'] === $scheduled_date) {
+                return array('success' => true, 'message' => 'This workflow already has that date.');
+            }
+            if ($scheduled_date <= date('Y-m-d')) {
+                return array('success' => false, 'message' => 'Choose a future date for the extension request.');
+            }
+            $this->_ensure_workflow_schedule_request_table();
+            $request = array(
+                'exam_sequence_id' => $exam_sequence_id,
+                'council_sequence_id' => $council_sequence_id,
+                'current_date' => $existing['scheduled_date'],
+                'requested_date' => $scheduled_date,
+                'requested_by' => $row['updated_by'],
+                'status' => 'pending',
+                'requested_at' => $row['updated_at'],
+            );
+            $pending = $this->ci->db->where(array(
+                'exam_sequence_id' => $exam_sequence_id,
+                'council_sequence_id' => $council_sequence_id,
+                'status' => 'pending',
+            ))->get('council_report_workflow_date_requests')->row_array();
+            if ($pending) {
+                $this->ci->db->where('id', (int) $pending['id'])->update('council_report_workflow_date_requests', $request);
+            } else {
+                $this->ci->db->insert('council_report_workflow_date_requests', $request);
+            }
+            return array('success' => true, 'request_pending' => true, 'message' => 'Date update request sent for admin approval.');
         } else {
+            if ($scheduled_date < date('Y-m-d')) {
+                return array('success' => false, 'message' => 'Choose today or a future date for a new workflow schedule.');
+            }
             $row['created_by'] = $row['updated_by'];
             $row['created_at'] = $row['updated_at'];
             $this->ci->db->insert('council_report_workflow_schedules', $row);
@@ -887,6 +916,7 @@ class Councils_service {
 
         $schedule = $this->_other_task_schedule((int) $council_exam['id'], (int) $task['council_sequence_id']);
         $scheduled_date = !empty($schedule['scheduled_date']) ? $schedule['scheduled_date'] : null;
+        $pending_date_request = $this->_other_task_pending_request((int) $council_exam['id'], (int) $task['council_sequence_id']);
         $alert = null;
         if ($scheduled_date && $not_done > 0 && $scheduled_date <= date('Y-m-d')) {
             $is_today = $scheduled_date === date('Y-m-d');
@@ -906,6 +936,7 @@ class Councils_service {
             'done' => $done,
             'not_done' => $not_done,
             'scheduled_date' => $scheduled_date,
+            'pending_requested_date' => !empty($pending_date_request['requested_date']) ? $pending_date_request['requested_date'] : null,
             'alert' => $alert,
             'links' => array(
                 'done' => $this->_other_task_link_params($page, $course_id, $exam_no, $class, 'done', (int) $task['council_sequence_id'], (int) $council_exam['id']),
@@ -946,6 +977,37 @@ class Councils_service {
             'exam_sequence_id' => $exam_sequence_id,
             'council_sequence_id' => $council_sequence_id,
         ))->row_array();
+    }
+
+    private function _ensure_workflow_schedule_request_table()
+    {
+        $this->ci->db->query("CREATE TABLE IF NOT EXISTS `council_report_workflow_date_requests` (
+            `id` int unsigned NOT NULL AUTO_INCREMENT,
+            `exam_sequence_id` int NOT NULL,
+            `council_sequence_id` int NOT NULL,
+            `current_date` date NOT NULL,
+            `requested_date` date NOT NULL,
+            `requested_by` int NOT NULL DEFAULT 0,
+            `requested_at` datetime NOT NULL,
+            `status` varchar(20) NOT NULL DEFAULT 'pending',
+            `reviewed_by` int NOT NULL DEFAULT 0,
+            `reviewed_at` datetime NULL,
+            PRIMARY KEY (`id`),
+            KEY `pending_requests` (`status`, `requested_at`),
+            KEY `workflow_request` (`exam_sequence_id`, `council_sequence_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+
+    private function _other_task_pending_request($exam_sequence_id, $council_sequence_id)
+    {
+        if (!$this->ci->db->table_exists('council_report_workflow_date_requests')) {
+            return null;
+        }
+        return $this->ci->db->where(array(
+            'exam_sequence_id' => $exam_sequence_id,
+            'council_sequence_id' => $council_sequence_id,
+            'status' => 'pending',
+        ))->order_by('id', 'DESC')->get('council_report_workflow_date_requests')->row_array();
     }
 
     private function _session_breakdown($council_exam, $fee_tasks_raw, $payment_comment)

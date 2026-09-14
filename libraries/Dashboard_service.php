@@ -44,6 +44,7 @@ class Dashboard_service {
             'test_engine_questions' => $this->_can($user, 'dashboard_test_engine_questions'),
             'uncheck_assignments' => $this->_can($user, 'dashboard_uncheck_assignment'),
             'fee_reversal_requests' => $this->_can($user, 'dashboard_students_fees_reversal'),
+            'council_workflow_date_requests' => $this->_is_admin($user),
             'total_students' => $this->_can($user, 'dashboard_total_student_box'),
             'total_teachers' => $this->_can($user, 'dashboard_total_teacher_box'),
             'new_admissions_month' => $this->_can($user, 'dashboard_new_admission'),
@@ -177,6 +178,11 @@ class Dashboard_service {
                 ->where(array('done' => 0, 'status' => 0))
                 ->count_all_results('payments_reversal_requests');
         }
+        if ($perms['council_workflow_date_requests'] && $this->ci->db->table_exists('council_report_workflow_date_requests')) {
+            $out['council_workflow_date_requests'] = (int) $this->ci->db
+                ->where('status', 'pending')
+                ->count_all_results('council_report_workflow_date_requests');
+        }
         if ($perms['expense_reversals']) {
             $this->ci->db->where(array('approved_status' => '1', 'rev_status' => '0'));
             if (!$this->_is_admin($user)) {
@@ -190,6 +196,50 @@ class Dashboard_service {
         }
 
         return $out;
+    }
+
+    public function council_workflow_date_requests($user)
+    {
+        if (!$this->_is_admin($user)) return array('success' => false, 'message' => 'Admin approval is required.');
+        if (!$this->ci->db->table_exists('council_report_workflow_date_requests')) return array('success' => true, 'rows' => array());
+
+        $this->ci->db->select("council_report_workflow_date_requests.*, courses.course_name, exam_sequence.first_year, exam_sequence.first_year_type, exam_sequence.class, council_sequence.type_name, CONCAT(COALESCE(users.first_name, ''), ' ', COALESCE(users.last_name, '')) AS requested_by_name", false);
+        $this->ci->db->from('council_report_workflow_date_requests');
+        $this->ci->db->join('exam_sequence', 'exam_sequence.id = council_report_workflow_date_requests.exam_sequence_id', 'inner');
+        $this->ci->db->join('courses', 'courses.course_id = exam_sequence.course_id', 'inner');
+        $this->ci->db->join('council_sequence', 'council_sequence.council_sequence_id = council_report_workflow_date_requests.council_sequence_id', 'inner');
+        $this->ci->db->join('users', 'users.user_id = council_report_workflow_date_requests.requested_by', 'left');
+        $this->ci->db->where('council_report_workflow_date_requests.status', 'pending');
+        $this->ci->db->order_by('council_report_workflow_date_requests.requested_at', 'ASC');
+        return array('success' => true, 'rows' => $this->ci->db->get()->result_array());
+    }
+
+    public function review_council_workflow_date_request($user, $request_id, $approve)
+    {
+        if (!$this->_is_admin($user)) return array('success' => false, 'message' => 'Admin approval is required.');
+        if (!$this->ci->db->table_exists('council_report_workflow_date_requests')) return array('success' => false, 'message' => 'Request not found.');
+        $request = $this->ci->db->get_where('council_report_workflow_date_requests', array('id' => (int) $request_id, 'status' => 'pending'))->row_array();
+        if (!$request) return array('success' => false, 'message' => 'This request has already been reviewed.');
+
+        $this->ci->db->trans_start();
+        if ($approve) {
+            $this->ci->db->where(array(
+                'exam_sequence_id' => (int) $request['exam_sequence_id'],
+                'council_sequence_id' => (int) $request['council_sequence_id'],
+            ))->update('council_report_workflow_schedules', array(
+                'scheduled_date' => $request['requested_date'],
+                'updated_by' => (int) $user['user_id'],
+                'updated_at' => date('Y-m-d H:i:s'),
+            ));
+        }
+        $this->ci->db->where('id', (int) $request['id'])->update('council_report_workflow_date_requests', array(
+            'status' => $approve ? 'approved' : 'rejected',
+            'reviewed_by' => (int) $user['user_id'],
+            'reviewed_at' => date('Y-m-d H:i:s'),
+        ));
+        $this->ci->db->trans_complete();
+        if (!$this->ci->db->trans_status()) return array('success' => false, 'message' => 'Could not review the date request.');
+        return array('success' => true, 'message' => $approve ? 'Workflow date updated.' : 'Date update request rejected.');
     }
 
     /** Monthly statistics tiles. */
