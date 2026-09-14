@@ -1141,6 +1141,11 @@ class Expenses_service {
         }
 
         $rows = array();
+        $campus_rows = $this->ci->db->where_in('campus_id', $campus_ids)->get('campuses')->result_array();
+        $campuses_by_id = array();
+        foreach ($campus_rows as $campus_row) {
+            $campuses_by_id[(int) $campus_row['campus_id']] = $campus_row;
+        }
         foreach ($category_ids as $category_id) {
             $head = $this->ci->db->get_where('expense_category', array('expense_category_id' => $category_id))->row_array();
             if (!$head) {
@@ -1158,11 +1163,31 @@ class Expenses_service {
             } else {
                 $total = $this->sum_category_expenses($category_id, $campus_ids, $from_date, $to_date);
             }
+            $campus_breakdown = array();
+            foreach ($campus_ids as $campus_id) {
+                $campus_details = count($sub_heads) > 0
+                    ? $this->subhead_breakdown($category_id, array($campus_id), $from_date, $to_date)
+                    : array();
+                $campus_total = 0;
+                if (count($sub_heads) > 0) {
+                    foreach ($campus_details as $detail) {
+                        $campus_total += $detail['amount'];
+                    }
+                } else {
+                    $campus_total = $this->sum_category_expenses($category_id, array($campus_id), $from_date, $to_date);
+                }
+                $campus_breakdown[] = array(
+                    'campus_id' => $campus_id,
+                    'campus_name' => isset($campuses_by_id[$campus_id]) ? $campuses_by_id[$campus_id]['campus_name'] : 'Campus ' . $campus_id,
+                    'amount' => $campus_total,
+                );
+            }
             $rows[] = array(
                 'head_name' => $head['name'],
                 'category_id' => $category_id,
                 'campus_id' => null,
                 'campus_name' => count($campus_ids) . ' selected campuses',
+                'campus_breakdown' => $campus_breakdown,
                 'details' => $details,
                 'total_amount' => $total,
             );
