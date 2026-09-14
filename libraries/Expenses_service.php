@@ -1081,8 +1081,8 @@ class Expenses_service {
     {
         $campus_ids = is_array($campus_ids) ? $campus_ids : array($campus_ids);
         $campus_ids = array_values(array_filter(array_map('intval', $campus_ids)));
-        if (!count($campus_ids)) return 0;
-        $this->ci->db->select_sum('amount');
+        if (!count($campus_ids)) return array('amount' => 0.0, 'cash_amount' => 0.0, 'bank_amount' => 0.0);
+        $this->ci->db->select("COALESCE(SUM(amount), 0) AS amount, COALESCE(SUM(CASE WHEN paid_type = 'cash' THEN amount ELSE 0 END), 0) AS cash_amount, COALESCE(SUM(CASE WHEN paid_type = 'bank' THEN amount ELSE 0 END), 0) AS bank_amount", false);
         $this->ci->db->from('expenses');
         $this->ci->db->where(array(
             'expense_category_id' => (int) $category_id,
@@ -1091,7 +1091,11 @@ class Expenses_service {
         ));
         $this->ci->db->where_in('campus_id', $campus_ids);
         $row = $this->ci->db->get()->row_array();
-        return isset($row['amount']) ? (float) $row['amount'] : 0;
+        return array(
+            'amount' => isset($row['amount']) ? (float) $row['amount'] : 0.0,
+            'cash_amount' => isset($row['cash_amount']) ? (float) $row['cash_amount'] : 0.0,
+            'bank_amount' => isset($row['bank_amount']) ? (float) $row['bank_amount'] : 0.0,
+        );
     }
 
     private function subhead_breakdown($category_id, $campus_ids, $from_date, $to_date)
@@ -1102,9 +1106,14 @@ class Expenses_service {
             if ((string) $sub['has_sub'] === '1') {
                 $lines = array_merge($lines, $this->subhead_breakdown($sub['expense_category_id'], $campus_ids, $from_date, $to_date));
             } else {
-                $amt = $this->sum_category_expenses($sub['expense_category_id'], $campus_ids, $from_date, $to_date);
-                if ($amt > 0) {
-                    $lines[] = array('name' => $sub['name'], 'amount' => $amt);
+                $amounts = $this->sum_category_expenses($sub['expense_category_id'], $campus_ids, $from_date, $to_date);
+                if ($amounts['amount'] > 0) {
+                    $lines[] = array(
+                        'name' => $sub['name'],
+                        'amount' => $amounts['amount'],
+                        'cash_amount' => $amounts['cash_amount'],
+                        'bank_amount' => $amounts['bank_amount'],
+                    );
                 }
             }
         }
@@ -1156,12 +1165,19 @@ class Expenses_service {
                 ? $this->subhead_breakdown($category_id, $campus_ids, $from_date, $to_date)
                 : array();
             $total = 0;
+            $cash_total = 0;
+            $bank_total = 0;
             if (count($sub_heads) > 0) {
                 foreach ($details as $d) {
                     $total += $d['amount'];
+                    $cash_total += $d['cash_amount'];
+                    $bank_total += $d['bank_amount'];
                 }
             } else {
-                $total = $this->sum_category_expenses($category_id, $campus_ids, $from_date, $to_date);
+                $amounts = $this->sum_category_expenses($category_id, $campus_ids, $from_date, $to_date);
+                $total = $amounts['amount'];
+                $cash_total = $amounts['cash_amount'];
+                $bank_total = $amounts['bank_amount'];
             }
             $campus_breakdown = array();
             foreach ($campus_ids as $campus_id) {
@@ -1169,17 +1185,26 @@ class Expenses_service {
                     ? $this->subhead_breakdown($category_id, array($campus_id), $from_date, $to_date)
                     : array();
                 $campus_total = 0;
+                $campus_cash_total = 0;
+                $campus_bank_total = 0;
                 if (count($sub_heads) > 0) {
                     foreach ($campus_details as $detail) {
                         $campus_total += $detail['amount'];
+                        $campus_cash_total += $detail['cash_amount'];
+                        $campus_bank_total += $detail['bank_amount'];
                     }
                 } else {
-                    $campus_total = $this->sum_category_expenses($category_id, array($campus_id), $from_date, $to_date);
+                    $amounts = $this->sum_category_expenses($category_id, array($campus_id), $from_date, $to_date);
+                    $campus_total = $amounts['amount'];
+                    $campus_cash_total = $amounts['cash_amount'];
+                    $campus_bank_total = $amounts['bank_amount'];
                 }
                 $campus_breakdown[] = array(
                     'campus_id' => $campus_id,
                     'campus_name' => isset($campuses_by_id[$campus_id]) ? $campuses_by_id[$campus_id]['campus_name'] : 'Campus ' . $campus_id,
                     'amount' => $campus_total,
+                    'cash_amount' => $campus_cash_total,
+                    'bank_amount' => $campus_bank_total,
                 );
             }
             $rows[] = array(
@@ -1190,6 +1215,8 @@ class Expenses_service {
                 'campus_breakdown' => $campus_breakdown,
                 'details' => $details,
                 'total_amount' => $total,
+                'cash_amount' => $cash_total,
+                'bank_amount' => $bank_total,
             );
         }
 
