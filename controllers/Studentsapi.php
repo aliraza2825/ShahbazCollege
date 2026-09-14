@@ -2542,6 +2542,29 @@ class Studentsapi extends CI_Controller {
 				->get_where('update_payment_requests', array('id' => $payment['id']))
 				->result_array();
 		}
+		// Surface the reversal workflow on the paid installment itself.  The
+		// dashboard only approves the request; the cashier must then attach proof
+		// and complete the actual petty-cash reversal from this payment row.
+		$payment['reversal_request'] = null;
+		if ((int) $payment['paid'] === 1 && $this->db->table_exists('payments_reversal_requests')) {
+			$request = $this->db->select('payments_reversal_request_id, reversal_amount, reversal_reason, approve_status, status, done')
+				->order_by('payments_reversal_request_id', 'DESC')
+				->get_where('payments_reversal_requests', array(
+					'payment_id' => (int) $payment['id'],
+					'student_id' => (int) $student_id,
+				))
+				->row_array();
+			if ($request) {
+				$payment['reversal_request'] = array(
+					'id' => (int) $request['payments_reversal_request_id'],
+					'amount' => (float) $request['reversal_amount'],
+					'reason' => isset($request['reversal_reason']) ? $request['reversal_reason'] : '',
+					'approve_status' => (int) $request['approve_status'],
+					'status' => (int) $request['status'],
+					'done' => (int) $request['done'],
+				);
+			}
+		}
 		$today = new DateTime(date('Y-m-d'));
 		$deadline = DateTime::createFromFormat('Y-m-d', $payment['dead_line']);
 		$late_days = 0;
@@ -4761,6 +4784,9 @@ class Studentsapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Reversal request already exists for this payment'), 422);
 		}
 		$reversal_application = $this->_upload_field('reversal_application');
+		if ($reversal_application === '') {
+			$this->_json(array('success' => false, 'message' => 'Undertaking image is required'), 422);
+		}
 		$this->db->insert('payments_reversal_requests', array(
 			'student_id' => (int)$student_id,
 			'payment_id' => $payment_id,
@@ -4804,20 +4830,33 @@ class Studentsapi extends CI_Controller {
 		if ($proof_image === '') {
 			$proof_image = $this->_upload_field('proof_image');
 		}
-		$this->db->where('payments_reversal_request_id', (int)$req['payments_reversal_request_id'])
-			->update('payments_reversal_requests', array(
-				'proof_image' => $proof_image,
-				'done' => 1,
-				'paid_by' => $this->_actor_name(),
-			));
+		if ($proof_image === '') {
+			$this->_json(array('success' => false, 'message' => 'Reversal proof image is required'), 422);
+		}
 		$this->db->select('payments.*, classes.campus_id');
 		$this->db->from('payments');
 		$this->db->join('students', 'payments.student_id=students.student_id', 'inner');
 		$this->db->join('classes', 'classes.class_id=students.class_id', 'inner');
 		$this->db->where('payments.id', (int)$req['payment_id']);
 		$payment_details = $this->db->get()->row_array();
-		if ($payment_details) {
-			$this->db->insert('expenses', array(
+		if (!$payment_details) {
+			$this->_json(array('success' => false, 'message' => 'Original payment was not found'), 404);
+		}
+
+		$this->db->trans_start();
+		$this->db->where(array(
+			'payments_reversal_request_id' => (int)$req['payments_reversal_request_id'],
+			'done' => 0,
+		))->update('payments_reversal_requests', array(
+			'proof_image' => $proof_image,
+			'done' => 1,
+			'paid_by' => $this->_actor_name(),
+		));
+		if ($this->db->affected_rows() !== 1) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => 'This reversal has already been completed'), 409);
+		}
+		$this->db->insert('expenses', array(
 				'date' => date('Y-m-d'),
 				'actual_date' => date('Y-m-d H:i:s'),
 				'title' => 'Payment Reversal Against Challan # ' . $payment_details['paid_challans'],
@@ -4831,9 +4870,12 @@ class Studentsapi extends CI_Controller {
 				'campus_id' => $payment_details['campus_id'],
 				'expense_category_id' => 26,
 			));
-			$this->db->set('remaining_amount', 'remaining_amount -' . (float)$req['reversal_amount'], false);
-			$this->db->where('assign_to', $user_id);
-			$this->db->update('petty_cash_college_wise');
+		$this->db->set('remaining_amount', 'remaining_amount -' . (float)$req['reversal_amount'], false);
+		$this->db->where('assign_to', $user_id);
+		$this->db->update('petty_cash_college_wise');
+		$this->db->trans_complete();
+		if (!$this->db->trans_status()) {
+			$this->_json(array('success' => false, 'message' => 'Could not complete the reversal'), 500);
 		}
 		$this->_json(array('success' => true, 'message' => 'Reversal completed'));
 	}
