@@ -990,9 +990,20 @@ class Dashboard_service {
 
     private function _paypro_tagged($row)
     {
-        if (empty($row['settlement_id']) || empty($row['settlement_payment_id'])) return false;
-        $paypro_payment = $this->ci->db->get_where('settlement_payments', array('id' => $row['settlement_payment_id']))->row_array();
-        if (!$paypro_payment) return false;
+        if (empty($row['settlement_id'])) return false;
+
+        // Older PayPro imports link a fee to the settlement but do not populate
+        // settlement_payment_id. The bank tag belongs to the settlement, so a
+        // missing per-entry ID must not make an otherwise bank-tagged fee look
+        // untagged. When the per-entry ID exists, use its payment channel too.
+        $paypro_payment = null;
+        if (!empty($row['settlement_payment_id'])) {
+            $paypro_payment = $this->ci->db->get_where('settlement_payments', array(
+                'id' => $row['settlement_payment_id'],
+                'settlement_id' => $row['settlement_id'],
+            ))->row_array();
+            if (!$paypro_payment) return false;
+        }
         $stats = $this->ci->db
             ->select('bank_reconciliation_statement.*, pay_pro_settlement.paid_amount, pay_pro_settlement.link_amount, pay_pro_settlement.card_amount, accounts.account_title, accounts.account_name')
             ->from('bank_reconciliation_statement')
@@ -1002,13 +1013,17 @@ class Dashboard_service {
             ->get()->result_array();
         foreach ($stats as $stat) {
             $credit = (int) str_replace(',', '', $stat['credit']);
-            $via = isset($paypro_payment['paid_via']) ? $paypro_payment['paid_via'] : '';
+            $via = $paypro_payment && isset($paypro_payment['paid_via']) ? $paypro_payment['paid_via'] : '';
             $link_amount = (int) (isset($stat['link_amount']) ? $stat['link_amount'] : 0);
             $paid_amount = (int) (isset($stat['paid_amount']) ? $stat['paid_amount'] : 0);
             $card_amount = (int) (isset($stat['card_amount']) ? $stat['card_amount'] : 0);
             if ($via === '1LINK' || $via === '1Link' || $via === 'MBL') {
                 if (($link_amount > 0 && $credit === $link_amount) || ($paid_amount > 0 && $credit === $paid_amount)) return true;
             } elseif ($card_amount > 0 && $credit === $card_amount) {
+                return true;
+            } elseif (($link_amount > 0 && $credit === $link_amount) || ($paid_amount > 0 && $credit === $paid_amount) || ($card_amount > 0 && $credit === $card_amount)) {
+                // Historical rows without settlement_payment_id have no channel
+                // value. A tagged settlement's recorded total is authoritative.
                 return true;
             }
         }
