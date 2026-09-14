@@ -1288,16 +1288,20 @@ class Expenses_service {
         $mode = isset($filters['mode']) ? $filters['mode'] : 'total';
         if ($campus_id <= 0 || $category_id <= 0) return array('success' => false, 'message' => 'Campus and category required');
 
+        $this->ci->db->select('expenses.*, campuses.campus_name, expense_category.name AS category_name');
+        $this->ci->db->from('expenses');
+        $this->ci->db->join('campuses', 'campuses.campus_id = expenses.campus_id', 'left');
+        $this->ci->db->join('expense_category', 'expense_category.expense_category_id = expenses.expense_category_id', 'left');
         $this->ci->db->where(array(
-            'campus_id' => $campus_id,
-            'expense_category_id' => $category_id,
-            'date >=' => $from_date,
-            'date <=' => $to_date,
+            'expenses.campus_id' => $campus_id,
+            'expenses.expense_category_id' => $category_id,
+            'expenses.date >=' => $from_date,
+            'expenses.date <=' => $to_date,
         ));
         if ($mode === 'cash' || $mode === 'bank') {
-            $this->ci->db->where('paid_type', $mode);
+            $this->ci->db->where('expenses.paid_type', $mode);
         }
-        $raw = $this->ci->db->order_by('date', 'DESC')->get('expenses')->result_array();
+        $raw = $this->ci->db->order_by('expenses.date', 'DESC')->get()->result_array();
         $rows = array();
         $total = 0;
         foreach ($raw as $expense) {
