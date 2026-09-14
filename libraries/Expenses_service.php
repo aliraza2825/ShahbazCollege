@@ -1077,29 +1077,32 @@ class Expenses_service {
         );
     }
 
-    private function sum_category_expenses($category_id, $campus_id, $from_date, $to_date)
+    private function sum_category_expenses($category_id, $campus_ids, $from_date, $to_date)
     {
+        $campus_ids = is_array($campus_ids) ? $campus_ids : array($campus_ids);
+        $campus_ids = array_values(array_filter(array_map('intval', $campus_ids)));
+        if (!count($campus_ids)) return 0;
         $this->ci->db->select_sum('amount');
         $this->ci->db->from('expenses');
         $this->ci->db->where(array(
             'expense_category_id' => (int) $category_id,
-            'campus_id' => (int) $campus_id,
             'date >=' => $from_date,
             'date <=' => $to_date,
         ));
+        $this->ci->db->where_in('campus_id', $campus_ids);
         $row = $this->ci->db->get()->row_array();
         return isset($row['amount']) ? (float) $row['amount'] : 0;
     }
 
-    private function subhead_breakdown($category_id, $campus_id, $from_date, $to_date)
+    private function subhead_breakdown($category_id, $campus_ids, $from_date, $to_date)
     {
         $subs = $this->ci->db->get_where('expense_category', array('sub_of' => (int) $category_id))->result_array();
         $lines = array();
         foreach ($subs as $sub) {
             if ((string) $sub['has_sub'] === '1') {
-                $lines = array_merge($lines, $this->subhead_breakdown($sub['expense_category_id'], $campus_id, $from_date, $to_date));
+                $lines = array_merge($lines, $this->subhead_breakdown($sub['expense_category_id'], $campus_ids, $from_date, $to_date));
             } else {
-                $amt = $this->sum_category_expenses($sub['expense_category_id'], $campus_id, $from_date, $to_date);
+                $amt = $this->sum_category_expenses($sub['expense_category_id'], $campus_ids, $from_date, $to_date);
                 if ($amt > 0) {
                     $lines[] = array('name' => $sub['name'], 'amount' => $amt);
                 }
@@ -1138,35 +1141,31 @@ class Expenses_service {
         }
 
         $rows = array();
-        foreach ($campus_ids as $campus_id) {
-            $campus = $this->ci->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
-            if (!$campus) continue;
-            foreach ($category_ids as $category_id) {
-                $head = $this->ci->db->get_where('expense_category', array('expense_category_id' => $category_id))->row_array();
-                if (!$head) {
-                    continue;
-                }
-                $sub_heads = $this->ci->db->get_where('expense_category', array('sub_of' => $category_id))->result_array();
-                $details = count($sub_heads) > 0
-                    ? $this->subhead_breakdown($category_id, $campus_id, $from_date, $to_date)
-                    : array();
-                $total = 0;
-                if (count($sub_heads) > 0) {
-                    foreach ($details as $d) {
-                        $total += $d['amount'];
-                    }
-                } else {
-                    $total = $this->sum_category_expenses($category_id, $campus_id, $from_date, $to_date);
-                }
-                $rows[] = array(
-                    'head_name' => $head['name'],
-                    'category_id' => $category_id,
-                    'campus_id' => $campus_id,
-                    'campus_name' => $campus['campus_name'],
-                    'details' => $details,
-                    'total_amount' => $total,
-                );
+        foreach ($category_ids as $category_id) {
+            $head = $this->ci->db->get_where('expense_category', array('expense_category_id' => $category_id))->row_array();
+            if (!$head) {
+                continue;
             }
+            $sub_heads = $this->ci->db->get_where('expense_category', array('sub_of' => $category_id))->result_array();
+            $details = count($sub_heads) > 0
+                ? $this->subhead_breakdown($category_id, $campus_ids, $from_date, $to_date)
+                : array();
+            $total = 0;
+            if (count($sub_heads) > 0) {
+                foreach ($details as $d) {
+                    $total += $d['amount'];
+                }
+            } else {
+                $total = $this->sum_category_expenses($category_id, $campus_ids, $from_date, $to_date);
+            }
+            $rows[] = array(
+                'head_name' => $head['name'],
+                'category_id' => $category_id,
+                'campus_id' => null,
+                'campus_name' => count($campus_ids) . ' selected campuses',
+                'details' => $details,
+                'total_amount' => $total,
+            );
         }
 
         $grand = 0;
