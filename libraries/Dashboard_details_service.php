@@ -956,7 +956,10 @@ class Dashboard_details_service {
         if (!$to_date) {
             $to_date = date('Y-m-t');
         }
-        $pending = $this->ci->db->get_where('payments_reversal_requests', array('done' => 0))->result_array();
+        // A request is actionable only until it has been approved.  The legacy
+        // screen used `done` alone, which caused an approved request (status=1,
+        // done=0) to reappear in the pending queue after a refresh.
+        $pending = $this->ci->db->get_where('payments_reversal_requests', array('done' => 0, 'status' => 0))->result_array();
         $this->ci->db->select('*');
         $this->ci->db->from('payments_reversal_requests');
         $this->ci->db->where(array('status!=' => 0, 'done' => 1, 'created_at>=' => $from_date.' 00:00:00', 'created_at<=' => $to_date.' 23:59:59'));
@@ -993,7 +996,10 @@ class Dashboard_details_service {
         $this->ci->db->set('status', 1);
         $this->ci->db->where('payments_reversal_request_id', (int) $id);
         $this->ci->db->update('payments_reversal_requests');
-        return array('success' => true, 'message' => 'Fee reversal updated');
+        if ($this->ci->db->affected_rows() < 1) {
+            return array('success' => false, 'message' => 'Fee reversal request was not found or was already approved');
+        }
+        return array('success' => true, 'message' => 'Fee reversal approved');
     }
 
     public function delete_fee_reversal($user, $id)

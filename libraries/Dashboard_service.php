@@ -174,7 +174,7 @@ class Dashboard_service {
         }
         if ($perms['fee_reversal_requests']) {
             $out['fee_reversal_requests'] = (int) $this->ci->db
-                ->where('status', 0)
+                ->where(array('done' => 0, 'status' => 0))
                 ->count_all_results('payments_reversal_requests');
         }
         if ($perms['expense_reversals']) {
