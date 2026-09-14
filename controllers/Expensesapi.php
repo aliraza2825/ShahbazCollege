@@ -498,6 +498,34 @@ class Expensesapi extends CI_Controller {
         $this->_json($this->service->report_subhead($this->current_user, $filters));
     }
 
+    public function report_subhead_campus_details()
+    {
+        $body = $this->_body();
+        $filters = array(
+            'from_date' => isset($body['from_date']) ? $body['from_date'] : $this->input->get('from_date'),
+            'to_date' => isset($body['to_date']) ? $body['to_date'] : $this->input->get('to_date'),
+            'campus_id' => isset($body['campus_id']) ? $body['campus_id'] : $this->input->get('campus_id'),
+            'category_id' => isset($body['category_id']) ? $body['category_id'] : $this->input->get('category_id'),
+            'mode' => isset($body['mode']) ? $body['mode'] : $this->input->get('mode'),
+        );
+        $result = $this->service->report_subhead_campus_details($this->current_user, $filters);
+        $this->_json($result, !empty($result['success']) ? 200 : 400);
+    }
+
+    public function report_subhead_expenses()
+    {
+        $body = $this->_body();
+        $filters = array(
+            'from_date' => isset($body['from_date']) ? $body['from_date'] : $this->input->get('from_date'),
+            'to_date' => isset($body['to_date']) ? $body['to_date'] : $this->input->get('to_date'),
+            'campus_id' => isset($body['campus_id']) ? $body['campus_id'] : $this->input->get('campus_id'),
+            'category_id' => isset($body['category_id']) ? $body['category_id'] : $this->input->get('category_id'),
+            'mode' => isset($body['mode']) ? $body['mode'] : $this->input->get('mode'),
+        );
+        $result = $this->service->report_subhead_expenses($this->current_user, $filters);
+        $this->_json($result, !empty($result['success']) ? 200 : 400);
+    }
+
     public function list_categories()
     {
         $campus_id = $this->input->get('campus_id');

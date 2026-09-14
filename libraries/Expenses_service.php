@@ -1109,6 +1109,7 @@ class Expenses_service {
                 $amounts = $this->sum_category_expenses($sub['expense_category_id'], $campus_ids, $from_date, $to_date);
                 if ($amounts['amount'] > 0) {
                     $lines[] = array(
+                        'category_id' => (int) $sub['expense_category_id'],
                         'name' => $sub['name'],
                         'amount' => $amounts['amount'],
                         'cash_amount' => $amounts['cash_amount'],
@@ -1232,6 +1233,78 @@ class Expenses_service {
             'rows' => $rows,
             'total' => $grand,
         );
+    }
+
+    public function report_subhead_campus_details($user, $filters = array())
+    {
+        if (!$user || $user['role'] !== 'Admin') {
+            return array('success' => false, 'message' => 'Admin access required');
+        }
+        $campus_id = isset($filters['campus_id']) ? (int) $filters['campus_id'] : 0;
+        $category_id = isset($filters['category_id']) ? (int) $filters['category_id'] : 0;
+        $from_date = !empty($filters['from_date']) ? $filters['from_date'] : date('Y-m-d');
+        $to_date = !empty($filters['to_date']) ? $filters['to_date'] : date('Y-m-d');
+        $mode = isset($filters['mode']) ? $filters['mode'] : 'total';
+        if (!in_array($mode, array('cash', 'bank', 'total'), true)) $mode = 'total';
+        $campus = $this->ci->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
+        $head = $this->ci->db->get_where('expense_category', array('expense_category_id' => $category_id))->row_array();
+        if (!$campus || !$head) return array('success' => false, 'message' => 'Campus or category not found');
+
+        $details = $this->subhead_breakdown($category_id, array($campus_id), $from_date, $to_date);
+        if (!count($details)) {
+            $amounts = $this->sum_category_expenses($category_id, array($campus_id), $from_date, $to_date);
+            if ($amounts['amount'] > 0) {
+                $details[] = array(
+                    'category_id' => $category_id,
+                    'name' => $head['name'],
+                    'amount' => $amounts['amount'],
+                    'cash_amount' => $amounts['cash_amount'],
+                    'bank_amount' => $amounts['bank_amount'],
+                );
+            }
+        }
+        $field = $mode === 'cash' ? 'cash_amount' : ($mode === 'bank' ? 'bank_amount' : 'amount');
+        $details = array_values(array_filter($details, function ($detail) use ($field) {
+            return (float) $detail[$field] > 0;
+        }));
+        return array(
+            'success' => true,
+            'campus_name' => $campus['campus_name'],
+            'head_name' => $head['name'],
+            'mode' => $mode,
+            'details' => $details,
+        );
+    }
+
+    public function report_subhead_expenses($user, $filters = array())
+    {
+        if (!$user || $user['role'] !== 'Admin') {
+            return array('success' => false, 'message' => 'Admin access required');
+        }
+        $campus_id = isset($filters['campus_id']) ? (int) $filters['campus_id'] : 0;
+        $category_id = isset($filters['category_id']) ? (int) $filters['category_id'] : 0;
+        $from_date = !empty($filters['from_date']) ? $filters['from_date'] : date('Y-m-d');
+        $to_date = !empty($filters['to_date']) ? $filters['to_date'] : date('Y-m-d');
+        $mode = isset($filters['mode']) ? $filters['mode'] : 'total';
+        if ($campus_id <= 0 || $category_id <= 0) return array('success' => false, 'message' => 'Campus and category required');
+
+        $this->ci->db->where(array(
+            'campus_id' => $campus_id,
+            'expense_category_id' => $category_id,
+            'date >=' => $from_date,
+            'date <=' => $to_date,
+        ));
+        if ($mode === 'cash' || $mode === 'bank') {
+            $this->ci->db->where('paid_type', $mode);
+        }
+        $raw = $this->ci->db->order_by('date', 'DESC')->get('expenses')->result_array();
+        $rows = array();
+        $total = 0;
+        foreach ($raw as $expense) {
+            $rows[] = $this->enrich_row($expense);
+            $total += (float) $expense['amount'];
+        }
+        return array('success' => true, 'rows' => $rows, 'total' => $total, 'mode' => $mode);
     }
 
     private function build_category_tree($parent_id, $campus_id = null)
