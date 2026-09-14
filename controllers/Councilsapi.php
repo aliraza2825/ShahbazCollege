@@ -454,6 +454,16 @@ class Councilsapi extends CI_Controller {
         $this->_json($this->drill_service->save_result($this->current_user, $body));
     }
 
+    public function save_workflow_schedule()
+    {
+        $this->_require_council_report();
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->_json(array('success' => false, 'message' => 'Method not allowed'), 405);
+        }
+        $result = $this->service->save_other_task_schedule($this->current_user, $this->_body());
+        $this->_json($result, !empty($result['success']) ? 200 : 422);
+    }
+
     public function create_fee_for_all()
     {
         $this->_require_council_report();

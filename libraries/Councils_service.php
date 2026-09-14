@@ -139,6 +139,59 @@ class Councils_service {
         );
     }
 
+    /**
+     * Save the date on which a non-fee council workflow is expected to happen.
+     * The exam-sequence + council-sequence pair is the exact report row context,
+     * so two similarly named workflows can never overwrite one another.
+     */
+    public function save_other_task_schedule($user, $data)
+    {
+        $exam_sequence_id = isset($data['exam_sequence_id']) ? (int) $data['exam_sequence_id'] : 0;
+        $council_sequence_id = isset($data['council_sequence_id']) ? (int) $data['council_sequence_id'] : 0;
+        $scheduled_date = isset($data['scheduled_date']) ? trim((string) $data['scheduled_date']) : '';
+
+        if ($exam_sequence_id <= 0 || $council_sequence_id <= 0 || !$this->_valid_date($scheduled_date)) {
+            return array('success' => false, 'message' => 'Choose a valid workflow date.');
+        }
+
+        $council_exam = $this->_get_exam_sequence_for_report($user, $exam_sequence_id);
+        if (!$council_exam) {
+            return array('success' => false, 'message' => 'This council report row is not available to you.');
+        }
+
+        $task = $this->ci->db
+            ->where('council_sequence_id', $council_sequence_id)
+            ->where('course_id', (int) $council_exam['course_id'])
+            ->get('council_sequence')
+            ->row_array();
+        if (!$task || trim(strtolower((string) $task['action_type'])) === 'fee') {
+            return array('success' => false, 'message' => 'Choose a valid report workflow.');
+        }
+
+        $this->_ensure_workflow_schedule_table();
+        $row = array(
+            'exam_sequence_id' => $exam_sequence_id,
+            'council_sequence_id' => $council_sequence_id,
+            'scheduled_date' => $scheduled_date,
+            'updated_by' => isset($user['user_id']) ? (int) $user['user_id'] : 0,
+            'updated_at' => date('Y-m-d H:i:s'),
+        );
+        $existing = $this->ci->db->get_where('council_report_workflow_schedules', array(
+            'exam_sequence_id' => $exam_sequence_id,
+            'council_sequence_id' => $council_sequence_id,
+        ))->row_array();
+
+        if ($existing) {
+            $this->ci->db->where('id', (int) $existing['id'])->update('council_report_workflow_schedules', $row);
+        } else {
+            $row['created_by'] = $row['updated_by'];
+            $row['created_at'] = $row['updated_at'];
+            $this->ci->db->insert('council_report_workflow_schedules', $row);
+        }
+
+        return array('success' => true, 'message' => 'Workflow date saved.');
+    }
+
     // ── Councils CRUD ─────────────────────────────────────────────────────────
 
     public function list_councils()
@@ -832,6 +885,19 @@ class Councils_service {
             }
         }
 
+        $schedule = $this->_other_task_schedule((int) $council_exam['id'], (int) $task['council_sequence_id']);
+        $scheduled_date = !empty($schedule['scheduled_date']) ? $schedule['scheduled_date'] : null;
+        $alert = null;
+        if ($scheduled_date && $not_done > 0 && $scheduled_date <= date('Y-m-d')) {
+            $is_today = $scheduled_date === date('Y-m-d');
+            $exam_label = 'Exam ' . $exam_no . (!empty($council_exam['first_year_type']) ? ' (' . $council_exam['first_year_type'] . ')' : '');
+            $when = $is_today ? 'is due today' : 'was due on ' . date('d M Y', strtotime($scheduled_date));
+            $alert = array(
+                'status' => $is_today ? 'due_today' : 'overdue',
+                'message' => $task['type_name'] . ' ' . $when . ' for ' . $council_exam['course_name'] . ', ' . $exam_label . ', Class ' . $class . '. ' . $not_done . ' student(s) are still waiting. Mark it done or update its date.',
+            );
+        }
+
         return array(
             'council_sequence_id' => (int) $task['council_sequence_id'],
             'type_name' => $task['type_name'],
@@ -839,11 +905,47 @@ class Councils_service {
             'page' => $page,
             'done' => $done,
             'not_done' => $not_done,
+            'scheduled_date' => $scheduled_date,
+            'alert' => $alert,
             'links' => array(
                 'done' => $this->_other_task_link_params($page, $course_id, $exam_no, $class, 'done', (int) $task['council_sequence_id'], (int) $council_exam['id']),
                 'waiting' => $this->_other_task_link_params($page, $course_id, $exam_no, $class, 'waiting', (int) $task['council_sequence_id'], (int) $council_exam['id']),
             ),
         );
+    }
+
+    private function _valid_date($value)
+    {
+        $date = DateTime::createFromFormat('Y-m-d', $value);
+        return $date && $date->format('Y-m-d') === $value;
+    }
+
+    private function _ensure_workflow_schedule_table()
+    {
+        $this->ci->db->query("CREATE TABLE IF NOT EXISTS `council_report_workflow_schedules` (
+            `id` int unsigned NOT NULL AUTO_INCREMENT,
+            `exam_sequence_id` int NOT NULL,
+            `council_sequence_id` int NOT NULL,
+            `scheduled_date` date NOT NULL,
+            `created_by` int NOT NULL DEFAULT 0,
+            `updated_by` int NOT NULL DEFAULT 0,
+            `created_at` datetime NOT NULL,
+            `updated_at` datetime NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `exam_workflow` (`exam_sequence_id`, `council_sequence_id`),
+            KEY `scheduled_date` (`scheduled_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    }
+
+    private function _other_task_schedule($exam_sequence_id, $council_sequence_id)
+    {
+        if (!$this->ci->db->table_exists('council_report_workflow_schedules')) {
+            return null;
+        }
+        return $this->ci->db->get_where('council_report_workflow_schedules', array(
+            'exam_sequence_id' => $exam_sequence_id,
+            'council_sequence_id' => $council_sequence_id,
+        ))->row_array();
     }
 
     private function _session_breakdown($council_exam, $fee_tasks_raw, $payment_comment)
