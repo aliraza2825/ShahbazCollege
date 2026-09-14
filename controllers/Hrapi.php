@@ -171,6 +171,12 @@ class Hrapi extends CI_Controller {
 			'can_access' => true,
 			'is_admin' => $admin,
 			'can_approve_loans' => $admin || $this->_access_flag('loan_approval'),
+			'attendance_permissions' => array(
+				'can_add' => $admin || $this->_access_flag('attendence_add_attendence'),
+				'can_view_all' => $admin || $this->_access_flag('attendence_all_attendence'),
+				'allowed_types' => $this->_attendance_allowed_types(),
+				'can_manage_machines' => $admin,
+			),
 			'sections' => $sections,
 		));
 	}
@@ -1898,6 +1904,7 @@ class Hrapi extends CI_Controller {
 		$type = $this->input->get('type');
 		$campus_id = $this->input->get('campus_id');
 		if ($type !== 'student') $type = 'staff';
+		$this->_attendance_assert_type_allowed($type);
 		$data = array();
 
 		if ($type === 'staff') {
@@ -1943,11 +1950,15 @@ class Hrapi extends CI_Controller {
 			return;
 		}
 
+		if (!$this->_attendance_can_use_report()) {
+			$this->_json(array('success' => false, 'message' => 'Attendance report access required'), 403);
+		}
 		$from = $this->input->get('from');
 		$to = $this->input->get('to');
 		$campus_id = $this->input->get('campus_id');
 		$type = $this->input->get('type');
 		if ($type !== 'student') $type = 'staff';
+		$this->_attendance_assert_type_allowed($type);
 		if ($from === null || $from === '') $from = date('Y-m-01');
 		if ($to === null || $to === '') $to = date('Y-m-d');
 
@@ -1993,9 +2004,14 @@ class Hrapi extends CI_Controller {
 
 	public function attendance_create()
 	{
+		if (!$this->_is_admin() && !$this->_access_flag('attendence_add_attendence')) {
+			$this->_json(array('success' => false, 'message' => 'Add attendance access required'), 403);
+		}
 		$body = $this->_body();
 		$datetime = isset($body['datetime']) ? trim((string)$body['datetime']) : '';
 		$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+		$type = (isset($body['type']) && $body['type'] === 'student') ? 'student' : 'staff';
+		$this->_attendance_assert_type_allowed($type);
 		$machine_user_ids = isset($body['machine_user_ids']) ? $body['machine_user_ids'] : array();
 		if (is_string($machine_user_ids) && $machine_user_ids !== '') {
 			$machine_user_ids = array_filter(explode(',', $machine_user_ids));
@@ -2003,6 +2019,7 @@ class Hrapi extends CI_Controller {
 		if ($datetime === '' || !$campus_id || !count($machine_user_ids)) {
 			$this->_json(array('success' => false, 'message' => 'datetime, campus_id and machine_user_ids required'), 422);
 		}
+		$expected_machine_type = ($type === 'student') ? 'student' : 'teacher';
 
 		$campus = $this->db->get_where('campuses', array('campus_id' => $campus_id))->row_array();
 		if (!$campus) $this->_json(array('success' => false, 'message' => 'Campus not found'), 404);
@@ -2018,6 +2035,10 @@ class Hrapi extends CI_Controller {
 		foreach ($machine_user_ids as $machine_user_id) {
 			$machine_user_id = (int)$machine_user_id;
 			if (!$machine_user_id) continue;
+			$md = $this->db->get_where('machine_data', array('machine_id' => $machine_user_id))->row_array();
+			if (!$md || (string)(isset($md['type']) ? $md['type'] : '') !== $expected_machine_type) {
+				$this->_json(array('success' => false, 'message' => 'Selected person does not match attendance type'), 422);
+			}
 			$this->db->set('time', $attendence_time);
 			$this->db->set('machine_user_id', $machine_user_id);
 			$this->db->set('campus_code', $campus_code);
@@ -2075,6 +2096,46 @@ class Hrapi extends CI_Controller {
 		$role = isset($this->current_user['role']) ? $this->current_user['role'] : '';
 		$user_id = isset($this->current_user['user_id']) ? (int)$this->current_user['user_id'] : 0;
 		return $role === 'Admin' || $user_id === 77;
+	}
+
+	/** Staff / student types this user may add or filter — legacy access.attendence_add_types CSV. */
+	private function _attendance_allowed_types()
+	{
+		if ($this->_is_admin()) {
+			return array('staff', 'student');
+		}
+		$row = $this->_access_row();
+		$csv = isset($row['attendence_add_types']) ? trim((string)$row['attendence_add_types']) : '';
+		if ($csv !== '') {
+			$out = array();
+			foreach (explode(',', $csv) as $part) {
+				$p = strtolower(trim($part));
+				if ($p === 'staff' || $p === 'student') {
+					$out[] = $p;
+				}
+			}
+			return array_values(array_unique($out));
+		}
+		if ($this->_access_flag('attendence_all_attendence')) {
+			return array('staff', 'student');
+		}
+		return array();
+	}
+
+	private function _attendance_assert_type_allowed($type)
+	{
+		$type = ($type === 'student') ? 'student' : 'staff';
+		$allowed = $this->_attendance_allowed_types();
+		if (!in_array($type, $allowed, true)) {
+			$this->_json(array('success' => false, 'message' => 'No access to ' . $type . ' attendance'), 403);
+		}
+	}
+
+	private function _attendance_can_use_report()
+	{
+		return $this->_is_admin()
+			|| $this->_access_flag('attendence_all_attendence')
+			|| $this->_access_flag('attendence_add_attendence');
 	}
 
 	private function _create_date_range($from, $to)
@@ -2289,7 +2350,11 @@ class Hrapi extends CI_Controller {
 
 	private function _attendance_report_grid($body)
 	{
+		if (!$this->_attendance_can_use_report()) {
+			$this->_json(array('success' => false, 'message' => 'Attendance report access required'), 403);
+		}
 		$type = (isset($body['type']) && $body['type'] === 'student') ? 'student' : 'staff';
+		$this->_attendance_assert_type_allowed($type);
 		$from = isset($body['from']) && $body['from'] !== '' ? $body['from'] : date('Y-m-d');
 		$to = isset($body['to']) && $body['to'] !== '' ? $body['to'] : date('Y-m-d');
 		$campus_id = isset($body['campus_id']) ? $body['campus_id'] : '';
