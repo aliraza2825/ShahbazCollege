@@ -2694,6 +2694,15 @@ class Constructionapi extends CI_Controller {
 				}
 				$contract_id = (int)$installment['contract_id'];
 				if ($paid_type === 'cash' && $amount <= 0) $amount = (float)$installment['amount'];
+				// An installment is a single, contract-specific obligation.  Do not let a
+				// different bank/cash amount mark it paid: that otherwise makes it far too
+				// easy to select another contract's similarly named installment by mistake.
+				if (abs((float)$amount - (float)$installment['amount']) > 0.009) {
+					$this->_json(array(
+						'success' => false,
+						'message' => 'Selected installment amount is ' . number_format((float)$installment['amount'], 2) . '. Select the matching contract installment.',
+					), 422);
+				}
 				$installment_id_paid = $installment_id;
 				$contract_id_paid = $contract_id;
 			}
