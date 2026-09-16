@@ -3826,7 +3826,7 @@ class Accountsapi extends CI_Controller {
 	private function _day_closing_student_rows($table, $dateColumn, $date, $where, $studentColumn, $order = '', $groupStudent = false)
 	{
 		if (!$this->_table_exists($table) || !$this->_table_exists('students') || !$this->_table_exists('classes') || !$this->_table_exists('courses') || !$this->_table_exists('campuses')) return array();
-		$sql = "SELECT {$table}.*, students.first_name, students.last_name, students.roll_no, students.mobile, students.contact_to_no, courses.course_name, campuses.campus_name
+		$sql = "SELECT {$table}.*, students.first_name, students.last_name, students.roll_no, students.mobile, courses.course_name, campuses.campus_name
 			FROM {$table}
 			INNER JOIN students ON students.student_id = {$studentColumn}
 			INNER JOIN classes ON classes.class_id = students.class_id
