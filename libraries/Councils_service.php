@@ -146,12 +146,22 @@ class Councils_service {
      */
     public function save_other_task_schedule($user, $data)
     {
-        $exam_sequence_id = isset($data['exam_sequence_id']) ? (int) $data['exam_sequence_id'] : 0;
-        $council_sequence_id = isset($data['council_sequence_id']) ? (int) $data['council_sequence_id'] : 0;
-        $scheduled_date = isset($data['scheduled_date']) ? trim((string) $data['scheduled_date']) : '';
+        return $this->_save_tag_schedule($user, $data, 'workflow');
+    }
 
-        if ($exam_sequence_id <= 0 || $council_sequence_id <= 0 || !$this->_valid_date($scheduled_date)) {
-            return array('success' => false, 'message' => 'Choose a valid workflow date.');
+    public function save_fee_expense_schedule($user, $data)
+    {
+        return $this->_save_tag_schedule($user, $data, 'fee_expense');
+    }
+
+    public function get_report_tag_schedule_detail($user, $exam_sequence_id, $council_sequence_id, $tag_kind)
+    {
+        $exam_sequence_id = (int) $exam_sequence_id;
+        $council_sequence_id = (int) $council_sequence_id;
+        $tag_kind = $tag_kind === 'fee_expense' ? 'fee_expense' : 'workflow';
+
+        if ($exam_sequence_id <= 0 || $council_sequence_id <= 0) {
+            return array('success' => false, 'message' => 'Invalid report row.');
         }
 
         $council_exam = $this->_get_exam_sequence_for_report($user, $exam_sequence_id);
@@ -164,43 +174,104 @@ class Councils_service {
             ->where('course_id', (int) $council_exam['course_id'])
             ->get('council_sequence')
             ->row_array();
-        if (!$task || trim(strtolower((string) $task['action_type'])) === 'fee') {
+        if (!$task) {
+            return array('success' => false, 'message' => 'Council sequence not found.');
+        }
+
+        $schedule = $this->_other_task_schedule($exam_sequence_id, $council_sequence_id);
+        $pending = $this->_other_task_pending_request($exam_sequence_id, $council_sequence_id, $tag_kind);
+        $actual_expense_date = null;
+        if ($tag_kind === 'fee_expense' && !empty($task['has_expense'])) {
+            $actual_expense_date = $this->_fee_task_actual_expense_date($council_exam, $task);
+        }
+
+        return array(
+            'success' => true,
+            'tag_kind' => $tag_kind,
+            'type_name' => $task['type_name'],
+            'scheduled_date' => !empty($schedule['scheduled_date']) ? $schedule['scheduled_date'] : null,
+            'pending_requested_date' => !empty($pending['requested_date']) ? $pending['requested_date'] : null,
+            'pending_comment' => !empty($pending['request_comment']) ? $pending['request_comment'] : null,
+            'actual_expense_date' => $actual_expense_date,
+            'history' => $this->_tag_date_history_rows($exam_sequence_id, $council_sequence_id, $tag_kind),
+        );
+    }
+
+    private function _save_tag_schedule($user, $data, $tag_kind)
+    {
+        $exam_sequence_id = isset($data['exam_sequence_id']) ? (int) $data['exam_sequence_id'] : 0;
+        $council_sequence_id = isset($data['council_sequence_id']) ? (int) $data['council_sequence_id'] : 0;
+        $scheduled_date = isset($data['scheduled_date']) ? trim((string) $data['scheduled_date']) : '';
+        $comment = isset($data['comment']) ? trim((string) $data['comment']) : '';
+
+        if ($exam_sequence_id <= 0 || $council_sequence_id <= 0 || !$this->_valid_date($scheduled_date)) {
+            return array('success' => false, 'message' => 'Choose a valid date.');
+        }
+
+        $council_exam = $this->_get_exam_sequence_for_report($user, $exam_sequence_id);
+        if (!$council_exam) {
+            return array('success' => false, 'message' => 'This council report row is not available to you.');
+        }
+
+        $task = $this->ci->db
+            ->where('council_sequence_id', $council_sequence_id)
+            ->where('course_id', (int) $council_exam['course_id'])
+            ->get('council_sequence')
+            ->row_array();
+        if (!$task) {
+            return array('success' => false, 'message' => 'Choose a valid report tag.');
+        }
+
+        $action_type = trim(strtolower((string) $task['action_type']));
+        if ($tag_kind === 'workflow' && $action_type === 'fee') {
             return array('success' => false, 'message' => 'Choose a valid report workflow.');
+        }
+        if ($tag_kind === 'fee_expense') {
+            if ($action_type !== 'fee' || empty($task['has_expense'])) {
+                return array('success' => false, 'message' => 'This fee tag does not use council expenses.');
+            }
         }
 
         $this->_ensure_workflow_schedule_table();
+        $user_id = isset($user['user_id']) ? (int) $user['user_id'] : 0;
+        $now = date('Y-m-d H:i:s');
         $row = array(
             'exam_sequence_id' => $exam_sequence_id,
             'council_sequence_id' => $council_sequence_id,
             'scheduled_date' => $scheduled_date,
-            'updated_by' => isset($user['user_id']) ? (int) $user['user_id'] : 0,
-            'updated_at' => date('Y-m-d H:i:s'),
+            'updated_by' => $user_id,
+            'updated_at' => $now,
         );
         $existing = $this->ci->db->get_where('council_report_workflow_schedules', array(
             'exam_sequence_id' => $exam_sequence_id,
             'council_sequence_id' => $council_sequence_id,
         ))->row_array();
 
+        $label = $tag_kind === 'fee_expense' ? 'Council expense date' : 'Workflow date';
+
         if ($existing) {
             if ($existing['scheduled_date'] === $scheduled_date) {
-                return array('success' => true, 'message' => 'This workflow already has that date.');
+                return array('success' => true, 'message' => 'This tag already has that date.');
             }
             if ($scheduled_date <= date('Y-m-d')) {
-                return array('success' => false, 'message' => 'Choose a future date for the extension request.');
+                return array('success' => false, 'message' => 'Choose a future date for the update request.');
             }
             $this->_ensure_workflow_schedule_request_table();
             $request = array(
                 'exam_sequence_id' => $exam_sequence_id,
                 'council_sequence_id' => $council_sequence_id,
+                'tag_kind' => $tag_kind,
                 'current_date' => $existing['scheduled_date'],
                 'requested_date' => $scheduled_date,
-                'requested_by' => $row['updated_by'],
+                'request_comment' => $comment,
+                'requested_by' => $user_id,
                 'status' => 'pending',
-                'requested_at' => $row['updated_at'],
+                'requested_at' => $now,
             );
             $pending = $this->ci->db->where(array(
                 'exam_sequence_id' => $exam_sequence_id,
                 'council_sequence_id' => $council_sequence_id,
+                'tag_kind' => $tag_kind,
                 'status' => 'pending',
             ))->get('council_report_workflow_date_requests')->row_array();
             if ($pending) {
@@ -208,17 +279,39 @@ class Councils_service {
             } else {
                 $this->ci->db->insert('council_report_workflow_date_requests', $request);
             }
-            return array('success' => true, 'request_pending' => true, 'message' => 'Date update request sent for admin approval.');
-        } else {
-            if ($scheduled_date < date('Y-m-d')) {
-                return array('success' => false, 'message' => 'Choose today or a future date for a new workflow schedule.');
-            }
-            $row['created_by'] = $row['updated_by'];
-            $row['created_at'] = $row['updated_at'];
-            $this->ci->db->insert('council_report_workflow_schedules', $row);
+            $this->_append_tag_date_history(array(
+                'exam_sequence_id' => $exam_sequence_id,
+                'council_sequence_id' => $council_sequence_id,
+                'tag_kind' => $tag_kind,
+                'event' => 'update_requested',
+                'from_date' => $existing['scheduled_date'],
+                'to_date' => $scheduled_date,
+                'comment' => $comment,
+                'requested_by' => $user_id,
+                'created_at' => $now,
+            ));
+            return array('success' => true, 'request_pending' => true, 'message' => $label . ' update request sent for admin approval.');
         }
 
-        return array('success' => true, 'message' => 'Workflow date saved.');
+        if ($scheduled_date < date('Y-m-d')) {
+            return array('success' => false, 'message' => 'Choose today or a future date.');
+        }
+        $row['created_by'] = $user_id;
+        $row['created_at'] = $now;
+        $this->ci->db->insert('council_report_workflow_schedules', $row);
+        $this->_append_tag_date_history(array(
+            'exam_sequence_id' => $exam_sequence_id,
+            'council_sequence_id' => $council_sequence_id,
+            'tag_kind' => $tag_kind,
+            'event' => 'set_date',
+            'from_date' => null,
+            'to_date' => $scheduled_date,
+            'comment' => $comment,
+            'requested_by' => $user_id,
+            'created_at' => $now,
+        ));
+
+        return array('success' => true, 'message' => $label . ' saved.');
     }
 
     // ── Councils CRUD ─────────────────────────────────────────────────────────
@@ -690,6 +783,19 @@ class Councils_service {
             $bucket['waiting_for_expense'] += $stats['waiting_for_expense'];
             $bucket['liability'] += $stats['total_liability'];
 
+            $fee_schedule = array();
+            if (!empty($task['has_expense'])) {
+                $fee_schedule = $this->_tag_schedule_meta(
+                    (int) $council_exam['id'],
+                    (int) $task['council_sequence_id'],
+                    'fee_expense',
+                    $council_exam,
+                    $task,
+                    $stats['waiting_for_expense'],
+                    $task['type_name']
+                );
+            }
+
             $fee_tasks[] = array(
                 'council_sequence_id' => (int) $task['council_sequence_id'],
                 'council_name' => $task['name'],
@@ -702,6 +808,10 @@ class Councils_service {
                 'unpaid' => $stats['unpaid'],
                 'expense_done' => $stats['expense_done'],
                 'waiting_for_expense' => $stats['waiting_for_expense'],
+                'actual_expense_date' => !empty($task['has_expense']) ? $this->_fee_task_actual_expense_date($council_exam, $task) : null,
+                'scheduled_date' => !empty($fee_schedule['scheduled_date']) ? $fee_schedule['scheduled_date'] : null,
+                'pending_requested_date' => !empty($fee_schedule['pending_requested_date']) ? $fee_schedule['pending_requested_date'] : null,
+                'alert' => !empty($fee_schedule['alert']) ? $fee_schedule['alert'] : null,
                 'colors' => $stats['colors'],
                 'link_base' => $this->_student_link_params($course_id, 0, $exam_no, $class, null, (int) $task['council_sequence_id']),
                 'links' => array(
@@ -916,7 +1026,7 @@ class Councils_service {
 
         $schedule = $this->_other_task_schedule((int) $council_exam['id'], (int) $task['council_sequence_id']);
         $scheduled_date = !empty($schedule['scheduled_date']) ? $schedule['scheduled_date'] : null;
-        $pending_date_request = $this->_other_task_pending_request((int) $council_exam['id'], (int) $task['council_sequence_id']);
+        $pending_date_request = $this->_other_task_pending_request((int) $council_exam['id'], (int) $task['council_sequence_id'], 'workflow');
         $alert = null;
         if ($scheduled_date && $not_done > 0 && $scheduled_date <= date('Y-m-d')) {
             $is_today = $scheduled_date === date('Y-m-d');
@@ -985,8 +1095,10 @@ class Councils_service {
             `id` int unsigned NOT NULL AUTO_INCREMENT,
             `exam_sequence_id` int NOT NULL,
             `council_sequence_id` int NOT NULL,
+            `tag_kind` varchar(20) NOT NULL DEFAULT 'workflow',
             `current_date` date NOT NULL,
             `requested_date` date NOT NULL,
+            `request_comment` text NULL,
             `requested_by` int NOT NULL DEFAULT 0,
             `requested_at` datetime NOT NULL,
             `status` varchar(20) NOT NULL DEFAULT 'pending',
@@ -994,11 +1106,99 @@ class Councils_service {
             `reviewed_at` datetime NULL,
             PRIMARY KEY (`id`),
             KEY `pending_requests` (`status`, `requested_at`),
-            KEY `workflow_request` (`exam_sequence_id`, `council_sequence_id`)
+            KEY `workflow_request` (`exam_sequence_id`, `council_sequence_id`, `tag_kind`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        if ($this->ci->db->table_exists('council_report_workflow_date_requests')) {
+            if (!$this->ci->db->field_exists('tag_kind', 'council_report_workflow_date_requests')) {
+                $this->ci->db->query("ALTER TABLE `council_report_workflow_date_requests` ADD COLUMN `tag_kind` varchar(20) NOT NULL DEFAULT 'workflow' AFTER `council_sequence_id`");
+            }
+            if (!$this->ci->db->field_exists('request_comment', 'council_report_workflow_date_requests')) {
+                $this->ci->db->query("ALTER TABLE `council_report_workflow_date_requests` ADD COLUMN `request_comment` text NULL AFTER `requested_date`");
+            }
+        }
+        $this->_ensure_tag_date_history_table();
+    }
+
+    private function _ensure_tag_date_history_table()
+    {
+        $this->ci->db->query("CREATE TABLE IF NOT EXISTS `council_report_tag_date_history` (
+            `id` int unsigned NOT NULL AUTO_INCREMENT,
+            `exam_sequence_id` int NOT NULL,
+            `council_sequence_id` int NOT NULL,
+            `tag_kind` varchar(20) NOT NULL DEFAULT 'workflow',
+            `event` varchar(40) NOT NULL,
+            `from_date` date NULL,
+            `to_date` date NULL,
+            `comment` text NULL,
+            `requested_by` int NOT NULL DEFAULT 0,
+            `reviewed_by` int NOT NULL DEFAULT 0,
+            `created_at` datetime NOT NULL,
+            PRIMARY KEY (`id`),
+            KEY `tag_history` (`exam_sequence_id`, `council_sequence_id`, `tag_kind`, `created_at`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     }
 
-    private function _other_task_pending_request($exam_sequence_id, $council_sequence_id)
+    private function _append_tag_date_history($row)
+    {
+        $this->_ensure_tag_date_history_table();
+        $this->ci->db->insert('council_report_tag_date_history', $row);
+    }
+
+    private function _tag_date_history_rows($exam_sequence_id, $council_sequence_id, $tag_kind)
+    {
+        if (!$this->ci->db->table_exists('council_report_tag_date_history')) {
+            return array();
+        }
+        $this->ci->db->select("council_report_tag_date_history.*, CONCAT(COALESCE(req.first_name, ''), ' ', COALESCE(req.last_name, '')) AS requested_by_name, CONCAT(COALESCE(rev.first_name, ''), ' ', COALESCE(rev.last_name, '')) AS reviewed_by_name", false);
+        $this->ci->db->from('council_report_tag_date_history');
+        $this->ci->db->join('users req', 'req.user_id = council_report_tag_date_history.requested_by', 'left');
+        $this->ci->db->join('users rev', 'rev.user_id = council_report_tag_date_history.reviewed_by', 'left');
+        $this->ci->db->where('exam_sequence_id', (int) $exam_sequence_id);
+        $this->ci->db->where('council_sequence_id', (int) $council_sequence_id);
+        $this->ci->db->where('tag_kind', $tag_kind);
+        $this->ci->db->order_by('id', 'DESC');
+        $this->ci->db->limit(30);
+        return $this->ci->db->get()->result_array();
+    }
+
+    private function _fee_task_actual_expense_date($council_exam, $task)
+    {
+        $exam_no = $council_exam['first_year'];
+        $class = $council_exam['class'];
+        $this->ci->db->select_max('date', 'expense_date');
+        $this->ci->db->from('expenses');
+        $this->ci->db->where('council_exam_no', $exam_no);
+        $this->ci->db->where('class', $class);
+        $this->ci->db->where('council_sequence_id', (int) $task['council_sequence_id']);
+        $row = $this->ci->db->get()->row_array();
+        return !empty($row['expense_date']) ? $row['expense_date'] : null;
+    }
+
+    private function _tag_schedule_meta($exam_sequence_id, $council_sequence_id, $tag_kind, $council_exam, $task, $waiting_count, $type_label)
+    {
+        $schedule = $this->_other_task_schedule($exam_sequence_id, $council_sequence_id);
+        $scheduled_date = !empty($schedule['scheduled_date']) ? $schedule['scheduled_date'] : null;
+        $pending_date_request = $this->_other_task_pending_request($exam_sequence_id, $council_sequence_id, $tag_kind);
+        $alert = null;
+        if ($scheduled_date && $waiting_count > 0 && $scheduled_date <= date('Y-m-d')) {
+            $is_today = $scheduled_date === date('Y-m-d');
+            $exam_label = 'Exam ' . $council_exam['first_year'] . (!empty($council_exam['first_year_type']) ? ' (' . $council_exam['first_year_type'] . ')' : '');
+            $when = $is_today ? 'is due today' : 'was due on ' . date('d M Y', strtotime($scheduled_date));
+            $subject = $tag_kind === 'fee_expense' ? 'Council expense date' : $type_label;
+            $alert = array(
+                'status' => $is_today ? 'due_today' : 'overdue',
+                'message' => $subject . ' ' . $when . ' for ' . $council_exam['course_name'] . ', ' . $exam_label . ', Class ' . $council_exam['class'] . '. ' . $waiting_count . ' student(s) still waiting.',
+            );
+        }
+
+        return array(
+            'scheduled_date' => $scheduled_date,
+            'pending_requested_date' => !empty($pending_date_request['requested_date']) ? $pending_date_request['requested_date'] : null,
+            'alert' => $alert,
+        );
+    }
+
+    private function _other_task_pending_request($exam_sequence_id, $council_sequence_id, $tag_kind = 'workflow')
     {
         if (!$this->ci->db->table_exists('council_report_workflow_date_requests')) {
             return null;
@@ -1006,8 +1206,25 @@ class Councils_service {
         return $this->ci->db->where(array(
             'exam_sequence_id' => $exam_sequence_id,
             'council_sequence_id' => $council_sequence_id,
+            'tag_kind' => $tag_kind,
             'status' => 'pending',
         ))->order_by('id', 'DESC')->get('council_report_workflow_date_requests')->row_array();
+    }
+
+    public function record_tag_date_review_history($request, $approve, $reviewer_id)
+    {
+        $this->_append_tag_date_history(array(
+            'exam_sequence_id' => (int) $request['exam_sequence_id'],
+            'council_sequence_id' => (int) $request['council_sequence_id'],
+            'tag_kind' => !empty($request['tag_kind']) ? $request['tag_kind'] : 'workflow',
+            'event' => $approve ? 'approved' : 'rejected',
+            'from_date' => $request['current_date'],
+            'to_date' => $approve ? $request['requested_date'] : null,
+            'comment' => !empty($request['request_comment']) ? $request['request_comment'] : null,
+            'requested_by' => (int) $request['requested_by'],
+            'reviewed_by' => (int) $reviewer_id,
+            'created_at' => date('Y-m-d H:i:s'),
+        ));
     }
 
     private function _session_breakdown($council_exam, $fee_tasks_raw, $payment_comment)
@@ -1067,12 +1284,33 @@ class Councils_service {
                 }
 
                 $fee_not_created = $session_total - $paid - $unpaid;
+                $fee_schedule = array();
+                if (!empty($task['has_expense'])) {
+                    $fee_schedule = $this->_tag_schedule_meta(
+                        (int) $council_exam['id'],
+                        (int) $task['council_sequence_id'],
+                        'fee_expense',
+                        $council_exam,
+                        $task,
+                        max(0, $unpaid),
+                        $task['type_name']
+                    );
+                }
+
                 $task_breakdown[] = array(
                     'council_sequence_id' => (int) $task['council_sequence_id'],
                     'type_name' => $task['type_name'],
+                    'has_expense' => (int) !empty($task['has_expense']),
                     'fee_not_created' => $fee_not_created,
                     'paid' => $paid,
                     'unpaid' => $unpaid,
+                    'actual_expense_date' => !empty($task['has_expense']) ? $this->_fee_task_actual_expense_date($council_exam, $task) : null,
+                    'scheduled_date' => !empty($fee_schedule['scheduled_date']) ? $fee_schedule['scheduled_date'] : null,
+                    'pending_requested_date' => !empty($fee_schedule['pending_requested_date']) ? $fee_schedule['pending_requested_date'] : null,
+                    'alert' => !empty($fee_schedule['alert']) ? $fee_schedule['alert'] : null,
+                    'links' => array(
+                        'unpaid' => $this->_student_link_params($course_id, $session_name, $exam_no, $class, 'unpaid', (int) $task['council_sequence_id']),
+                    ),
                 );
             }
 

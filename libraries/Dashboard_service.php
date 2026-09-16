@@ -239,7 +239,10 @@ class Dashboard_service {
         ));
         $this->ci->db->trans_complete();
         if (!$this->ci->db->trans_status()) return array('success' => false, 'message' => 'Could not review the date request.');
-        return array('success' => true, 'message' => $approve ? 'Workflow date updated.' : 'Date update request rejected.');
+        $this->ci->load->library('Councils_service', null, 'councils_service');
+        $this->ci->councils_service->record_tag_date_review_history($request, $approve, (int) $user['user_id']);
+        $kind = !empty($request['tag_kind']) && $request['tag_kind'] === 'fee_expense' ? 'Council expense date' : 'Workflow date';
+        return array('success' => true, 'message' => $approve ? $kind . ' updated.' : 'Date update request rejected.');
     }
 
     /** Monthly statistics tiles. */

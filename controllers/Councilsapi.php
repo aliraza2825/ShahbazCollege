@@ -464,6 +464,29 @@ class Councilsapi extends CI_Controller {
         $this->_json($result, !empty($result['success']) ? 200 : 422);
     }
 
+    public function save_fee_expense_schedule()
+    {
+        $this->_require_council_report();
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            $this->_json(array('success' => false, 'message' => 'Method not allowed'), 405);
+        }
+        $result = $this->service->save_fee_expense_schedule($this->current_user, $this->_body());
+        $this->_json($result, !empty($result['success']) ? 200 : 422);
+    }
+
+    public function report_tag_schedule_detail()
+    {
+        $this->_require_council_report();
+        $q = $this->input->get();
+        $result = $this->service->get_report_tag_schedule_detail(
+            $this->current_user,
+            isset($q['exam_sequence_id']) ? $q['exam_sequence_id'] : 0,
+            isset($q['council_sequence_id']) ? $q['council_sequence_id'] : 0,
+            isset($q['tag_kind']) ? $q['tag_kind'] : 'workflow'
+        );
+        $this->_json($result, !empty($result['success']) ? 200 : 422);
+    }
+
     public function create_fee_for_all()
     {
         $this->_require_council_report();
