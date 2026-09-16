@@ -164,6 +164,8 @@ class Councils_service {
             return array('success' => false, 'message' => 'Invalid report row.');
         }
 
+        $this->_ensure_report_tag_schema();
+
         $council_exam = $this->_get_exam_sequence_for_report($user, $exam_sequence_id);
         if (!$council_exam) {
             return array('success' => false, 'message' => 'This council report row is not available to you.');
@@ -232,7 +234,7 @@ class Councils_service {
             }
         }
 
-        $this->_ensure_workflow_schedule_table();
+        $this->_ensure_report_tag_schema();
         $user_id = isset($user['user_id']) ? (int) $user['user_id'] : 0;
         $now = date('Y-m-d H:i:s');
         $row = array(
@@ -256,7 +258,6 @@ class Councils_service {
             if ($scheduled_date <= date('Y-m-d')) {
                 return array('success' => false, 'message' => 'Choose a future date for the update request.');
             }
-            $this->_ensure_workflow_schedule_request_table();
             $request = array(
                 'exam_sequence_id' => $exam_sequence_id,
                 'council_sequence_id' => $council_sequence_id,
@@ -268,12 +269,19 @@ class Councils_service {
                 'status' => 'pending',
                 'requested_at' => $now,
             );
-            $pending = $this->ci->db->where(array(
-                'exam_sequence_id' => $exam_sequence_id,
-                'council_sequence_id' => $council_sequence_id,
-                'tag_kind' => $tag_kind,
-                'status' => 'pending',
-            ))->get('council_report_workflow_date_requests')->row_array();
+            if (!$this->ci->db->field_exists('tag_kind', 'council_report_workflow_date_requests')) {
+                unset($request['tag_kind']);
+                if ($tag_kind === 'fee_expense') {
+                    return array('success' => false, 'message' => 'Council expense date requests need a database update. Ask admin to reload the report once or run migrations.');
+                }
+            }
+            if (!$this->ci->db->field_exists('request_comment', 'council_report_workflow_date_requests')) {
+                unset($request['request_comment']);
+            }
+            $pending = $this->ci->db
+                ->where($this->_pending_date_request_where($exam_sequence_id, $council_sequence_id, $tag_kind))
+                ->get('council_report_workflow_date_requests')
+                ->row_array();
             if ($pending) {
                 $this->ci->db->where('id', (int) $pending['id'])->update('council_report_workflow_date_requests', $request);
             } else {
@@ -714,8 +722,16 @@ class Councils_service {
         return $this->ci->db->get()->row_array();
     }
 
+    private function _ensure_report_tag_schema()
+    {
+        $this->_ensure_workflow_schedule_table();
+        $this->_ensure_workflow_schedule_request_table();
+    }
+
     private function _build_report_row($council_exam)
     {
+        $this->_ensure_report_tag_schema();
+
         $course_id = (int) $council_exam['course_id'];
         $exam_no = $council_exam['first_year'];
         $class = $council_exam['class'];
@@ -1200,15 +1216,34 @@ class Councils_service {
 
     private function _other_task_pending_request($exam_sequence_id, $council_sequence_id, $tag_kind = 'workflow')
     {
+        $this->_ensure_workflow_schedule_request_table();
         if (!$this->ci->db->table_exists('council_report_workflow_date_requests')) {
             return null;
         }
-        return $this->ci->db->where(array(
-            'exam_sequence_id' => $exam_sequence_id,
-            'council_sequence_id' => $council_sequence_id,
-            'tag_kind' => $tag_kind,
+        $tag_kind = $tag_kind === 'fee_expense' ? 'fee_expense' : 'workflow';
+        $this->ci->db->where('exam_sequence_id', (int) $exam_sequence_id);
+        $this->ci->db->where('council_sequence_id', (int) $council_sequence_id);
+        $this->ci->db->where('status', 'pending');
+        if ($this->ci->db->field_exists('tag_kind', 'council_report_workflow_date_requests')) {
+            $this->ci->db->where('tag_kind', $tag_kind);
+        } elseif ($tag_kind !== 'workflow') {
+            return null;
+        }
+        return $this->ci->db->order_by('id', 'DESC')->get('council_report_workflow_date_requests')->row_array();
+    }
+
+    private function _pending_date_request_where($exam_sequence_id, $council_sequence_id, $tag_kind)
+    {
+        $tag_kind = $tag_kind === 'fee_expense' ? 'fee_expense' : 'workflow';
+        $where = array(
+            'exam_sequence_id' => (int) $exam_sequence_id,
+            'council_sequence_id' => (int) $council_sequence_id,
             'status' => 'pending',
-        ))->order_by('id', 'DESC')->get('council_report_workflow_date_requests')->row_array();
+        );
+        if ($this->ci->db->field_exists('tag_kind', 'council_report_workflow_date_requests')) {
+            $where['tag_kind'] = $tag_kind;
+        }
+        return $where;
     }
 
     public function record_tag_date_review_history($request, $approve, $reviewer_id)
