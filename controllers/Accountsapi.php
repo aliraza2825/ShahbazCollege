@@ -3622,8 +3622,11 @@ class Accountsapi extends CI_Controller {
 	}
 
 	/**
-	 * Legacy: Reports::PettyCashReport (simplified)
+	 * Legacy: Reports::PettyCashReport
 	 * GET day_closing_report?date=
+	 *
+	 * This is deliberately a complete day sheet, not merely the two closing
+	 * widgets. The legacy report is the source of truth for the sections below.
 	 */
 	public function day_closing_report()
 	{
@@ -3661,14 +3664,124 @@ class Accountsapi extends CI_Controller {
 					 WHERE transaction_pettycash_account = ? AND DATE(created_at) = ? AND debit_credit = 'C'",
 					array((int)$p['id'], $date)
 				)->row_array();
-				$p['opening_balance_label'] = isset($p['opening_balance']) ? $p['opening_balance'] : 0;
+				$before = $this->db->query(
+					"SELECT COALESCE(SUM(CASE WHEN debit_credit = 'D' THEN amount_given ELSE -amount_given END),0) AS amount
+					 FROM petty_cash_history WHERE transaction_pettycash_account = ? AND created_at < ?",
+					array((int)$p['id'], $date . ' 00:00:00')
+				)->row_array();
+				$previousExpense = $this->db->query(
+					"SELECT COALESCE(SUM(amount),0) AS amount FROM expenses
+					 WHERE add_by_id = ? AND actual_date < ? AND paid_type = 'cash'",
+					array($assign, $date . ' 00:00:00')
+				)->row_array();
+				$previousReversal = $this->_table_exists('cash_reversal') ? $this->db->query(
+					"SELECT COALESCE(SUM(cash_reversal.amount),0) AS amount FROM cash_reversal
+					 INNER JOIN expenses ON expenses.expense_id = cash_reversal.expense_id
+					 WHERE expenses.add_by_id = ? AND cash_reversal.created_at < ?",
+					array($assign, $date . ' 00:00:00')
+				)->row_array() : array('amount' => 0);
+				$reversal = $this->_table_exists('cash_reversal') ? $this->db->query(
+					"SELECT COALESCE(SUM(cash_reversal.amount),0) AS amount FROM cash_reversal
+					 INNER JOIN expenses ON expenses.expense_id = cash_reversal.expense_id
+					 WHERE expenses.add_by_id = ? AND DATE(cash_reversal.created_at) = ?",
+					array($assign, $date)
+				)->row_array() : array('amount' => 0);
+				$p['opening_balance'] = (float)(isset($p['opening_balance']) ? $p['opening_balance'] : 0)
+					+ (float)$before['amount'] - (float)$previousExpense['amount'] + (float)$previousReversal['amount'];
 				$p['expenses'] = (float)(isset($exp['amount']) ? $exp['amount'] : 0);
 				$p['received'] = (float)(isset($recv['amount']) ? $recv['amount'] : 0);
 				$p['sent'] = (float)(isset($sent['amount']) ? $sent['amount'] : 0);
+				$p['reversal'] = (float)(isset($reversal['amount']) ? $reversal['amount'] : 0);
+				$p['closing_balance'] = $p['opening_balance'] + $p['received'] + $p['reversal'] - $p['sent'] - $p['expenses'];
 				$p['live_balance'] = $this->_petty_live_balance((int)$p['id']);
 				$p['assign_to_name'] = trim($p['first_name'] . ' ' . $p['last_name']);
 				$petty[] = $p;
 			}
+		}
+
+		$cashAccounts = array();
+		if ($this->_table_exists('accounts') && $this->_table_exists('transactions_history')) {
+			$cashAccounts = $this->db->query("SELECT * FROM accounts WHERE type = '0' ORDER BY account_name ASC")->result_array();
+			foreach ($cashAccounts as &$account) {
+				$id = (int)$account['id'];
+				$opening = $this->db->query("SELECT COALESCE(SUM(CASE WHEN debit_credit = 'D' THEN amount ELSE -amount END),0) AS amount FROM transactions_history WHERE transaction_account_id = ? AND created_at < ?", array($id, $date . ' 00:00:00'))->row_array();
+				$received = $this->db->query("SELECT COALESCE(SUM(amount),0) AS amount FROM transactions_history WHERE transaction_account_id = ? AND DATE(created_at) = ? AND debit_credit = 'D'", array($id, $date))->row_array();
+				$sent = $this->db->query("SELECT COALESCE(SUM(amount),0) AS amount FROM transactions_history WHERE transaction_account_id = ? AND DATE(created_at) = ? AND debit_credit = 'C'", array($id, $date))->row_array();
+				$account['opening_balance'] = (float)$opening['amount'];
+				$account['received'] = (float)$received['amount'];
+				$account['sent'] = (float)$sent['amount'];
+				$account['balance'] = $account['opening_balance'] + $account['received'] - $account['sent'];
+			}
+			unset($account);
+		}
+
+		$bankAccounts = array();
+		if ($this->_table_exists('accounts') && $this->_table_exists('bank_reconciliation_statement')) {
+			$bankAccounts = $this->db->query("SELECT * FROM accounts WHERE type = '1' AND for_closing = '1' ORDER BY account_name ASC")->result_array();
+			foreach ($bankAccounts as &$account) {
+				$id = (int)$account['id'];
+				$rows = $this->db->query("SELECT * FROM bank_reconciliation_statement WHERE account_id = ? AND trans_date = ? AND debit IS NOT NULL AND debit != ''", array($id, $date))->result_array();
+				$future = $this->db->query("SELECT id FROM bank_reconciliation_statement WHERE account_id = ? AND trans_date > ? LIMIT 1", array($id, $date))->row_array();
+				$tagged = 0; $untagged = 0; $expense = 0;
+				foreach ($rows as $row) {
+					$isTagged = !empty($row['payment_id']) || !empty($row['related_to']) || !empty($row['bank_transfer_id']) || !empty($row['expense_id']) || !empty($row['statement_id']) || !empty($row['closing_id']) || !empty($row['is_council_fee']) || !empty($row['paypro_id']) || !empty($row['salary_expense_ids']);
+					if ($isTagged) $tagged++; else $untagged++;
+					if (!empty($row['expense_id']) || !empty($row['salary_expense_ids'])) $expense += (float)str_replace(',', '', (string)$row['debit']);
+				}
+				$account['expense_today'] = $expense;
+				$account['tagged_debits'] = count($rows) ? $tagged : ($future ? 0 : null);
+				$account['untagged_debits'] = count($rows) ? $untagged : ($future ? 0 : null);
+			}
+			unset($account);
+		}
+
+		$courses = $this->_table_exists('courses') ? $this->db->query("SELECT course_id, course_name, course_code FROM courses WHERE status = '1' ORDER BY course_name ASC")->result_array() : array();
+		$admissions = array();
+		if ($this->_table_exists('payments') && $this->_table_exists('students') && $this->_table_exists('classes') && $this->_table_exists('campuses')) {
+			$campuses = $this->db->query("SELECT campus_id, campus_name FROM campuses WHERE status = '1' AND roll_no_code IS NOT NULL ORDER BY campus_name ASC")->result_array();
+			foreach ($campuses as $campus) {
+				$counts = array();
+				foreach ($courses as $course) $counts[(int)$course['course_id']] = 0;
+				$students = $this->db->query("SELECT DISTINCT payments.student_id, students.course_id FROM payments INNER JOIN students ON students.student_id = payments.student_id INNER JOIN classes ON classes.class_id = students.class_id WHERE payments.actual_paid_date = ? AND payments.paid = '1' AND classes.campus_id = ?", array($date, (int)$campus['campus_id']))->result_array();
+				foreach ($students as $student) {
+					$paidCount = $this->db->query("SELECT COUNT(*) AS total FROM payments WHERE student_id = ? AND paid = '1'", array((int)$student['student_id']))->row_array();
+					if ((int)$paidCount['total'] === 1 && isset($counts[(int)$student['course_id']])) $counts[(int)$student['course_id']]++;
+				}
+				$campus['counts'] = $counts;
+				$admissions[] = $campus;
+			}
+		}
+
+		$discounts = $this->_day_closing_student_rows('discounts_approval', 'discounts_approval.created_at', $date, "discounts_approval.status = '1'", 'discounts_approval.student_id');
+		$struck = $this->_day_closing_student_rows('struckofdetails_students', 'struckofdetails_students.created_at', $date, "struckofdetails_students.status = '1'", 'struckofdetails_students.student_id', 'struckofdetails_students.id DESC', true);
+		$revived = $this->_day_closing_student_rows('payments', 'payments.actual_paid_date', $date, "payments.paid = '1' AND payments.payment_comment = 'Re-Admission Fee'", 'payments.student_id');
+		$feeRequests = array();
+		if ($this->_table_exists('update_payment_requests')) {
+			$feeRequests = $this->db->query("SELECT update_payment_requests.*, students.first_name, students.last_name, students.roll_no, campuses.campus_name FROM update_payment_requests INNER JOIN students ON students.student_id = update_payment_requests.student_id INNER JOIN classes ON classes.class_id = students.class_id INNER JOIN campuses ON campuses.campus_id = classes.campus_id WHERE update_payment_requests.update_date >= ? AND update_payment_requests.update_date <= ? AND update_payment_requests.ok_by_admin = 1 ORDER BY update_payment_requests.update_date DESC", array($date . ' 00:00:00', $date . ' 23:59:59'))->result_array();
+		}
+		$studentRequestCount = 0;
+		if ($this->_table_exists('update_student_requests')) {
+			$row = $this->db->query("SELECT COUNT(*) AS total FROM update_student_requests WHERE update_date >= ? AND update_date <= ?", array($date . ' 00:00:00', $date . ' 23:59:59'))->row_array();
+			$studentRequestCount = (int)$row['total'];
+		}
+		$payproUntagged = 0;
+		if ($this->_table_exists('students_payments')) {
+			$row = $this->db->query("SELECT COUNT(*) AS total FROM students_payments WHERE transaction_status = 'PAID' AND settlement_id IS NULL AND created_on <= ?", array($date))->row_array();
+			$payproUntagged = (int)$row['total'];
+		}
+
+		$attendance = array();
+		if ($this->_table_exists('users') && $this->_table_exists('campuses') && $this->_table_exists('machine_data') && $this->_table_exists('attendence')) {
+			$attendance = $this->db->query("SELECT c.campus_id, c.campus_name, COUNT(DISTINCT u.user_id) AS total, COUNT(DISTINCT CASE WHEN a.id IS NOT NULL THEN u.user_id END) AS present FROM campuses c INNER JOIN users u ON u.campus_id = c.campus_id AND u.status = '1' INNER JOIN machine_data md ON md.teacher_student_id = u.user_id AND md.type = 'teacher' LEFT JOIN attendence a ON a.machine_user_id = md.machine_id AND a.time >= ? AND a.time <= ? GROUP BY c.campus_id, c.campus_name ORDER BY c.campus_name ASC", array($date . ' 00:00:00', $date . ' 23:59:59'))->result_array();
+			foreach ($attendance as &$row) $row['absent'] = max(0, (int)$row['total'] - (int)$row['present']);
+			unset($row);
+		}
+
+		$campusTotals = array();
+		if ($this->_table_exists('campuses') && $this->_table_exists('payments')) {
+			$campusTotals = $this->db->query("SELECT c.campus_id, c.campus_name, COALESCE(SUM(CASE WHEN p.paid = '1' AND p.actual_paid_date = ? THEN p.actual_amount ELSE 0 END),0) AS recovery FROM campuses c LEFT JOIN payments p ON p.submitted_fee_campus_id = c.campus_id WHERE c.status = '1' GROUP BY c.campus_id, c.campus_name ORDER BY c.campus_name ASC", array($date))->result_array();
+			foreach ($campusTotals as &$row) $row['expense'] = 0;
+			unset($row);
 		}
 
 		$closings = array();
@@ -3694,8 +3807,35 @@ class Accountsapi extends CI_Controller {
 			'report' => array(
 				'petty' => $petty,
 				'closings' => $closings,
+				'cash_accounts' => $cashAccounts,
+				'bank_accounts' => $bankAccounts,
+				'courses' => $courses,
+				'admissions' => $admissions,
+				'paypro_untagged' => $payproUntagged,
+				'discounts' => $discounts,
+				'struck_students' => $struck,
+				'revived_students' => $revived,
+				'student_request_count' => $studentRequestCount,
+				'fee_requests' => $feeRequests,
+				'attendance' => $attendance,
+				'campus_totals' => $campusTotals,
 			),
 		));
+	}
+
+	private function _day_closing_student_rows($table, $dateColumn, $date, $where, $studentColumn, $order = '', $groupStudent = false)
+	{
+		if (!$this->_table_exists($table) || !$this->_table_exists('students') || !$this->_table_exists('classes') || !$this->_table_exists('courses') || !$this->_table_exists('campuses')) return array();
+		$sql = "SELECT {$table}.*, students.first_name, students.last_name, students.roll_no, students.mobile, students.contact_to_no, courses.course_name, campuses.campus_name
+			FROM {$table}
+			INNER JOIN students ON students.student_id = {$studentColumn}
+			INNER JOIN classes ON classes.class_id = students.class_id
+			INNER JOIN courses ON courses.course_id = students.course_id
+			INNER JOIN campuses ON campuses.campus_id = classes.campus_id
+			WHERE {$where} AND {$dateColumn} >= ? AND {$dateColumn} <= ?";
+		if ($groupStudent) $sql .= " GROUP BY {$studentColumn}";
+		if ($order !== '') $sql .= " ORDER BY {$order}";
+		return $this->db->query($sql, array($date . ' 00:00:00', $date . ' 23:59:59'))->result_array();
 	}
 
 	/* ===================== Phase 3 — bank recon / PayPro ===================== */
