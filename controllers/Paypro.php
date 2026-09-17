@@ -135,7 +135,14 @@ class Paypro extends CI_Controller {
 
                             $this->db->select('*');
                             $this->db->from('payments');
-                            $this->db->where_in('challan_no', explode(',', $payment['challan_ids']));
+                            // Challan IDs are stored as a comma-separated value and may
+                            // contain spaces after commas. Normalize them before SQL IN so
+                            // every child of a merged PayPro payment is marked paid.
+                            $challan_ids = array_values(array_filter(array_map(
+                                'trim',
+                                explode(',', (string) $payment['challan_ids'])
+                            )));
+                            $this->db->where_in('challan_no', $challan_ids);
                             $fees = $this->db->get()->result_array();
                             if (count($fees) > 0) {
                                 foreach ($fees as $fee) {
