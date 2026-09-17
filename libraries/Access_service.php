@@ -11,7 +11,7 @@ class Access_service {
 
     private static $CSV_FIELDS = array(
         'campus_ids', 'class_ids', 'campus_closing_ids', 'allowed_cash_account_ids',
-        'allowed_bank_account_ids', 'funds_transfer_account_ids', 'account_details_pettycash_ids',
+        'allowed_bank_account_ids', 'funds_transfer_account_ids', 'manage_account_details_ids', 'account_details_pettycash_ids',
         'petty_cash_users', 'attendence_add_types', 'expense_campus_ids', 'inventory_campuses',
         'product_request_approval_campuses', 'purchase_campuses', 'pos_campuses',
         'council_report_colleges', 'council_report_courses', 'test_engine_subject_ids',
@@ -26,6 +26,7 @@ class Access_service {
         'allowed_cash_account_ids' => 'allowed_cash_account_ids',
         'allowed_bank_account_ids' => 'allowed_bank_account_ids',
         'funds_transfer_account_ids' => 'funds_transfer_account_ids',
+        'manage_account_details_ids' => 'manage_account_details_ids',
         'account_details_pettycash_ids' => 'account_details_pettycash_ids',
         'petty_cash_users' => 'petty_cash_users',
         'attendence_add_types' => 'attendence_add_types',
@@ -92,6 +93,7 @@ class Access_service {
             'cash_accounts' => $cashAccounts,
             'bank_accounts' => $bankAccounts,
             'transfer_accounts' => array_merge($cashAccounts, $bankAccounts),
+            'manage_account_details_accounts' => array_merge($cashAccounts, $bankAccounts),
             'petty_cash_users' => $pettyCashUsers,
             'courses' => $courses,
             'attendance_types' => array(
@@ -476,6 +478,7 @@ class Access_service {
             'allowed_cash_account_ids' => 'cash_accounts',
             'allowed_bank_account_ids' => 'bank_accounts',
             'funds_transfer_account_ids' => 'transfer_accounts',
+            'manage_account_details_ids' => 'manage_account_details_accounts',
             'account_details_pettycash_ids' => 'petty_cash_users',
             'petty_cash_users' => 'petty_cash_users',
             'attendence_add_types' => 'attendance_types',
@@ -654,6 +657,7 @@ class Access_service {
             case 'cash_accounts':
             case 'bank_accounts':
             case 'transfer_accounts':
+            case 'manage_account_details_accounts':
                 return (string) (isset($row['account_name']) ? $row['account_name'] : (isset($row['account_id']) ? $row['account_id'] : ''));
             case 'attendance_types':
                 return (string) (isset($row['label']) ? $row['label'] : (isset($row['value']) ? $row['value'] : ''));
@@ -687,6 +691,8 @@ class Access_service {
             case 'bank_accounts':
             case 'transfer_accounts':
                 return (string) (isset($row['account_id']) ? $row['account_id'] : '');
+            case 'manage_account_details_accounts':
+                return (string) (isset($row['id']) ? $row['id'] : '');
             case 'attendance_types':
                 return (string) (isset($row['value']) ? $row['value'] : '');
             default:

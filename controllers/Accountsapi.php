@@ -220,7 +220,8 @@ class Accountsapi extends CI_Controller {
 		if (!$this->_feature('account_edit')) return false;
 		if ($this->_is_admin()) return true;
 		return $this->_can_access_account_id($accountId, 'allowed_cash_account_ids')
-			|| $this->_can_access_account_id($accountId, 'allowed_bank_account_ids');
+			|| $this->_can_access_account_id($accountId, 'allowed_bank_account_ids')
+			|| $this->_can_access_account_id($accountId, 'manage_account_details_ids');
 	}
 
 	/** Save one uploaded field to uploads/; returns stored filename or ''. */
@@ -1172,10 +1173,17 @@ class Accountsapi extends CI_Controller {
 	public function cash_accounts()
 	{
 		$this->_assert_section('account_details');
-		$rows = $this->db->query(
-			'SELECT * FROM accounts WHERE type = 0 ORDER BY id ASC'
-		)->result_array();
-		$rows = $this->_filter_by_ids($rows, 'id', 'allowed_cash_account_ids');
+		$managedIds = $this->_access_id_list('manage_account_details_ids');
+		if ($managedIds !== null && count($managedIds)) {
+			// The dedicated Account Details scope may contain cash or bank accounts.
+			$rows = $this->db->query('SELECT * FROM accounts ORDER BY type ASC, id ASC')->result_array();
+			$rows = $this->_filter_by_ids($rows, 'id', 'manage_account_details_ids');
+		} else {
+			// Keep existing users on the legacy cash-account scope until an admin assigns
+			// the new Manage Account Details list.
+			$rows = $this->db->query('SELECT * FROM accounts WHERE type = 0 ORDER BY id ASC')->result_array();
+			$rows = $this->_filter_by_ids($rows, 'id', 'allowed_cash_account_ids');
+		}
 
 		$out = array();
 		foreach ($rows as $row) {
@@ -1316,6 +1324,10 @@ class Accountsapi extends CI_Controller {
 		if (!$fromRow) {
 			$this->_json(array('success' => false, 'message' => 'From account not found'), 404);
 		}
+		$managedIds = $this->_access_id_list('manage_account_details_ids');
+		if ($managedIds !== null && count($managedIds) && !$this->_can_access_account_id($from, 'manage_account_details_ids')) {
+			$this->_json(array('success' => false, 'message' => 'No access to selected from account'), 403);
+		}
 		$available = (float)$fromRow['amount'];
 		if ($accountamount > $available + 0.00001) {
 			$this->_json(array(
@@ -1409,6 +1421,7 @@ class Accountsapi extends CI_Controller {
 			&& !$this->_can_access_account_id($account_id, 'allowed_cash_account_ids')
 			&& !$this->_can_access_account_id($account_id, 'allowed_bank_account_ids')
 			&& !$this->_can_access_account_id($account_id, 'funds_transfer_account_ids')
+			&& !$this->_can_access_account_id($account_id, 'manage_account_details_ids')
 		) {
 			$this->_json(array('success' => false, 'message' => 'No access to this account'), 403);
 		}

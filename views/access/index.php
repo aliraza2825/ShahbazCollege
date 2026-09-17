@@ -380,6 +380,22 @@
                                                     </div>
                                                 <?php endif; ?>
 
+                                                <?php if(count($accessTransferAccounts) > 0): ?>
+                                                    <div class="form-group">
+                                                        <label class="col-md-3 control-label">Manage Account Details</label>
+                                                        <div class="col-md-5">
+                                                            <select class="form-control select2" id="manage_account_details_ids" name="manage_account_details_ids[]" multiple>
+                                                                <?php foreach($accessTransferAccounts as $account): ?>
+                                                                    <option value="<?php echo $account['id'];?>" <?php if(in_array($account['id'], explode(',',@$access_values[0]['manage_account_details_ids']))){echo 'selected';}?>>
+                                                                        <?php echo $account['account_name'];?>
+                                                                    </option>
+                                                                <?php endforeach; ?>
+                                                            </select>
+                                                            <span class="help-block">Assigned accounts only will appear in Account Details.</span>
+                                                        </div>
+                                                    </div>
+                                                <?php endif; ?>
+
                                                 <?php if(count($accessPettyAccounts) > 0): ?>
                                                     <div class="form-group">
                                                         <label class="col-md-3 control-label">Account Details Petty Cash</label>
@@ -1551,6 +1567,7 @@
         $("#allowed_cash_account_ids").select2();
         $("#allowed_bank_account_ids").select2();
         $("#funds_transfer_account_ids").select2();
+        $("#manage_account_details_ids").select2();
         $("#account_details_pettycash_ids").select2();
 
         $('.selection').click(function(){
