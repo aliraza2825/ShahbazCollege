@@ -1482,4 +1482,42 @@ class Rulesapi extends CI_Controller {
 		$eval = $svc->evaluate($course_id, is_array($answers) ? $answers : array());
 		$this->_json(array('success' => true, 'data' => $eval));
 	}
+
+	// ── Student verification clearance checklist (course-wise only) ──────────
+
+	private function _student_verification()
+	{
+		$this->load->library('Student_verification_service', null, 'student_verification');
+		return $this->student_verification;
+	}
+
+	public function student_verification_rules()
+	{
+		$svc = $this->_student_verification();
+		$this->_json(array(
+			'success' => true,
+			'courses' => $this->db->order_by('course_name', 'ASC')->get('courses')->result_array(),
+			'rules' => $svc->list_rules(),
+		));
+	}
+
+	public function save_student_verification_rule()
+	{
+		$body = $this->_body();
+		$res = $this->_student_verification()->save_rule(
+			(int)$this->_body_val($body, 'course_id', 0),
+			$this->_body_val($body, 'min_paid_fee', 0),
+			$this->_body_val($body, 'documents', array()),
+			$this->_user_name()
+		);
+		$this->_json($res, empty($res['success']) ? 422 : 200);
+	}
+
+	public function delete_student_verification_rule($id = null)
+	{
+		$body = $this->_body();
+		$id = (int)($id ?: $this->_body_val($body, 'id', 0));
+		if ($id <= 0) $this->_json(array('success' => false, 'message' => 'Rule id required'), 422);
+		$this->_json($this->_student_verification()->delete_rule($id));
+	}
 }

@@ -14,6 +14,7 @@ class Dashboard_details_service {
         $this->ci =& get_instance();
         $this->ci->load->model('dashboards');
         $this->ci->load->library('dashboard_service');
+        $this->ci->load->library('student_verification_service');
     }
 
     private function _boot($user)
@@ -315,7 +316,7 @@ class Dashboard_details_service {
         $total = (int) $this->ci->db->count_all_results();
 
         $this->ci->db->reset_query();
-        $this->ci->db->select('campuses.campus_name, classes.name as class_name, students.*');
+        $this->ci->db->select('campuses.campus_name, classes.name as class_name, classes.course_id, students.*');
         $this->_apply_new_admission_query($cid, $campus_scope);
         $this->ci->db->order_by('students.registration_date', 'DESC');
         $this->ci->db->order_by('students.student_id', 'DESC');
@@ -334,6 +335,7 @@ class Dashboard_details_service {
         $payments_map = $this->_batch_payments_by_student($student_ids);
         $docs_map = $this->_batch_documents_by_student($student_ids);
         $contractors = $this->_batch_contractors($contractor_ids);
+        $verification_map = $this->ci->student_verification_service->evaluate_batch($rows, $payments_map, $docs_map);
 
         $out = array();
         foreach ($rows as $r) {
@@ -371,6 +373,7 @@ class Dashboard_details_service {
                 'shift' => isset($r['shift']) ? $r['shift'] : '',
                 'study_type' => isset($r['study_type']) ? $r['study_type'] : '',
                 'student_card' => !empty($r['student_card']),
+                'verification' => isset($verification_map[$sid]) ? $verification_map[$sid] : array('has_rule' => false, 'can_clear' => true, 'status' => 'no_rule', 'missing' => array()),
             );
         }
 
@@ -383,9 +386,15 @@ class Dashboard_details_service {
     public function clear_new_admission($user, $student_id)
     {
         $this->_boot($user);
+        $student_id = (int)$student_id;
+        $verification = $this->ci->student_verification_service->evaluate_student($student_id);
+        if (!$verification) return array('success' => false, 'message' => 'Student not found');
+        if (empty($verification['can_clear'])) {
+            return array('success' => false, 'message' => 'Verification incomplete: '.implode(', ', $verification['missing']), 'verification' => $verification);
+        }
         $this->ci->db->set('clear_status', 1);
         $this->ci->db->set('clear_by', $this->_name($user).' '.date('Y-m-d h:i:s A'));
-        $this->ci->db->where('student_id', (int) $student_id);
+        $this->ci->db->where('student_id', $student_id);
         $this->ci->db->update('students');
         return array('success' => true, 'message' => 'New admission cleared');
     }
