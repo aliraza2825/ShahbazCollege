@@ -683,12 +683,16 @@ class Salary  extends CI_Controller{
     
         foreach ($rules as $rule) {
             $selectedBaseSalary = $this->statutory_rule_base_salary($rule, $base_salary, $basic_salary, $net_salary);
-            $contributionBaseSalary = $this->wage_to_pay_contribution($selectedBaseSalary, $rule);
-    
+            // Salary slabs decide whether this rule applies.  A wage cap only
+            // limits the amount used for percentage/fixed calculation after
+            // eligibility has been established; it must not pull (for example)
+            // a 100,000 salary down into a 0–60,000 slab.
+            $slabMatchSalary = $selectedBaseSalary;
+
             $this->db->where('rule_id', $rule['id']);
-            $this->db->where('min_salary <=', $contributionBaseSalary);
+            $this->db->where('min_salary <=', $slabMatchSalary);
             $this->db->group_start();
-                $this->db->where('max_salary >=', $contributionBaseSalary);
+                $this->db->where('max_salary >=', $slabMatchSalary);
                 $this->db->or_where('max_salary IS NULL', null, false);
             $this->db->group_end();
             $this->db->where('status', 1);
@@ -700,6 +704,8 @@ class Salary  extends CI_Controller{
             if (!$slab) {
                 continue;
             }
+
+            $contributionBaseSalary = $this->wage_to_pay_contribution($selectedBaseSalary, $rule);
     
             if ($slab['employee_applicable'] == 1) {
     
