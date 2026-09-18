@@ -287,7 +287,10 @@ class Punjab_council_service {
         // row, which caused large result sheets to hit PHP's 120 second timeout.
         $records = $this->ci->db
             ->select('id, roll_no, cnic')
-            ->where(array('class' => $class, 'council_exam_no' => $exam, 'course_id' => $course_id, 'result_remarks' => ''))
+            // Legacy rows use both NULL and an empty string for pending results.
+            // Do not filter result_remarks here: the previous importer updated a
+            // matching roll even when it was re-uploaded for correction.
+            ->where(array('class' => $class, 'council_exam_no' => $exam, 'course_id' => $course_id))
             ->get('punjab_council_roll_number')
             ->result_array();
         $by_roll = array();
