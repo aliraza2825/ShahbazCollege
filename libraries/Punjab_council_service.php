@@ -242,38 +242,90 @@ class Punjab_council_service {
         $upload = $this->_upload_file('roll_no', 'results');
         if (!$upload) return array('success' => false, 'message' => 'CSV upload failed');
         $path = FCPATH . 'results/' . $upload;
-        $file = fopen($path, 'r');
-        $updated = 0;
-        while (!feof($file)) {
-            $index = fgetcsv($file);
-            if (!$index || !isset($index[0])) continue;
-            $st = $this->ci->db->get_where('punjab_council_roll_number', array(
-                'roll_no' => $index[0],
-                'class' => $post['class'],
-                'result_remarks' => '',
-                'council_exam_no' => $post['council_exam_no'],
-            ))->row();
-            if ($st && ((isset($index[2]) ? $index[2] : '') === 'Pass' || (isset($index[2]) ? $index[2] : '') === 'Pass*')) {
-                if ((isset($post['class']) ? $post['class'] : '') == 1) {
-                    $this->ci->db->set('section', 'Second Year');
-                    $this->ci->db->where('cnic', $st->cnic);
-                    $course_id = isset($post['course_id']) ? $post['course_id'] : 1;
-                    $this->ci->db->where('course_id', $course_id);
-                    $this->ci->db->update('students');
-                }
-            }
-            $this->ci->db->set('result_remarks', isset($index[2]) ? $index[2] : '');
-            $this->ci->db->set('result_update_date', date('Y-m-d'));
-            $this->ci->db->where(array(
-                'roll_no' => $index[0],
-                'class' => $post['class'],
-                'council_exam_no' => $post['council_exam_no'],
-            ));
-            $this->ci->db->update('punjab_council_roll_number');
-            $updated += $this->ci->db->affected_rows();
+        $file = @fopen($path, 'r');
+        if (!$file) return array('success' => false, 'message' => 'Unable to read uploaded CSV');
+
+        $csv_rows = array();
+        while (($row = fgetcsv($file)) !== false) {
+            if (!$row || !isset($row[0])) continue;
+            // Excel sometimes prefixes the first CSV cell with a UTF-8 BOM.
+            $row[0] = preg_replace('/^\xEF\xBB\xBF/', '', (string) $row[0]);
+            if (trim((string) $row[0]) !== '') $csv_rows[] = $row;
         }
         fclose($file);
-        return array('success' => true, 'message' => "$updated results updated");
+        if (!count($csv_rows)) return array('success' => false, 'message' => 'CSV contains no result rows');
+
+        // Standard sheet: A = Roll No, B = Result, C = Remarks. Keep support for
+        // the older sheet where the result was supplied in the third column.
+        $first = $csv_rows[0];
+        $headers = array_map(function ($value) {
+            return strtolower(trim((string) $value));
+        }, $first);
+        $has_header = in_array('roll no', $headers) || in_array('roll_no', $headers) || in_array('roll number', $headers);
+        $result_column = 1;
+        if ($has_header) {
+            foreach ($headers as $key => $header) {
+                if (in_array($header, array('result', 'status', 'result remarks', 'remarks'))) {
+                    $result_column = $key;
+                    break;
+                }
+            }
+            array_shift($csv_rows);
+        }
+
+        $class = isset($post['class']) ? (int) $post['class'] : 0;
+        $exam = isset($post['council_exam_no']) ? (int) $post['council_exam_no'] : 0;
+        $course_id = isset($post['course_id']) ? (int) $post['course_id'] : 1;
+        if (!$class || !$exam) return array('success' => false, 'message' => 'Class and council exam are required');
+
+        // Fetch candidates once. The previous code made 2-3 SQL queries per CSV
+        // row, which caused large result sheets to hit PHP's 120 second timeout.
+        $records = $this->ci->db
+            ->select('id, roll_no, cnic')
+            ->where(array('class' => $class, 'council_exam_no' => $exam, 'course_id' => $course_id, 'result_remarks' => ''))
+            ->get('punjab_council_roll_number')
+            ->result_array();
+        $by_roll = array();
+        foreach ($records as $record) $by_roll[trim((string) $record['roll_no'])] = $record;
+
+        $updates = array();
+        $passed_cnics = array();
+        $unmatched = 0;
+        $date = date('Y-m-d');
+        foreach ($csv_rows as $index) {
+            $roll = trim((string) (isset($index[0]) ? $index[0] : ''));
+            if ($roll === '') continue;
+            $result = trim((string) (isset($index[$result_column]) ? $index[$result_column] : ''));
+            if (!$has_header && count($index) > 2 && !preg_match('/^(pass\*?|fail|absent)$/i', $result)) {
+                $result = trim((string) $index[2]);
+            }
+            if ($result === '') continue;
+            if (!isset($by_roll[$roll])) {
+                $unmatched++;
+                continue;
+            }
+            $record = $by_roll[$roll];
+            $updates[] = array('id' => $record['id'], 'result_remarks' => $result, 'result_update_date' => $date);
+            if (preg_match('/^pass\*?$/i', $result) && !empty($record['cnic'])) $passed_cnics[] = $record['cnic'];
+        }
+
+        if (!count($updates)) {
+            return array('success' => false, 'message' => 'No matching pending roll numbers found in this CSV');
+        }
+
+        $this->ci->db->trans_start();
+        $this->ci->db->update_batch('punjab_council_roll_number', $updates, 'id');
+        if ($class === 1 && count($passed_cnics)) {
+            $this->ci->db->where('course_id', $course_id);
+            $this->ci->db->where_in('cnic', array_values(array_unique($passed_cnics)));
+            $this->ci->db->update('students', array('section' => 'Second Year'));
+        }
+        $this->ci->db->trans_complete();
+        if ($this->ci->db->trans_status() === false) return array('success' => false, 'message' => 'Unable to save CSV results');
+
+        $message = count($updates) . ' results updated';
+        if ($unmatched) $message .= '; ' . $unmatched . ' roll number(s) not matched';
+        return array('success' => true, 'message' => $message, 'updated' => count($updates), 'unmatched' => $unmatched);
     }
 
     public function upload_result_card_images($post)
