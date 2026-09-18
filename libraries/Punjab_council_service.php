@@ -239,9 +239,14 @@ class Punjab_council_service {
 
     public function upload_result_csv($post)
     {
-        $upload = $this->_upload_file('roll_no', 'results');
-        if (!$upload) return array('success' => false, 'message' => 'CSV upload failed');
-        $path = FCPATH . 'results/' . $upload;
+        // Result CSV is only import input; read PHP's upload stream directly.
+        // Moving it into FCPATH/results first was unreliable on production and
+        // could make fopen() receive a missing path after a successful upload.
+        $path = isset($_FILES['roll_no']['tmp_name']) ? $_FILES['roll_no']['tmp_name'] : '';
+        if (!$path || !is_readable($path)) {
+            $upload_error = isset($_FILES['roll_no']['error']) ? (int) $_FILES['roll_no']['error'] : null;
+            return array('success' => false, 'message' => $upload_error ? 'CSV upload failed (error ' . $upload_error . ')' : 'CSV upload failed');
+        }
         $file = @fopen($path, 'r');
         if (!$file) return array('success' => false, 'message' => 'Unable to read uploaded CSV');
 
