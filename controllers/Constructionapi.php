@@ -354,12 +354,16 @@ class Constructionapi extends CI_Controller {
 		return $this->_asset_base() . '/uploads/construction/' . str_replace('%2F', '/', rawurlencode($filename));
 	}
 
-	/** Legacy expenses store files under /uploads/ (not construction/). */
-	private function _expense_image_url($filename)
+	/** Purchase-payment proofs are stored by Inventory, not the expense uploads folder. */
+	private function _expense_image_url($filename, $source = '')
 	{
 		if (!$filename) return null;
 		if (preg_match('/^https?:\\/\\//i', $filename)) return $filename;
-		return $this->_asset_base() . '/uploads/' . str_replace('%2F', '/', rawurlencode($filename));
+		$filename = ltrim((string) $filename, '/');
+		$filename = str_replace('%2F', '/', rawurlencode($filename));
+		if (strpos($filename, 'inventory_images/') === 0) return $this->_asset_base() . '/' . $filename;
+		$folder = strtolower(trim((string) $source)) === 'purchase' ? 'inventory_images' : 'uploads';
+		return $this->_asset_base() . '/' . $folder . '/' . $filename;
 	}
 
 	private function _upload_expense_image($field = 'image')
@@ -1348,7 +1352,10 @@ class Constructionapi extends CI_Controller {
 		} else {
 			$r['party_name'] = $cat_name !== '' ? $cat_name : 'Misc';
 		}
-		$r['image_url'] = $this->_expense_image_url(isset($r['image']) ? $r['image'] : '');
+		$r['image_url'] = $this->_expense_image_url(
+			isset($r['image']) ? $r['image'] : '',
+			isset($r['construction_source']) ? $r['construction_source'] : ''
+		);
 		$closing_id = isset($r['construction_closing_id']) ? (int)$r['construction_closing_id'] : 0;
 		$r['is_verified'] = $closing_id > 0 || !empty($r['approved_by']);
 		$paid = isset($r['paid_type']) ? strtolower(trim((string)$r['paid_type'])) : '';
