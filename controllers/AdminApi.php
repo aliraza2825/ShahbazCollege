@@ -46,6 +46,14 @@ class AdminApi extends CI_Controller {
             $this->db->update('users');
 
             $access = $this->db->get_where('access', array('user_id'=>$query[0]["user_id"]))->result_array();
+            foreach ($access as &$item) {
+                foreach ($item as $key => &$value) {
+                    if ($value === 0 || $value === '0') {
+                        $value = null;
+                    }
+                }
+            }
+
             $user_id = $query[0]["user_id"];
             $cash = $this->db->get_where("petty_cash_college_wise","assign_to = '$user_id'")->result_array();
             if (count($cash)>0)
