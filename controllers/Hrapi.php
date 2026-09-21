@@ -3336,6 +3336,8 @@ class Hrapi extends CI_Controller {
 		$installment_ids = isset($body['installment_ids']) ? $body['installment_ids'] : array();
 		$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
 		$pettycash_id = isset($body['pettycash_id']) ? (int)$body['pettycash_id'] : 0;
+		$has_payment_amount = isset($body['payment_amount']) && trim((string)$body['payment_amount']) !== '';
+		$payment_amount = $has_payment_amount ? (float)$body['payment_amount'] : 0.0;
 		$payment_method = isset($body['payment_method']) ? strtolower(trim((string)$body['payment_method'])) : 'closing';
 		if ($payment_method === '' || $payment_method === 'cash') {
 			$payment_method = 'closing';
@@ -3391,12 +3393,20 @@ class Hrapi extends CI_Controller {
 		foreach ($to_pay as $inst) {
 			$total_amount += (float)(isset($inst['amount']) ? $inst['amount'] : 0);
 		}
+		if (!$has_payment_amount) $payment_amount = $total_amount;
+		if ($payment_amount <= 0 || $payment_amount > $total_amount + 0.0001) {
+			$this->_json(array('success' => false, 'message' => 'Payment amount must be greater than zero and cannot exceed the selected installment amount'), 422);
+		}
+		$is_partial_payment = $payment_amount < $total_amount - 0.0001;
+		if ($is_partial_payment && count($to_pay) !== 1) {
+			$this->_json(array('success' => false, 'message' => 'Partial payment can be made against one installment at a time'), 422);
+		}
 
 		if ($payment_method === 'petty') {
 			$borrower = trim((string)(isset($loan['borrower_name']) ? $loan['borrower_name'] : 'External'));
 			$credit = $this->_loan_credit_petty_cash(
 				$pettycash_id,
-				$total_amount,
+				$payment_amount,
 				'Loan installment received — ' . $borrower . ' (Loan #' . $loan_id . ')'
 			);
 			if (empty($credit['ok'])) {
@@ -3405,6 +3415,24 @@ class Hrapi extends CI_Controller {
 					'message' => isset($credit['message']) ? $credit['message'] : 'Petty cash update failed',
 				), 422);
 			}
+			if ($is_partial_payment) {
+				$inst = $to_pay[0];
+				$remaining = (float)$inst['amount'] - $payment_amount;
+				$this->db->trans_start();
+				$this->db->where('id', (int)$inst['id'])->where('loan_id', $loan_id)->update('loan_plan', array('amount' => $remaining));
+				$paid_row = array(
+					'loan_id' => $loan_id,
+					'amount' => $payment_amount,
+					'amount_paid' => $payment_amount,
+					'due_date' => isset($inst['due_date']) ? $inst['due_date'] : date('Y-m-d'),
+					'paid_at' => 'petty',
+					'paid_date' => date('Y-m-d'),
+					'created_by' => (int)$this->current_user['user_id'],
+				);
+				if ($this->db->field_exists('pettycash_id', 'loan_plan')) $paid_row['pettycash_id'] = (int)$credit['pettycash_id'];
+				$this->db->insert('loan_plan', $paid_row);
+				$this->db->trans_complete();
+			} else {
 			$this->db->set('amount_paid', 'amount', false);
 			$this->db->set('paid_at', 'petty');
 			$this->db->set('paid_date', date('Y-m-d'));
@@ -3416,7 +3444,25 @@ class Hrapi extends CI_Controller {
 			$this->db->where('(amount_paid IS NULL OR amount_paid = 0 OR amount_paid = "")', null, false);
 			$this->db->where('(closing_id IS NULL OR closing_id = "" OR closing_id = "0")', null, false);
 			$this->db->update('loan_plan');
+			}
 		} else {
+			if ($is_partial_payment) {
+				$inst = $to_pay[0];
+				$remaining = (float)$inst['amount'] - $payment_amount;
+				$this->db->trans_start();
+				$this->db->where('id', (int)$inst['id'])->where('loan_id', $loan_id)->update('loan_plan', array('amount' => $remaining));
+				$this->db->insert('loan_plan', array(
+					'loan_id' => $loan_id,
+					'amount' => $payment_amount,
+					'amount_paid' => $payment_amount,
+					'due_date' => isset($inst['due_date']) ? $inst['due_date'] : date('Y-m-d'),
+					'paid_at' => 'cash',
+					'paid_date' => date('Y-m-d'),
+					'campus_id' => $campus_id,
+					'created_by' => (int)$this->current_user['user_id'],
+				));
+				$this->db->trans_complete();
+			} else {
 			$this->db->set('amount_paid', 'amount', false);
 			$this->db->set('paid_at', 'cash');
 			$this->db->set('paid_date', date('Y-m-d'));
@@ -3426,13 +3472,14 @@ class Hrapi extends CI_Controller {
 			$this->db->where('(amount_paid IS NULL OR amount_paid = 0 OR amount_paid = "")', null, false);
 			$this->db->where('(closing_id IS NULL OR closing_id = "" OR closing_id = "0")', null, false);
 			$this->db->update('loan_plan');
+			}
 		}
 
-		if ($this->db->affected_rows() <= 0) {
+		if ($this->db->trans_status() === false || $this->db->affected_rows() <= 0) {
 			$this->_json(array('success' => false, 'message' => 'No installments updated'), 422);
 		}
 
-		$this->_json(array('success' => true, 'message' => 'Installment(s) marked paid'));
+		$this->_json(array('success' => true, 'message' => $is_partial_payment ? 'Partial installment paid; remaining amount is still due' : 'Installment(s) marked paid'));
 	}
 
 	public function loan_apply()
