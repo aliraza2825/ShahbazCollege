@@ -543,9 +543,9 @@ class Inventoryapi extends CI_Controller {
 		$this->load->library('s3_direct_storage');
 		if (!empty($_FILES['file']['name']) && is_uploaded_file($_FILES['file']['tmp_name'])) {
 			$ext = strtolower(pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION));
-			$allowed = array('jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf');
+			$allowed = array('jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx');
 			if (!in_array($ext, $allowed)) {
-				$this->_json(array('success' => false, 'message' => 'Only jpg, png, gif, webp, pdf allowed'), 422);
+				$this->_json(array('success' => false, 'message' => 'Only image, PDF, Word or Excel files allowed'), 422);
 			}
 			if ($_FILES['file']['size'] > 8 * 1024 * 1024) {
 				$this->_json(array('success' => false, 'message' => 'Max 8MB file'), 422);
@@ -1759,6 +1759,10 @@ class Inventoryapi extends CI_Controller {
 		$this->db->where('purchase_requests.purchase_no', $purchase_no);
 		$this->db->order_by('purchase_request_prices.vendor_id', 'ASC');
 		$quotes = $this->db->get()->result_array();
+		foreach ($quotes as &$quote) {
+			$quote['quote_file_url'] = $this->_img_url(isset($quote['quote_file']) ? $quote['quote_file'] : '');
+		}
+		unset($quote);
 
 		$payments = array();
 		if ($this->db->table_exists('payment_aggrements')) {
@@ -2145,6 +2149,9 @@ class Inventoryapi extends CI_Controller {
 		if (!$this->db->field_exists('created_at', 'purchase_request_prices')) {
 			$this->db->query("ALTER TABLE `purchase_request_prices` ADD `created_at` DATETIME NULL DEFAULT NULL");
 		}
+		if (!$this->db->field_exists('quote_file', 'purchase_request_prices')) {
+			$this->db->query("ALTER TABLE `purchase_request_prices` ADD `quote_file` VARCHAR(500) NULL DEFAULT NULL");
+		}
 	}
 
 	public function quotations()
@@ -2183,7 +2190,12 @@ class Inventoryapi extends CI_Controller {
 		$this->db->order_by('purchase_request_prices.vendor_id', 'ASC');
 		$this->db->order_by('purchase_request_prices.purchase_request_price_id', 'ASC');
 		$this->db->limit(2000);
-		$this->_json(array('success' => true, 'data' => $this->db->get()->result_array()));
+		$rows = $this->db->get()->result_array();
+		foreach ($rows as &$row) {
+			$row['quote_file_url'] = $this->_img_url(isset($row['quote_file']) ? $row['quote_file'] : '');
+		}
+		unset($row);
+		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
 	public function save_quote()
@@ -2193,6 +2205,7 @@ class Inventoryapi extends CI_Controller {
 		$purchase_request_id = (int)(isset($body['purchase_request_id']) ? $body['purchase_request_id'] : 0);
 		$vendor_id = (int)(isset($body['vendor_id']) ? $body['vendor_id'] : 0);
 		$price = isset($body['price']) ? (float)$body['price'] : 0;
+		$quote_file = isset($body['quote_file']) ? trim((string)$body['quote_file']) : '';
 		if (!$purchase_request_id || !$vendor_id) {
 			$this->_json(array('success' => false, 'message' => 'purchase_request_id and vendor_id required'), 422);
 		}
@@ -2207,6 +2220,7 @@ class Inventoryapi extends CI_Controller {
 		if ($exists) {
 			$pk = (int)$exists['purchase_request_price_id'];
 			$update = array('price' => $price, 'created_by' => $name, 'created_at' => $now);
+			if ($quote_file !== '') $update['quote_file'] = $quote_file;
 			$this->db->where('purchase_request_price_id', $pk)->update('purchase_request_prices', $update);
 			$id = $pk;
 		} else {
@@ -2217,6 +2231,7 @@ class Inventoryapi extends CI_Controller {
 				'approve' => 0,
 				'created_by' => $name,
 				'created_at' => $now,
+				'quote_file' => $quote_file,
 			));
 			$id = $this->db->insert_id();
 		}
