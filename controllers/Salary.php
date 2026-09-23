@@ -1780,18 +1780,23 @@ class Salary  extends CI_Controller{
 
         $image = '';
         if (!empty($files['image']['name']) && is_uploaded_file($files['image']['tmp_name'])) {
-            $this->load->helper('form');
+            // Hrapi calls this controller through Payroll_service. In that
+            // mode libraries are attached to the main CI instance, not this
+            // lightweight Salary instance.
+            $CI =& get_instance();
+            $CI->load->helper('form');
             $config = array(
                 'upload_path' => 'uploads/',
                 'allowed_types' => 'gif|jpg|jpeg|png',
             );
-            $this->load->library('upload', $config);
-            $this->upload->initialize($config);
-            if ($this->upload->do_upload('image')) {
-                $upload_data = $this->upload->data();
-                if (!empty($upload_data['file_name'])) {
-                    $image = $upload_data['file_name'];
-                }
+            $CI->load->library('upload', $config);
+            $CI->upload->initialize($config);
+            if (!$CI->upload->do_upload('image')) {
+                return array('success' => false, 'message' => 'Receipt upload failed: ' . strip_tags($CI->upload->display_errors('', '')));
+            }
+            $upload_data = $CI->upload->data();
+            if (!empty($upload_data['file_name'])) {
+                $image = $upload_data['file_name'];
             }
         }
 
