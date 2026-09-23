@@ -810,13 +810,19 @@ class Constructionapi extends CI_Controller {
 				$parent_id = $this->_validate_parent_project_id($body['parent_project_id']);
 				$parent = $this->_project($parent_id);
 			}
-			// Sub-projects always inherit their parent's campus. Never trust a
-			// submitted campus_id for them.
-			$campus_id = $parent
-				? (int)$parent['campus_id']
-				: (isset($body['campus_id']) ? (int)$body['campus_id'] : (int)$this->current_user['campus_id']);
+			// Sub-projects inherit their parent's campus. Some older main projects
+			// predate campus_id, so accept the first supplied campus and repair the
+			// parent at the same time instead of blocking its first sub-project.
+			$submitted_campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
+			$parent_campus_id = $parent ? (int)$parent['campus_id'] : 0;
+			$campus_id = $parent && $parent_campus_id > 0
+				? $parent_campus_id
+				: ($submitted_campus_id > 0 ? $submitted_campus_id : (int)$this->current_user['campus_id']);
 			if ($campus_id < 1) {
 				$this->_json(array('success' => false, 'message' => 'Campus is required'), 422);
+			}
+			if ($parent && $parent_campus_id < 1) {
+				$this->db->where('id', $parent_id)->update('construction_projects', array('campus_id' => $campus_id));
 			}
 			$status = $this->_normalize_project_status(isset($body['status']) ? $body['status'] : 'Active');
 			$progress = isset($body['progress_percent']) ? (float)$body['progress_percent'] : 0;
