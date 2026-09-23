@@ -1721,16 +1721,52 @@ class Salary  extends CI_Controller{
         $payroll_ids = isset($body['payroll_ids']) ? $body['payroll_ids'] : '';
         $modal_rule_ids = isset($body['rule_ids']) ? $body['rule_ids'] : '';
         $comment = isset($body['purpose']) ? $body['purpose'] : '';
-        $receivable_amount = isset($body['amount']) ? (float) $body['amount'] : 0;
-        $rule_id = explode(',', (string) $modal_rule_ids);
-        $payroll_id = explode(',', (string) $payroll_ids);
+        $rule_id = array_values(array_filter(array_map('intval', explode(',', (string) $modal_rule_ids))));
+        $payroll_id = array_values(array_filter(array_map('intval', explode(',', (string) $payroll_ids))));
+        $contribution_id_list = array_values(array_filter(array_map('intval', explode(',', (string) $contribution_ids))));
 
-        if ($contribution_ids === '' || $payroll_ids === '' || $modal_rule_ids === '') {
+        if (empty($payroll_id) || empty($rule_id)) {
             return array('success' => false, 'message' => 'Contribution selection required');
         }
-        if ($receivable_amount <= 0) {
-            return array('success' => false, 'message' => 'Invalid amount');
+
+        // Legacy payroll rows may expose a statutory amount in the report
+        // without returning its nested contribution object. Resolve the
+        // actual records from the selected payroll/rule pairs instead of
+        // trusting a browser-supplied total or requiring a visible row id.
+        $pairs = min(count($payroll_id), count($rule_id));
+        for ($i = 0; $i < $pairs; $i++) {
+            $contribution = $this->db
+                ->select('id')
+                ->where('payroll_id', $payroll_id[$i])
+                ->where('rule_id', $rule_id[$i])
+                ->group_start()
+                    ->where('expense_id IS NULL', null, false)
+                    ->or_where('expense_id', 0)
+                ->group_end()
+                ->get('payroll_statutory_contributions')
+                ->row_array();
+            if ($contribution) {
+                $contribution_id_list[] = (int) $contribution['id'];
+            }
         }
+        $contribution_id_list = array_values(array_unique($contribution_id_list));
+        if (empty($contribution_id_list)) {
+            return array('success' => false, 'message' => 'Selected contributions are already paid or unavailable');
+        }
+        $selected_contributions = $this->db
+            ->select('id, employer_amount')
+            ->where_in('id', $contribution_id_list)
+            ->group_start()
+                ->where('expense_id IS NULL', null, false)
+                ->or_where('expense_id', 0)
+            ->group_end()
+            ->get('payroll_statutory_contributions')
+            ->result_array();
+        $receivable_amount = 0;
+        foreach ($selected_contributions as $contribution) {
+            $receivable_amount += (float) $contribution['employer_amount'];
+        }
+        if ($receivable_amount <= 0) return array('success' => false, 'message' => 'Invalid contribution amount');
 
         $payroll = $this->db->get_where('payroll', 'id = ' . (int) $payroll_id[0])->row_array();
         if (!$payroll) {
@@ -1780,7 +1816,7 @@ class Salary  extends CI_Controller{
             $this->db->update('petty_cash_college_wise');
 
             $this->db->set('expense_id', $insert_id);
-            $this->db->where_in('id', explode(',', $contribution_ids));
+            $this->db->where_in('id', $contribution_id_list);
             $this->db->update('payroll_statutory_contributions');
 
             return array('success' => true, 'message' => 'Contribution expense posted', 'expense_id' => (int) $insert_id);
