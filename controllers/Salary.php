@@ -1578,17 +1578,22 @@ class Salary  extends CI_Controller{
         $exp_ids = array();
         foreach ($salary as $key => $row) {
             $contributions = $this->db
-                ->select('id, rule_id, employer_amount, expense_id, payroll_id')
+                ->select('payroll_statutory_contributions.id, payroll_statutory_contributions.rule_id, payroll_statutory_contributions.employer_amount, payroll_statutory_contributions.expense_id, payroll_statutory_contributions.payroll_id, expenses.title AS expense_title, expenses.date AS expense_date')
                 ->where('payroll_id', $row['id'])
+                ->join('expenses', 'expenses.expense_id = payroll_statutory_contributions.expense_id', 'left')
                 ->get('payroll_statutory_contributions')
                 ->result_array();
             $salary[$key]['contributions'] = $contributions;
             foreach ($stat_rules as $rule) {
                 $col = 'stat_rule_' . $rule['id'];
                 $salary[$key][$col] = 0;
+                $salary[$key][$col . '_expense_id'] = 0;
+                $salary[$key][$col . '_expense_title'] = '';
                 foreach ($contributions as $c) {
                     if ((int) $c['rule_id'] === (int) $rule['id']) {
                         $salary[$key][$col] = (float) $c['employer_amount'];
+                        $salary[$key][$col . '_expense_id'] = (int) $c['expense_id'];
+                        $salary[$key][$col . '_expense_title'] = isset($c['expense_title']) ? $c['expense_title'] : '';
                     }
                 }
             }
