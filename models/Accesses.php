@@ -95,6 +95,40 @@ class Accesses extends CI_Model {
         }
     }
 
+    /** Fine-grained actions shown in the Inventory product side panel. */
+    private function inventoryProductActionAccessFields()
+    {
+        return array(
+            'inventory_edit_item',
+            'inventory_move_item',
+            'inventory_consume_item',
+            'inventory_view_move_history',
+            'inventory_view_consume_history',
+        );
+    }
+
+    private function ensureInventoryProductActionAccessColumns()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if (!$this->db->table_exists($table)) {
+                continue;
+            }
+            foreach ($this->inventoryProductActionAccessFields() as $field) {
+                if (!$this->db->field_exists($field, $table)) {
+                    $this->db->query("ALTER TABLE `$table` ADD `$field` TINYINT(1) NULL DEFAULT NULL");
+                }
+            }
+        }
+    }
+
+    private function setInventoryProductActionAccessFields()
+    {
+        $this->ensureInventoryProductActionAccessColumns();
+        foreach ($this->inventoryProductActionAccessFields() as $field) {
+            $this->db->set($field, $this->input->post($field));
+        }
+    }
+
     private function ensureReportAccessColumns()
     {
         foreach (array('access_rules', 'access') as $table) {
@@ -1055,6 +1089,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
         $this->setConstructionAccessFields();
         $this->setPosAccessFields();
+        $this->setInventoryProductActionAccessFields();
         
 
         if($user_id!='')
@@ -1910,6 +1945,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
         $this->setConstructionAccessFields();
         $this->setPosAccessFields();
+        $this->setInventoryProductActionAccessFields();
 
 
         if($user_id!='')

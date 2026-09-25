@@ -661,6 +661,7 @@ class Inventoryapi extends CI_Controller {
 
 	public function consume()
 	{
+		$this->_require_inventory_product_action('inventory_consume_item', 'Consume item');
 		$body = $this->_body();
 		$reason = isset($body['consume_reason']) ? trim((string)$body['consume_reason']) : '';
 		$qty = isset($body['quantity']) ? max(1, (int)$body['quantity']) : 0;
@@ -746,6 +747,7 @@ class Inventoryapi extends CI_Controller {
 	 */
 	public function update_product()
 	{
+		$this->_require_inventory_product_action('inventory_edit_item', 'Edit item');
 		$body = $this->_body();
 		$id = (int)(isset($body['product_id']) ? $body['product_id'] : 0);
 		if (!$id) $this->_json(array('success' => false, 'message' => 'product_id required'), 422);
@@ -1073,8 +1075,12 @@ class Inventoryapi extends CI_Controller {
 	/** Move history for a unit (legacy getProductHistory) */
 	public function move_history()
 	{
+		$this->_require_inventory_product_action('inventory_view_move_history', 'Move history');
 		$id = (int)$this->input->get('product_id');
 		if (!$id) $this->_json(array('success' => false, 'message' => 'product_id required'), 422);
+		$seed = $this->db->get_where('products', array('product_id' => $id))->row_array();
+		if (!$seed) $this->_json(array('success' => false, 'message' => 'Product not found'), 404);
+		$this->_assert_campus_access((int)$seed['campus_id']);
 		if (!$this->db->table_exists('product_history')) {
 			$this->_json(array('success' => true, 'data' => array()));
 		}
@@ -1086,10 +1092,12 @@ class Inventoryapi extends CI_Controller {
 	/** Recent consume history for same product name + campus (legacy getProductConsumeHistory) */
 	public function consume_history()
 	{
+		$this->_require_inventory_product_action('inventory_view_consume_history', 'Consume history');
 		$id = (int)$this->input->get('product_id');
 		if (!$id) $this->_json(array('success' => false, 'message' => 'product_id required'), 422);
 		$seed = $this->db->get_where('products', array('product_id' => $id))->row_array();
 		if (!$seed) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
+		$this->_assert_campus_access((int)$seed['campus_id']);
 		$this->db->select('products.product_id, products.consume_date, products.consume_reason,
 			campuses.campus_name, rooms.room_name, subrooms.subroom_name');
 		$this->db->from('products');
@@ -3443,6 +3451,7 @@ class Inventoryapi extends CI_Controller {
 	 */
 	public function move_stock()
 	{
+		$this->_require_inventory_product_action('inventory_move_item', 'Move item');
 		$this->_ensure_product_history_move_columns();
 		$body = $this->_body();
 		$qty = max(1, (int)(isset($body['quantity']) ? $body['quantity'] : 1));
@@ -3719,6 +3728,28 @@ class Inventoryapi extends CI_Controller {
 	}
 
 	/**
+	 * Action fields are nullable so existing Inventory users keep their legacy
+	 * access until an administrator saves explicit per-action permissions.
+	 */
+	private function _can_inventory_product_action($key)
+	{
+		if ($this->_is_admin()) return true;
+		$row = $this->_access();
+		if (!$row) return false;
+		if (array_key_exists($key, $row) && $row[$key] !== null) {
+			return !empty($row[$key]);
+		}
+		return !empty($row['inventory']);
+	}
+
+	private function _require_inventory_product_action($key, $label)
+	{
+		if (!$this->_can_inventory_product_action($key)) {
+			$this->_json(array('success' => false, 'message' => $label . ' permission is required'), 403);
+		}
+	}
+
+	/**
 	 * Inventory rail tab permissions — mirrors legacy sidebar.php inventory submenus.
 	 * GET inventoryapi/meta
 	 */
@@ -3745,6 +3776,11 @@ class Inventoryapi extends CI_Controller {
 			'issue' => $flag('add_product_issue_request') || $flag('all_product_issue_request'),
 			'gin' => $flag('manage_gin'),
 			'move' => $flag('all_product') || $flag('manage_grn'),
+			'edit_item' => $this->_can_inventory_product_action('inventory_edit_item'),
+			'move_item' => $this->_can_inventory_product_action('inventory_move_item'),
+			'consume_item' => $this->_can_inventory_product_action('inventory_consume_item'),
+			'view_move_history' => $this->_can_inventory_product_action('inventory_view_move_history'),
+			'view_consume_history' => $this->_can_inventory_product_action('inventory_view_consume_history'),
 			'returns' => $flag('product_return_request') || $flag('approve_product_return_request') || $flag('grn_approval'),
 			'qr' => $flag('generate_qrs'),
 			// Inventory expense/category rules live under Admin Rules in legacy.

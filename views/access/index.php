@@ -936,6 +936,21 @@
                                             <input type="checkbox" id="inlineCheckbox12" name="add_product" value="1" <?php if(@$access_values[0]['add_product']!=NULL){echo 'checked';}?> /> Add Product
                                         </label>
                                         <label class="checkbox-inline">
+                                            <input type="checkbox" name="inventory_edit_item" value="1" <?php if(@$access_values[0]['inventory_edit_item']!=NULL){echo 'checked';}?> /> Edit Item
+                                        </label>
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" name="inventory_move_item" value="1" <?php if(@$access_values[0]['inventory_move_item']!=NULL){echo 'checked';}?> /> Move Item
+                                        </label>
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" name="inventory_consume_item" value="1" <?php if(@$access_values[0]['inventory_consume_item']!=NULL){echo 'checked';}?> /> Consume Item
+                                        </label>
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" name="inventory_view_move_history" value="1" <?php if(@$access_values[0]['inventory_view_move_history']!=NULL){echo 'checked';}?> /> Move History
+                                        </label>
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" name="inventory_view_consume_history" value="1" <?php if(@$access_values[0]['inventory_view_consume_history']!=NULL){echo 'checked';}?> /> Consume History
+                                        </label>
+                                        <label class="checkbox-inline">
                                             <input type="checkbox" id="inlineCheckbox13" name="all_product" value="1" <?php if(@$access_values[0]['all_product']!=NULL){echo 'checked';}?> /> All Products
                                         </label>
                                         <label class="checkbox-inline">
