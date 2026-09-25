@@ -438,6 +438,7 @@ class Inventoryapi extends CI_Controller {
 
 	public function stock()
 	{
+		$this->_ensure_low_stock_alert_column();
 		$q = trim((string)$this->input->get('q'));
 		$campus_id = (int)$this->input->get('campus_id');
 		$room_id = (int)$this->input->get('room_id');
@@ -452,6 +453,7 @@ class Inventoryapi extends CI_Controller {
 			MAX(NULLIF(products.product_image, "")) as product_image,
 			MIN(products.campus_id) as campus_id, MIN(products.room_id) as room_id, MIN(products.subroom_id) as subroom_id,
 			MAX(campuses.campus_name) as campus_name, MAX(rooms.room_name) as room_name, MAX(subrooms.subroom_name) as subroom_name,
+			MAX(product_names.unit_of_measure) as unit_of_measure,
 			SUM(CASE WHEN products.saleable=1 THEN 1 ELSE 0 END) as saleable_count,
 			SUM(CASE WHEN products.consumeable=1 THEN 1 ELSE 0 END) as consumeable_count,
 			SUM(CASE WHEN products.returnable=1 THEN 1 ELSE 0 END) as returnable_count,
@@ -515,13 +517,14 @@ class Inventoryapi extends CI_Controller {
 
 	public function stock_units()
 	{
+		$this->_ensure_low_stock_alert_column();
 		$product_name_id = (int)$this->input->get('product_name_id');
 		$campus_id = (int)$this->input->get('campus_id');
 		$room_id = (int)$this->input->get('room_id');
 		$subroom_id = (int)$this->input->get('subroom_id');
 		if (!$product_name_id) $this->_json(array('success' => false, 'message' => 'product_name_id required'), 422);
 
-		$this->db->select('products.*, campuses.campus_name, rooms.room_name, subrooms.subroom_name, product_names.product_name');
+		$this->db->select('products.*, campuses.campus_name, rooms.room_name, subrooms.subroom_name, product_names.product_name, product_names.unit_of_measure');
 		$this->db->from('products');
 		$this->db->join('product_names', 'product_names.product_name_id = products.product_name_id', 'left');
 		$this->db->join('campuses', 'campuses.campus_id = products.campus_id', 'left');
@@ -1145,6 +1148,13 @@ class Inventoryapi extends CI_Controller {
 				 ADD `low_stock_alert_qty` INT NOT NULL DEFAULT 0"
 			);
 		}
+		if ($this->db->table_exists('product_names')
+			&& !$this->db->field_exists('unit_of_measure', 'product_names')) {
+			$this->db->query(
+				"ALTER TABLE `product_names`
+				 ADD `unit_of_measure` VARCHAR(40) NOT NULL DEFAULT 'Piece'"
+			);
+		}
 	}
 
 	/**
@@ -1263,6 +1273,12 @@ class Inventoryapi extends CI_Controller {
 		$low_stock_alert_qty = isset($body['low_stock_alert_qty'])
 			? max(0, (int)$body['low_stock_alert_qty'])
 			: null;
+		$unit_of_measure = null;
+		if (isset($body['unit_of_measure'])) {
+			$unit_of_measure = trim((string)$body['unit_of_measure']);
+			if ($unit_of_measure === '') $unit_of_measure = 'Piece';
+			$unit_of_measure = substr($unit_of_measure, 0, 40);
+		}
 
 		$data = array('product_name' => $name);
 		if ($sub_of !== null) $data['sub_of'] = $sub_of;
@@ -1273,6 +1289,7 @@ class Inventoryapi extends CI_Controller {
 			$data['type'] = $type;
 		}
 		$this->_ensure_low_stock_alert_column();
+		if ($unit_of_measure !== null) $data['unit_of_measure'] = $unit_of_measure;
 		if ($low_stock_alert_qty !== null) {
 			$data['low_stock_alert_qty'] = $low_stock_alert_qty;
 		}
