@@ -1200,6 +1200,31 @@
                                             <input type="checkbox" id="inlineCheckbox6" name="next_exam_status" value="1" <?php if(@$access_values[0]['next_exam_status']!=NULL){echo 'checked';}?> /> Next Exam Status </label>
                                     </div>
                                 </div>
+
+                                <div class="form-group">
+                                    <label class="col-md-1 control-label"><strong>Council Exam Sequence</strong></label>
+                                    <div class="col-md-11 checkbox-list">
+                                        <?php
+                                        $council_exam_sequence_permissions = array(
+                                            'council_exam_sequence_access' => 'Exam Sequence Access',
+                                            'council_exam_sequence_add' => 'Add Exam Sequence',
+                                            'council_exam_sequence_edit' => 'Edit Exam Sequence',
+                                            'council_exam_sequence_status' => 'Change Active / Inactive',
+                                            'council_exam_sequence_fee_rule_add' => 'Add Fee Rule',
+                                            'council_exam_sequence_fee_rule_edit' => 'Edit Fee Rule',
+                                            'council_exam_sequence_fee_rule_delete' => 'Delete Fee Rule',
+                                            'council_exam_sequence_fee_rule_edit_dates' => 'Can Edit Dates',
+                                            'council_exam_sequence_fee_rule_edit_expense' => 'Can Edit Expense Amount',
+                                            'council_exam_sequence_export' => 'Export Excel / PDF',
+                                        );
+                                        foreach ($council_exam_sequence_permissions as $permission_name => $permission_label): ?>
+                                            <label class="checkbox-inline">
+                                                <input type="checkbox" name="<?php echo $permission_name; ?>" value="1" <?php if (!empty($access_values[0][$permission_name])) { echo 'checked'; } ?> />
+                                                <?php echo $permission_label; ?>
+                                            </label>
+                                        <?php endforeach; ?>
+                                    </div>
+                                </div>
                                 
                                 <div class="form-group">
                                     <label class="col-md-1 control-label"><strong>All Council Report</strong></label>

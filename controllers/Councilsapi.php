@@ -348,11 +348,13 @@ class Councilsapi extends CI_Controller {
     {
         $this->_require_admin_cap('manage_exam_sequences');
         if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
+            $this->_require_admin_cap('is_admin');
             $result = $this->service->delete_exam_sequence($id);
             $this->_json(array('success' => true, 'message' => $result['message']));
             return;
         }
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $this->_require_admin_cap($id ? 'exam_sequence_edit' : 'exam_sequence_add');
             $body = $this->_body();
             if ($id) {
                 $body['id'] = $id;
@@ -370,7 +372,7 @@ class Councilsapi extends CI_Controller {
 
     public function exam_sequence_status($id = null)
     {
-        $this->_require_admin_cap('manage_exam_sequences');
+        $this->_require_admin_cap('exam_sequence_status');
         $body = $this->_body();
         $status = isset($body['status']) ? $body['status'] : 'Active';
         $result = $this->service->set_exam_sequence_status($id, $status);
@@ -381,6 +383,7 @@ class Councilsapi extends CI_Controller {
     {
         $this->_require_admin_cap('manage_exam_sequences');
         if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
+            $this->_require_admin_cap('exam_sequence_fee_rule_delete');
             $result = $this->service->delete_fee_rule($id);
             $this->_json(array('success' => true, 'message' => $result['message']));
             return;
@@ -389,6 +392,29 @@ class Councilsapi extends CI_Controller {
             $body = $this->_body();
             if ($id) {
                 $body['fee_rule_id'] = $id;
+                $p = $this->_perms();
+                if (empty($p['exam_sequence_fee_rule_edit']) && empty($p['exam_sequence_fee_rule_edit_dates']) && empty($p['exam_sequence_fee_rule_edit_expense'])) {
+                    $this->_json(array('success' => false, 'message' => 'Fee rule edit permission required'), 403);
+                }
+                $existing = $this->db->get_where('council_sequence_fee_rules', array('id' => (int) $id))->row_array();
+                if (!$existing) {
+                    $this->_json(array('success' => false, 'message' => 'Fee rule not found'), 404);
+                }
+                if (empty($p['exam_sequence_fee_rule_edit'])) {
+                    foreach (array('sequence_fee_id', 'exam_sequence_id', 'exam_fee', 'has_first_time_fee', 'first_time_fee') as $field) {
+                        $body[$field] = $existing[$field];
+                    }
+                }
+                if (empty($p['exam_sequence_fee_rule_edit_dates'])) {
+                    $body['from_date'] = $existing['from_date'];
+                    $body['to_date'] = $existing['to_date'];
+                }
+                if (empty($p['exam_sequence_fee_rule_edit_expense'])) {
+                    $body['expense_fee'] = $existing['expense_fee'];
+                    $body['first_time_expense'] = $existing['first_time_expense'];
+                }
+            } else {
+                $this->_require_admin_cap('exam_sequence_fee_rule_add');
             }
             $saved = $this->service->save_fee_rule($body);
             $this->_json(array('success' => true, 'message' => $saved['message'], 'id' => $saved['id']));

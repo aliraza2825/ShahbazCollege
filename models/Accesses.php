@@ -157,6 +157,45 @@ class Accesses extends CI_Model {
         }
     }
 
+    /** Granular access for the Council Exam Sequence screen and fee-rule editor. */
+    private function councilExamSequenceAccessFields()
+    {
+        return array(
+            'council_exam_sequence_access',
+            'council_exam_sequence_add',
+            'council_exam_sequence_edit',
+            'council_exam_sequence_status',
+            'council_exam_sequence_fee_rule_add',
+            'council_exam_sequence_fee_rule_edit',
+            'council_exam_sequence_fee_rule_delete',
+            'council_exam_sequence_fee_rule_edit_dates',
+            'council_exam_sequence_fee_rule_edit_expense',
+            'council_exam_sequence_export',
+        );
+    }
+
+    private function ensureCouncilExamSequenceAccessColumns()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if (!$this->db->table_exists($table)) {
+                continue;
+            }
+            foreach ($this->councilExamSequenceAccessFields() as $field) {
+                if (!$this->db->field_exists($field, $table)) {
+                    $this->db->query("ALTER TABLE `$table` ADD `$field` TINYINT(1) NULL DEFAULT NULL");
+                }
+            }
+        }
+    }
+
+    private function setCouncilExamSequenceAccessFields()
+    {
+        $this->ensureCouncilExamSequenceAccessColumns();
+        foreach ($this->councilExamSequenceAccessFields() as $field) {
+            $this->db->set($field, $this->input->post($field));
+        }
+    }
+
     private function ensureReportAccessColumns()
     {
         foreach (array('access_rules', 'access') as $table) {
@@ -1119,6 +1158,7 @@ class Accesses extends CI_Model {
         $this->setPosAccessFields();
         $this->setInventoryProductActionAccessFields();
         $this->setCouncilReportDateAccessFields();
+        $this->setCouncilExamSequenceAccessFields();
         
 
         if($user_id!='')
@@ -1976,6 +2016,7 @@ class Accesses extends CI_Model {
         $this->setPosAccessFields();
         $this->setInventoryProductActionAccessFields();
         $this->setCouncilReportDateAccessFields();
+        $this->setCouncilExamSequenceAccessFields();
 
 
         if($user_id!='')

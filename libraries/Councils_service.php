@@ -25,7 +25,7 @@ class Councils_service {
             return true;
         }
         $acc = $this->_access_row($user);
-        return $acc && !empty($acc['council_report']);
+        return $acc && (!empty($acc['council_report']) || !empty($acc['council_exam_sequence_access']));
     }
 
     public function permissions($user)
@@ -35,7 +35,7 @@ class Councils_service {
 
         return array(
             'is_admin' => $is_admin,
-            'sidebar' => $is_admin || !empty($acc['council_report']),
+            'sidebar' => $is_admin || !empty($acc['council_report']) || !empty($acc['council_exam_sequence_access']),
             'council_report' => $is_admin || !empty($acc['council_report']),
             'council_report_add_fee' => $is_admin || !empty($acc['council_report_add_information_can_add_fee']),
             'council_report_add_expense' => $is_admin || !empty($acc['council_report_add_information_can_add_expense']),
@@ -45,7 +45,16 @@ class Councils_service {
             'manage_council_exams' => $is_admin,
             'manage_result_rules' => $is_admin,
             'manage_sequences' => $is_admin,
-            'manage_exam_sequences' => $is_admin,
+            'manage_exam_sequences' => $is_admin || !empty($acc['council_exam_sequence_access']),
+            'exam_sequence_add' => $is_admin || !empty($acc['council_exam_sequence_add']),
+            'exam_sequence_edit' => $is_admin || !empty($acc['council_exam_sequence_edit']),
+            'exam_sequence_status' => $is_admin || !empty($acc['council_exam_sequence_status']),
+            'exam_sequence_fee_rule_add' => $is_admin || !empty($acc['council_exam_sequence_fee_rule_add']),
+            'exam_sequence_fee_rule_edit' => $is_admin || !empty($acc['council_exam_sequence_fee_rule_edit']),
+            'exam_sequence_fee_rule_delete' => $is_admin || !empty($acc['council_exam_sequence_fee_rule_delete']),
+            'exam_sequence_fee_rule_edit_dates' => $is_admin || !empty($acc['council_exam_sequence_fee_rule_edit_dates']),
+            'exam_sequence_fee_rule_edit_expense' => $is_admin || !empty($acc['council_exam_sequence_fee_rule_edit_expense']),
+            'exam_sequence_export' => $is_admin || !empty($acc['council_exam_sequence_export']),
         );
     }
 
