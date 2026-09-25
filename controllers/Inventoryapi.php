@@ -1572,7 +1572,26 @@ class Inventoryapi extends CI_Controller {
 		}
 		$this->db->order_by('purchase_requests.purchase_request_id', 'DESC');
 		$this->db->limit(500);
-		$this->_json(array('success' => true, 'data' => $this->db->get()->result_array()));
+		$rows = $this->db->get()->result_array();
+
+		// Payment rollups let project purchase screens show vendor-wise paid and
+		// remaining figures without loading every PR journey separately.
+		$vendor_payments = array();
+		if (count($rows) && $this->db->table_exists('payment_aggrements')) {
+			$purchase_nos = array();
+			foreach ($rows as $row) {
+				if (!empty($row['purchase_no'])) $purchase_nos[$row['purchase_no']] = true;
+			}
+			if (count($purchase_nos)) {
+				$this->db->select('purchase_no, vendor_id, SUM(amount) AS agreed_amount, SUM(CASE WHEN paid = 1 THEN amount ELSE 0 END) AS given_amount', false);
+				$this->db->from('payment_aggrements');
+				$this->db->where_in('purchase_no', array_keys($purchase_nos));
+				$this->db->group_by(array('purchase_no', 'vendor_id'));
+				$vendor_payments = $this->db->get()->result_array();
+			}
+		}
+
+		$this->_json(array('success' => true, 'data' => $rows, 'vendor_payments' => $vendor_payments));
 	}
 
 	public function create_purchase_request()
