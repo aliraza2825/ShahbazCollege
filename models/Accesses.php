@@ -129,6 +129,34 @@ class Accesses extends CI_Model {
         }
     }
 
+    /** Permission to set the initial Council Report date or request a date change. */
+    private function councilReportDateAccessFields()
+    {
+        return array('council_report_can_update_dates');
+    }
+
+    private function ensureCouncilReportDateAccessColumns()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if (!$this->db->table_exists($table)) {
+                continue;
+            }
+            foreach ($this->councilReportDateAccessFields() as $field) {
+                if (!$this->db->field_exists($field, $table)) {
+                    $this->db->query("ALTER TABLE `$table` ADD `$field` TINYINT(1) NULL DEFAULT NULL");
+                }
+            }
+        }
+    }
+
+    private function setCouncilReportDateAccessFields()
+    {
+        $this->ensureCouncilReportDateAccessColumns();
+        foreach ($this->councilReportDateAccessFields() as $field) {
+            $this->db->set($field, $this->input->post($field));
+        }
+    }
+
     private function ensureReportAccessColumns()
     {
         foreach (array('access_rules', 'access') as $table) {
@@ -1090,6 +1118,7 @@ class Accesses extends CI_Model {
         $this->setConstructionAccessFields();
         $this->setPosAccessFields();
         $this->setInventoryProductActionAccessFields();
+        $this->setCouncilReportDateAccessFields();
         
 
         if($user_id!='')
@@ -1946,6 +1975,7 @@ class Accesses extends CI_Model {
         $this->setConstructionAccessFields();
         $this->setPosAccessFields();
         $this->setInventoryProductActionAccessFields();
+        $this->setCouncilReportDateAccessFields();
 
 
         if($user_id!='')

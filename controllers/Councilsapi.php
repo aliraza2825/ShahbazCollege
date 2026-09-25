@@ -121,6 +121,14 @@ class Councilsapi extends CI_Controller {
         }
     }
 
+    private function _require_update_dates()
+    {
+        $p = $this->_perms();
+        if (empty($p['council_report_update_dates'])) {
+            $this->_json(array('success' => false, 'message' => 'Council report date update permission required'), 403);
+        }
+    }
+
     private function _drill_params()
     {
         return array(
@@ -457,6 +465,7 @@ class Councilsapi extends CI_Controller {
     public function save_workflow_schedule()
     {
         $this->_require_council_report();
+        $this->_require_update_dates();
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             $this->_json(array('success' => false, 'message' => 'Method not allowed'), 405);
         }
@@ -467,6 +476,7 @@ class Councilsapi extends CI_Controller {
     public function save_fee_expense_schedule()
     {
         $this->_require_council_report();
+        $this->_require_update_dates();
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
             $this->_json(array('success' => false, 'message' => 'Method not allowed'), 405);
         }

@@ -1219,6 +1219,11 @@
                                             <input type="checkbox" id="inlineCheckbox3" name="council_report_add_information_can_add_expense" value="1" <?php if(@$access_values[0]['council_report_add_information_can_add_expense']!=NULL){echo 'checked';}?> />
                                             Add Expense
                                         </label>
+
+                                        <label class="checkbox-inline">
+                                            <input type="checkbox" id="inlineCheckboxCouncilDates" name="council_report_can_update_dates" value="1" <?php if(@$access_values[0]['council_report_can_update_dates']!=NULL){echo 'checked';}?> />
+                                            Can update dates
+                                        </label>
                                 
                                         <label class="checkbox-inline" style="vertical-align: top;">
                                             Select Campuses <span class="required">*</span>

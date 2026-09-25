@@ -39,6 +39,7 @@ class Councils_service {
             'council_report' => $is_admin || !empty($acc['council_report']),
             'council_report_add_fee' => $is_admin || !empty($acc['council_report_add_information_can_add_fee']),
             'council_report_add_expense' => $is_admin || !empty($acc['council_report_add_information_can_add_expense']),
+            'council_report_update_dates' => $is_admin || !empty($acc['council_report_can_update_dates']),
             'manage_councils' => $is_admin,
             'manage_paper_types' => $is_admin,
             'manage_council_exams' => $is_admin,
