@@ -1537,7 +1537,7 @@ class Inventoryapi extends CI_Controller {
 		$project_id = (int)$this->input->get('project_id');
 
 		$this->_ensure_journey_audit_columns();
-		$select = 'purchase_requests.*, campuses.campus_name, product_names.product_name, rooms.room_name, subrooms.subroom_name';
+		$select = 'purchase_requests.*, campuses.campus_name, product_names.product_name, rooms.room_name, subrooms.subroom_name, vendors.name AS vendor_name, vendors.shop_name AS vendor_shop, purchase_requests.purchase_from AS vendor_id';
 		if ($this->db->table_exists('construction_projects') && $this->db->field_exists('project_id', 'purchase_requests')) {
 			$select .= ', construction_projects.project_name';
 		}
@@ -1547,6 +1547,7 @@ class Inventoryapi extends CI_Controller {
 		$this->db->join('product_names', 'product_names.product_name_id = purchase_requests.product_name_id', 'left');
 		$this->db->join('rooms', 'rooms.room_id = purchase_requests.room_id', 'left');
 		$this->db->join('subrooms', 'subrooms.subroom_id = purchase_requests.subroom_id', 'left');
+		$this->db->join('vendors', 'vendors.id = purchase_requests.purchase_from', 'left');
 		if ($this->db->table_exists('construction_projects') && $this->db->field_exists('project_id', 'purchase_requests')) {
 			$this->db->join('construction_projects', 'construction_projects.id = purchase_requests.project_id', 'left');
 		}
