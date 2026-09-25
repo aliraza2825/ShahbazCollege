@@ -487,8 +487,28 @@ class Inventoryapi extends CI_Controller {
 		$this->db->order_by('product_names.product_name', 'ASC');
 		$this->db->limit(500);
 		$rows = $this->db->get()->result_array();
+		// Build the full product-name hierarchy once so the client can display a
+		// product at any nesting depth (root → child → grandchild → ...).
+		$name_rows = $this->db->select('product_name_id, product_name, sub_of')
+			->from('product_names')
+			->get()
+			->result_array();
+		$name_map = array();
+		foreach ($name_rows as $name_row) {
+			$name_map[(int)$name_row['product_name_id']] = $name_row;
+		}
 		foreach ($rows as &$row) {
 			$row['image_url'] = $this->_img_url(isset($row['product_image']) ? $row['product_image'] : '');
+			$path = array();
+			$seen = array();
+			$current_id = (int)$row['product_name_id'];
+			while ($current_id > 0 && isset($name_map[$current_id]) && empty($seen[$current_id])) {
+				$seen[$current_id] = true;
+				$current = $name_map[$current_id];
+				array_unshift($path, (string)$current['product_name']);
+				$current_id = isset($current['sub_of']) ? (int)$current['sub_of'] : 0;
+			}
+			$row['product_path'] = $path;
 		}
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
