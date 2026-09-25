@@ -3727,19 +3727,12 @@ class Inventoryapi extends CI_Controller {
 		return $row && !empty($row[$key]);
 	}
 
-	/**
-	 * Action fields are nullable so existing Inventory users keep their legacy
-	 * access until an administrator saves explicit per-action permissions.
-	 */
+	/** Product side-panel actions always require their own explicit permission. */
 	private function _can_inventory_product_action($key)
 	{
 		if ($this->_is_admin()) return true;
 		$row = $this->_access();
-		if (!$row) return false;
-		if (array_key_exists($key, $row) && $row[$key] !== null) {
-			return !empty($row[$key]);
-		}
-		return !empty($row['inventory']);
+		return $row && !empty($row[$key]);
 	}
 
 	private function _require_inventory_product_action($key, $label)
