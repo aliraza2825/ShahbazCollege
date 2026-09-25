@@ -797,6 +797,21 @@ class Councils_drill_service {
 
         $course_id = isset($data['course_id']) ? $data['course_id'] : null;
         $created = 0;
+        // API-token users are returned from `users` and do not always include
+        // the legacy session-only `name` field. Payments require add_by.
+        $actor_name = trim(isset($user['name']) ? $user['name'] : '');
+        if ($actor_name === '') {
+            $actor_name = trim(
+                (isset($user['first_name']) ? $user['first_name'] : '') . ' ' .
+                (isset($user['last_name']) ? $user['last_name'] : '')
+            );
+        }
+        if ($actor_name === '') {
+            $actor_name = trim(isset($user['user_name']) ? $user['user_name'] : (isset($user['username']) ? $user['username'] : ''));
+        }
+        if ($actor_name === '') {
+            $actor_name = 'User #' . (int) (isset($user['user_id']) ? $user['user_id'] : 0);
+        }
 
         foreach ($payload as $studentData) {
             $student_id = $studentData['student_id'];
@@ -825,8 +840,8 @@ class Councils_drill_service {
                             'exam_class' => $fee['class'],
                             'exam_sequence_id' => $fee['next_exam_sequence_id'],
                             'council_sequence_id' => $fee['council_sequence_id'],
-                            'add_by' => $user['name'],
-                            'last_edit' => $user['name'],
+                            'add_by' => $actor_name,
+                            'last_edit' => $actor_name,
                         ));
                         $created++;
                     }
@@ -862,7 +877,7 @@ class Councils_drill_service {
                         'payment_plan' => 'consulation fee',
                         'payment_comment' => 'This fee for next exam # ' . $fee['exam_no'] . ' ' . $this->_ordinal($fee['class']) . ' ' . $fee['course_type'],
                         'system_comment' => 'Council auto-generated fee',
-                        'add_by' => $user['name'],
+                        'add_by' => $actor_name,
                     );
 
                     $already = $this->ci->db->get_where('payments', array(

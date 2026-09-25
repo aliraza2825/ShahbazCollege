@@ -160,6 +160,7 @@ class Class_service {
             'badge_no' => isset($body['badge_no']) ? trim($body['badge_no']) : '',
             'seats' => isset($body['seats']) ? trim($body['seats']) : '',
             'online_study' => !empty($body['online_study']) ? 1 : 0,
+            'dead_line_entry' => isset($body['dead_line_entry']) ? trim($body['dead_line_entry']) : '',
             'status' => isset($body['status']) ? (int) $body['status'] : 1,
         );
     }
@@ -187,6 +188,14 @@ class Class_service {
         $detail = $this->session_detail($fields['course_id'], $fields['session']);
         if (!$detail) {
             return array('success' => false, 'message' => 'Course session not found');
+        }
+        if ($fields['dead_line_entry'] !== '') {
+            $deadline = DateTime::createFromFormat('Y-m-d', $fields['dead_line_entry']);
+            $date_errors = DateTime::getLastErrors();
+            if (!$deadline || $deadline->format('Y-m-d') !== $fields['dead_line_entry'] || ($date_errors !== false && ($date_errors['warning_count'] || $date_errors['error_count']))) {
+                return array('success' => false, 'message' => 'Deadline add/edit student must be a valid date');
+            }
+            $detail['dead_line_entry'] = $fields['dead_line_entry'];
         }
         return array('success' => true, 'fields' => $fields, 'detail' => $detail);
     }
