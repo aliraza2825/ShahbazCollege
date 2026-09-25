@@ -1212,7 +1212,7 @@
                                 
                                         <label class="checkbox-inline">
                                             <input type="checkbox" id="inlineCheckbox2" name="council_report_add_information_can_add_fee" value="1" <?php if(@$access_values[0]['council_report_add_information_can_add_fee']!=NULL){echo 'checked';}?> />
-                                            Add Information
+                                            Can generate fee
                                         </label>
                                 
                                         <label class="checkbox-inline">
