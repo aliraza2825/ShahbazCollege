@@ -1204,25 +1204,16 @@
                                 <div class="form-group">
                                     <label class="col-md-1 control-label"><strong>Council Exam Sequence</strong></label>
                                     <div class="col-md-11 checkbox-list">
-                                        <?php
-                                        $council_exam_sequence_permissions = array(
-                                            'council_exam_sequence_access' => 'Exam Sequence Access',
-                                            'council_exam_sequence_add' => 'Add Exam Sequence',
-                                            'council_exam_sequence_edit' => 'Edit Exam Sequence',
-                                            'council_exam_sequence_status' => 'Change Active / Inactive',
-                                            'council_exam_sequence_fee_rule_add' => 'Add Fee Rule',
-                                            'council_exam_sequence_fee_rule_edit' => 'Edit Fee Rule',
-                                            'council_exam_sequence_fee_rule_delete' => 'Delete Fee Rule',
-                                            'council_exam_sequence_fee_rule_edit_dates' => 'Can Edit Dates',
-                                            'council_exam_sequence_fee_rule_edit_expense' => 'Can Edit Expense Amount',
-                                            'council_exam_sequence_export' => 'Export Excel / PDF',
-                                        );
-                                        foreach ($council_exam_sequence_permissions as $permission_name => $permission_label): ?>
-                                            <label class="checkbox-inline">
-                                                <input type="checkbox" name="<?php echo $permission_name; ?>" value="1" <?php if (!empty($access_values[0][$permission_name])) { echo 'checked'; } ?> />
-                                                <?php echo $permission_label; ?>
-                                            </label>
-                                        <?php endforeach; ?>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_access" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_access'])) { echo 'checked'; } ?> /> Exam Sequence Access</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_add" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_add'])) { echo 'checked'; } ?> /> Add Exam Sequence</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_edit" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_edit'])) { echo 'checked'; } ?> /> Edit Exam Sequence</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_status" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_status'])) { echo 'checked'; } ?> /> Change Active / Inactive</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_fee_rule_add" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_fee_rule_add'])) { echo 'checked'; } ?> /> Add Fee Rule</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_fee_rule_edit" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_fee_rule_edit'])) { echo 'checked'; } ?> /> Edit Fee Rule</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_fee_rule_delete" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_fee_rule_delete'])) { echo 'checked'; } ?> /> Delete Fee Rule</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_fee_rule_edit_dates" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_fee_rule_edit_dates'])) { echo 'checked'; } ?> /> Can Edit Dates</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_fee_rule_edit_expense" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_fee_rule_edit_expense'])) { echo 'checked'; } ?> /> Can Edit Expense Amount</label>
+                                        <label class="checkbox-inline"><input type="checkbox" name="council_exam_sequence_export" value="1" <?php if (!empty($access_values[0]['council_exam_sequence_export'])) { echo 'checked'; } ?> /> Export Excel / PDF</label>
                                     </div>
                                 </div>
                                 
