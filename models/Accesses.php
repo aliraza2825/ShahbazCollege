@@ -95,6 +95,16 @@ class Accesses extends CI_Model {
         }
     }
 
+    private function setAdmissionIncentiveAccessField()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if ($this->db->table_exists($table) && !$this->db->field_exists('all_users_admission', $table)) {
+                $this->db->query("ALTER TABLE `$table` ADD `all_users_admission` TINYINT(1) NULL DEFAULT NULL");
+            }
+        }
+        $this->db->set('all_users_admission', $this->input->post('all_users_admission'));
+    }
+
     /** Fine-grained actions shown in the Inventory product side panel. */
     private function inventoryProductActionAccessFields()
     {
@@ -1155,6 +1165,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report_add_information_can_add_fee',$council_report_add_information_can_add_fee);
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
         $this->setConstructionAccessFields();
+        $this->setAdmissionIncentiveAccessField();
         $this->setPosAccessFields();
         $this->setInventoryProductActionAccessFields();
         $this->setCouncilReportDateAccessFields();
@@ -2013,6 +2024,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report_add_information_can_add_fee',$council_report_add_information_can_add_fee);
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
         $this->setConstructionAccessFields();
+        $this->setAdmissionIncentiveAccessField();
         $this->setPosAccessFields();
         $this->setInventoryProductActionAccessFields();
         $this->setCouncilReportDateAccessFields();

@@ -111,15 +111,26 @@ class Incentiveapi extends CI_Controller {
 		return $v !== null && $v !== '' && (string)$v !== '0';
 	}
 
-	private function _can_manage()
+	private function _can_manage_recovery()
 	{
 		return $this->_is_admin() || $this->_access_flag('all_users_recovery');
 	}
 
-	private function _assert_manage()
+	private function _can_manage_admission()
 	{
-		if ($this->_can_manage()) return;
-		$this->_json(array('success' => false, 'message' => 'Incentive manage access required'), 403);
+		return $this->_is_admin() || $this->_access_flag('all_users_admission');
+	}
+
+	private function _assert_recovery_manage()
+	{
+		if ($this->_can_manage_recovery()) return;
+		$this->_json(array('success' => false, 'message' => 'Recovery incentive manage access required'), 403);
+	}
+
+	private function _assert_admission_manage()
+	{
+		if ($this->_can_manage_admission()) return;
+		$this->_json(array('success' => false, 'message' => 'Admission incentive manage access required'), 403);
 	}
 
 	/** Legacy sidebar: user designation_id CSV. */
@@ -172,7 +183,7 @@ class Incentiveapi extends CI_Controller {
 	 */
 	private function _has_incentive_access()
 	{
-		if ($this->_is_admin() || $this->_access_flag('all_users_recovery')) {
+		if ($this->_can_manage_recovery() || $this->_can_manage_admission()) {
 			return true;
 		}
 		if ($this->_find_admission_task_id_for_user()) {
@@ -186,7 +197,7 @@ class Incentiveapi extends CI_Controller {
 
 	private function _assert_recovery_task_access($recovery_id, $user_id = null)
 	{
-		if ($this->_can_manage()) {
+		if ($this->_can_manage_recovery()) {
 			return;
 		}
 		if (!$this->_access_flag('recovery_portal')) {
@@ -203,7 +214,7 @@ class Incentiveapi extends CI_Controller {
 
 	private function _assert_admission_task_access($incentive_id, $user_id = null)
 	{
-		if ($this->_can_manage()) {
+		if ($this->_can_manage_admission()) {
 			return;
 		}
 		$mine = $this->_find_admission_task_id_for_user();
@@ -284,10 +295,11 @@ class Incentiveapi extends CI_Controller {
 
 	public function meta()
 	{
-		$can_manage = $this->_can_manage();
+		$can_manage_recovery = $this->_can_manage_recovery();
+		$can_manage_admission = $this->_can_manage_admission();
 		$user_id = (int)$this->current_user['user_id'];
 		$recovery_task_id = null;
-		if ($this->_is_admin() || $this->_access_flag('recovery_portal') || $can_manage) {
+		if ($this->_is_admin() || $this->_access_flag('recovery_portal') || $can_manage_recovery) {
 			$recovery_task_id = $this->_find_recovery_task_id_for_user();
 		}
 		$admission_task_id = $this->_find_admission_task_id_for_user();
@@ -295,8 +307,8 @@ class Incentiveapi extends CI_Controller {
 		$show_recovery_portal = $recovery_task_id
 			&& ($this->_is_admin() || $this->_access_flag('recovery_portal'));
 		$show_admission_portal = !empty($admission_task_id);
-		$show_recovery_tasks = $can_manage;
-		$show_admission_tasks = $can_manage;
+		$show_recovery_tasks = $can_manage_recovery;
+		$show_admission_tasks = $can_manage_admission;
 
 		$sections = array();
 		if ($show_recovery_portal || $show_recovery_tasks) {
@@ -326,7 +338,9 @@ class Incentiveapi extends CI_Controller {
 		$this->_json(array(
 			'success' => true,
 			'role' => isset($this->current_user['role']) ? $this->current_user['role'] : null,
-			'can_manage' => $can_manage,
+			'can_manage' => $can_manage_recovery || $can_manage_admission,
+			'can_manage_recovery' => $can_manage_recovery,
+			'can_manage_admission' => $can_manage_admission,
 			'can_portal' => $show_recovery_portal || $show_admission_portal,
 			'show_recovery_portal' => (bool)$show_recovery_portal,
 			'show_admission_portal' => (bool)$show_admission_portal,
@@ -447,7 +461,7 @@ class Incentiveapi extends CI_Controller {
 
 	public function recovery_tasks()
 	{
-		$this->_assert_manage();
+		$this->_assert_recovery_manage();
 
 		$this->db->select(
 			'recovery_management.*, designations.designation_name, departments.department_name',
@@ -503,7 +517,7 @@ class Incentiveapi extends CI_Controller {
 		$method = $_SERVER['REQUEST_METHOD'];
 
 		if ($method === 'GET') {
-			$this->_assert_manage();
+			$this->_assert_recovery_manage();
 			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
 			$row = $this->db->get_where('recovery_management', array('recovery_management_id' => $id))->row_array();
 			if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
@@ -515,7 +529,7 @@ class Incentiveapi extends CI_Controller {
 		}
 
 		if ($method === 'POST') {
-			$this->_assert_manage();
+			$this->_assert_recovery_manage();
 			$body = $this->_body();
 			$rules_in = isset($body['rules']) && is_array($body['rules']) ? $body['rules'] : array();
 
@@ -589,7 +603,7 @@ class Incentiveapi extends CI_Controller {
 		}
 
 		if ($method === 'DELETE') {
-			$this->_assert_manage();
+			$this->_assert_recovery_manage();
 			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
 			$this->db->where('recovery_management_id', $id);
 			$this->db->delete('recovery_management_rules');
@@ -1898,7 +1912,7 @@ class Incentiveapi extends CI_Controller {
 
 	public function admission_tasks()
 	{
-		$this->_assert_manage();
+		$this->_assert_admission_manage();
 
 		$this->db->select('*');
 		$this->db->from('admission_management_incentives');
@@ -1947,7 +1961,7 @@ class Incentiveapi extends CI_Controller {
 		$method = $_SERVER['REQUEST_METHOD'];
 
 		if ($method === 'GET') {
-			$this->_assert_manage();
+			$this->_assert_admission_manage();
 			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
 			$row = $this->db->get_where('admission_management_incentives', array('incentive_id' => $id))->row_array();
 			if (!$row) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
@@ -1958,7 +1972,7 @@ class Incentiveapi extends CI_Controller {
 		}
 
 		if ($method === 'POST') {
-			$this->_assert_manage();
+			$this->_assert_admission_manage();
 			$body = $this->_body();
 			$rules_in = isset($body['rules']) && is_array($body['rules']) ? $body['rules'] : array();
 
@@ -2024,7 +2038,7 @@ class Incentiveapi extends CI_Controller {
 		}
 
 		if ($method === 'DELETE') {
-			$this->_assert_manage();
+			$this->_assert_admission_manage();
 			if (!$id) $this->_json(array('success' => false, 'message' => 'id required'), 422);
 			$this->db->where('admission_incentive_id', $id);
 			$this->db->delete('admission_management_rules');

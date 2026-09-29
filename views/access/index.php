@@ -626,9 +626,11 @@
                                             <label class="col-md-1 control-label"><strong>Incentive Management</strong></label>
                                             <div class="col-md-11 checkbox-list">
                                                 <label class="checkbox-inline">
-                                                    <input type="checkbox" id="inlineCheckbox1" name="recovery_portal" value="1" <?php if(@$access_values[0]['recovery_portal']!=NULL){echo 'checked';}?> /> Incentive Portal </label>
+                                                    <input type="checkbox" id="inlineCheckbox1" name="recovery_portal" value="1" <?php if(@$access_values[0]['recovery_portal']!=NULL){echo 'checked';}?> /> Recovery Portal </label>
                                                 <label class="checkbox-inline">
-                                                    <input type="checkbox" id="inlineCheckbox1" name="all_users_recovery" value="1" <?php if(@$access_values[0]['all_users_recovery']!=NULL){echo 'checked';}?> /> All Users Incentive Portal</label>
+                                                    <input type="checkbox" id="inlineCheckbox1" name="all_users_recovery" value="1" <?php if(@$access_values[0]['all_users_recovery']!=NULL){echo 'checked';}?> /> All Users Recovery Portal</label>
+                                                <label class="checkbox-inline">
+                                                    <input type="checkbox" id="inlineCheckbox1" name="all_users_admission" value="1" <?php if(@$access_values[0]['all_users_admission']!=NULL){echo 'checked';}?> /> All Users Admission Portal</label>
 
                                             </div>
                                         </div>
