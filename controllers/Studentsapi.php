@@ -31,6 +31,7 @@ class Studentsapi extends CI_Controller {
 		}
 		$this->load->model('student');
 		$this->load->model('council');
+		$this->load->model('Hbl_model');
 		$this->_ensure_student_schema();
 	}
 
@@ -229,6 +230,7 @@ class Studentsapi extends CI_Controller {
 			'fee_by_bank' => $this->_perm('fee_by_bank'),
 			'fee_by_cash' => $this->_perm('fee_by_cash'),
 			'fee_by_paypro' => $this->_perm('fee_by_paypro'),
+			'fee_by_hbl' => $this->_perm('fee_by_hbl'),
 			'fine_remove' => $this->_perm('fine_remove') || $this->_perm('remove_fine'),
 			'remove_fine' => $this->_perm('remove_fine') || $this->_perm('fine_remove'),
 			'change_exam_no_in_payments' => $this->_perm('change_exam_no_in_payments'),
@@ -462,6 +464,7 @@ class Studentsapi extends CI_Controller {
 			'bank' => 'fee_by_bank',
 			'college' => 'fee_by_cash',
 			'pay_pro' => 'fee_by_paypro',
+			'hbl' => 'fee_by_hbl',
 		);
 		$key = isset($map[$pay_through]) ? $map[$pay_through] : null;
 		if (!$key || !$this->_perm($key)) {
@@ -3634,6 +3637,7 @@ class Studentsapi extends CI_Controller {
 		$challans = isset($body['challans']) ? $body['challans'] : '';
 		$actual_amount = isset($body['actual_amount']) ? $body['actual_amount'] : 0;
 		$bill_url = '';
+		$hbl_invoice = null;
 
 		// Legacy: PayPro creates bill first; paid=1 only after PayPro IPN (Paypro controller).
 		if ($pay_through === 'pay_pro') {
@@ -3657,6 +3661,26 @@ class Studentsapi extends CI_Controller {
 			if ($bill_url === '' || $bill_url === null) {
 				$this->_json(array('success' => false, 'message' => 'PayPro bill creation failed'), 502);
 			}
+		}
+		if ($pay_through === 'hbl') {
+			do {
+				$consumer_number = $this->_new_challan_no();
+				$existing_hbl_invoice = $this->Hbl_model->get_invoice_by_consumer_no($consumer_number);
+			} while ($existing_hbl_invoice);
+			$this->Hbl_model->create_invoice(array(
+				'consumer_number' => $consumer_number,
+				'student_id' => $student_id,
+				'challan_ids' => $challans,
+				'amount' => $actual_amount,
+				'status' => 'PENDING',
+				'created_at' => date('Y-m-d H:i:s'),
+			));
+			$hbl_invoice = array(
+				'consumer_number' => (string)$consumer_number,
+				'one_bill_invoice' => '1016205228' . $consumer_number,
+				'amount' => (float)$actual_amount,
+				'challans' => $challans,
+			);
 		}
 
 		foreach ($payment_ids as $payment_id) {
@@ -3695,7 +3719,7 @@ class Studentsapi extends CI_Controller {
 				if (@$body['late_fee_fine_status'] === 'new') $new_fine = (float)@$body['remove_fine_amount'];
 			}
 
-			if ($pay_through === 'pay_pro') {
+			if ($pay_through === 'pay_pro' || $pay_through === 'hbl') {
 				// Legacy pay_pro path: do NOT set paid=1 / paid_challans / merged_challan.
 				// Paypro IPN marks paid when customer completes payment.
 				$data = array(
@@ -3814,6 +3838,13 @@ class Studentsapi extends CI_Controller {
 				'success' => true,
 				'message' => 'Redirecting to PayPro',
 				'bill_url' => $bill_url,
+			));
+		}
+		if ($pay_through === 'hbl') {
+			$this->_json(array(
+				'success' => true,
+				'message' => 'HBL invoice ready',
+				'hbl_invoice' => $hbl_invoice,
 			));
 		}
 

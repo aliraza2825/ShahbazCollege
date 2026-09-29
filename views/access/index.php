@@ -748,6 +748,8 @@
                                                 <label class="checkbox-inline">
                                                     <input type="checkbox" id="inlineCheckbox2" name="fee_by_paypro" value="1" <?php if(@$access_values[0]['fee_by_paypro']!=NULL){echo 'checked';}?> /> Receive By PayPro  </label>
                                                 <label class="checkbox-inline">
+                                                    <input type="checkbox" id="inlineCheckbox2" name="fee_by_hbl" value="1" <?php if(@$access_values[0]['fee_by_hbl']!=NULL){echo 'checked';}?> /> Receive By HBL  </label>
+                                                <label class="checkbox-inline">
                                                     <input type="checkbox" id="inlineCheckbox2" name="receipt_book" value="1" <?php if(@$access_values[0]['receipt_book']!=NULL){echo 'checked';}?> /> Receive By Receipt Book  </label>
                                                 <label class="checkbox-inline">
                                                     <input type="checkbox" id="inlineCheckbox2" name="computer_challan" value="1" <?php if(@$access_values[0]['computer_challan']!=NULL){echo 'checked';}?> /> Receive By Computer Challan  </label>

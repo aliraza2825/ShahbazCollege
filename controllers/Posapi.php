@@ -306,6 +306,7 @@ class Posapi extends CI_Controller {
 			'fee_by_bank' => $is_admin || $this->_access_perm('fee_by_bank', $user),
 			'fee_by_cash' => $is_admin || $this->_access_perm('fee_by_cash', $user),
 			'fee_by_paypro' => $is_admin || $this->_access_perm('fee_by_paypro', $user),
+			'fee_by_hbl' => $is_admin || $this->_access_perm('fee_by_hbl', $user),
 			'fine_remove' => $is_admin || $this->_access_perm('fine_remove', $user) || $this->_access_perm('remove_fine', $user),
 			'remove_fine' => $is_admin || $this->_access_perm('remove_fine', $user) || $this->_access_perm('fine_remove', $user),
 			'change_exam_no_in_payments' => $is_admin || $this->_access_perm('change_exam_no_in_payments', $user),

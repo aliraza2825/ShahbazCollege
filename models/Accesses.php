@@ -105,6 +105,16 @@ class Accesses extends CI_Model {
         $this->db->set('all_users_admission', $this->input->post('all_users_admission'));
     }
 
+    private function setHblPaymentAccessField()
+    {
+        foreach (array('access_rules', 'access') as $table) {
+            if ($this->db->table_exists($table) && !$this->db->field_exists('fee_by_hbl', $table)) {
+                $this->db->query("ALTER TABLE `$table` ADD `fee_by_hbl` TINYINT(1) NULL DEFAULT NULL");
+            }
+        }
+        $this->db->set('fee_by_hbl', $this->input->post('fee_by_hbl'));
+    }
+
     /** Fine-grained actions shown in the Inventory product side panel. */
     private function inventoryProductActionAccessFields()
     {
@@ -1166,6 +1176,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
         $this->setConstructionAccessFields();
         $this->setAdmissionIncentiveAccessField();
+        $this->setHblPaymentAccessField();
         $this->setPosAccessFields();
         $this->setInventoryProductActionAccessFields();
         $this->setCouncilReportDateAccessFields();
@@ -2025,6 +2036,7 @@ class Accesses extends CI_Model {
         $this->db->set('council_report_add_information_can_add_expense',$council_report_add_information_can_add_expense);
         $this->setConstructionAccessFields();
         $this->setAdmissionIncentiveAccessField();
+        $this->setHblPaymentAccessField();
         $this->setPosAccessFields();
         $this->setInventoryProductActionAccessFields();
         $this->setCouncilReportDateAccessFields();

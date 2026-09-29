@@ -131,7 +131,13 @@ class HblApi extends CI_Controller
                 ]);
             }
 
-            $bill = $this->Hbl_model->get_bill_by_consumer_no($consumerNumber);
+            $invoice = $this->Hbl_model->get_invoice_by_consumer_no($consumerNumber);
+            $bill = $invoice ? array(
+                'paid' => $invoice['status'] === 'PAID' ? 1 : 0,
+                'customer_name' => $invoice['customer_name'],
+                'amount' => $invoice['amount'],
+                'dead_line' => date('Y-m-d'),
+            ) : $this->Hbl_model->get_bill_by_consumer_no($consumerNumber);
 
             if (empty($bill)) {
                 return $this->jsonResponse([
@@ -205,7 +211,11 @@ class HblApi extends CI_Controller
                 ], 400);
             }
 
-            $bill = $this->Hbl_model->get_bill_by_consumer_no($consumerNumber);
+            $invoice = $this->Hbl_model->get_invoice_by_consumer_no($consumerNumber);
+            $bill = $invoice ? array(
+                'paid' => $invoice['status'] === 'PAID' ? 1 : 0,
+                'amount' => $invoice['amount'],
+            ) : $this->Hbl_model->get_bill_by_consumer_no($consumerNumber);
 
             if (empty($bill)) {
                 return $this->jsonResponse([
@@ -223,6 +233,7 @@ class HblApi extends CI_Controller
 
             // duplicate check by HBL transaction id
             $dupTxn = $this->Hbl_model->get_by_transaction_id($transactionId);
+            if (empty($dupTxn)) $dupTxn = $this->Hbl_model->get_invoice_by_transaction_id($transactionId);
             if (!empty($dupTxn)) {
                 return $this->jsonResponse([
                     'ReturnValue' => '4',
@@ -233,6 +244,7 @@ class HblApi extends CI_Controller
 
             // duplicate check by HBL reference no
             $dupRef = $this->Hbl_model->get_by_reference_number($referenceNumber);
+            if (empty($dupRef)) $dupRef = $this->Hbl_model->get_invoice_by_reference_number($referenceNumber);
             if (!empty($dupRef)) {
                 return $this->jsonResponse([
                     'ReturnValue' => '4',
@@ -269,7 +281,9 @@ class HblApi extends CI_Controller
                 'paid_by'          => 'HBL'
             ];
 
-            $updated = $this->Hbl_model->mark_bill_paid($consumerNumber, $updateData);
+            $updated = $invoice
+                ? $this->Hbl_model->mark_invoice_paid($invoice, $transactionId, $referenceNumber, $this->todayDate())
+                : $this->Hbl_model->mark_bill_paid($consumerNumber, $updateData);
 
             if (!$updated) {
                 return $this->jsonResponse([
@@ -332,7 +346,11 @@ class HblApi extends CI_Controller
                 ]);
             }
 
-            $bill = $this->Hbl_model->get_by_transaction_id($originalTransactionId);
+            $invoice = $this->Hbl_model->get_invoice_by_transaction_id($originalTransactionId);
+            $bill = $invoice ? array(
+                'id' => 0,
+                'paid' => $invoice['status'] === 'PAID' ? 1 : 0,
+            ) : $this->Hbl_model->get_by_transaction_id($originalTransactionId);
 
             if (empty($bill)) {
                 return $this->jsonResponse([
@@ -361,7 +379,9 @@ class HblApi extends CI_Controller
             // tid_no aur bank_challan_no clear karne hain ya nahi:
             // Agar history preserve karni hai to tid_no clear na karo.
             // Main yahan bill unpaid kar raha hoon aur reverse log alag table me save kar raha hoon.
-            $updated = $this->Hbl_model->mark_bill_unpaid_by_transaction_id($originalTransactionId, $updateData);
+            $updated = $invoice
+                ? $this->Hbl_model->reverse_invoice($invoice)
+                : $this->Hbl_model->mark_bill_unpaid_by_transaction_id($originalTransactionId, $updateData);
 
             if (!$updated) {
                 $this->db->trans_rollback();
@@ -372,10 +392,18 @@ class HblApi extends CI_Controller
                 ], 500);
             }
 
+            $reversedPaymentId = $bill['id'];
+            if ($invoice) {
+                $firstChild = $this->db->select('id')->get_where('payments', array(
+                    'student_id' => $invoice['student_id'],
+                    'challan_no' => trim(explode(',', $invoice['challan_ids'])[0]),
+                ))->row_array();
+                $reversedPaymentId = $firstChild ? $firstChild['id'] : 0;
+            }
             $logData = [
                 'original_transaction_id' => $originalTransactionId,
                 'reverse_transaction_id'  => $reverseTransactionId,
-                'payment_id'              => $bill['id'],
+                'payment_id'              => $reversedPaymentId,
                 'created_at'              => $this->nowDateTime()
             ];
 
