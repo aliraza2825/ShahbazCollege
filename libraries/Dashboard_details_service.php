@@ -786,8 +786,11 @@ class Dashboard_details_service {
                 'father_occupation_id', 'mother_occupation_id'
             );
             foreach ($fields as $f) {
-                $new = isset($req[$f]) ? (string) $req[$f] : '';
-                $old = ($student && isset($student[$f])) ? (string) $student[$f] : '';
+                // Treat NULL, an empty value and incidental surrounding whitespace as
+                // the same value. Otherwise the UI reports misleading changes such as
+                // "ANAM -> ANAM" or an empty value changing to another empty value.
+                $new = isset($req[$f]) ? trim((string) $req[$f]) : '';
+                $old = ($student && isset($student[$f])) ? trim((string) $student[$f]) : '';
                 if ($new !== $old) {
                     $label = ucwords(str_replace('_', ' ', $f));
                     if ($f === 'class_id') {
