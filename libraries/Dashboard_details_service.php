@@ -772,12 +772,32 @@ class Dashboard_details_service {
         foreach ($rows as $req) {
             $student = $this->ci->db->get_where('students', array('student_id' => $req['student_id']))->row_array();
             $changes = array();
-            $fields = array('first_name', 'last_name', 'father_name', 'roll_no', 'cnic', 'mobile', 'email', 'total_fee', 'status');
+            // A request stores a full snapshot of the proposed student record.  Compare
+            // every editable value, not only the small subset that happened to be shown
+            // on the first React version of this screen.
+            $fields = array(
+                'course_id', 'study_campus', 'first_name', 'last_name', 'father_name', 'mother_name',
+                'gender', 'caste', 'religion', 'qualification', 'class_id', 'email', 'cnic',
+                'roll_no', 'date_of_birth', 'district', 'tehsil', 'mark_of_identification',
+                'place_of_birth', 'registration_date', 'total_fee', 'blood_group', 'city',
+                'address', 'mobile', 'emergency_no', 'status', 'contractor_id', 'contract_id',
+                'board', 'section', 'shift', 'study_type', 'study_session', 'books_1', 'books_2',
+                'student_card', 'reference_user_id', 'student_occupation_id',
+                'father_occupation_id', 'mother_occupation_id'
+            );
             foreach ($fields as $f) {
                 $new = isset($req[$f]) ? (string) $req[$f] : '';
                 $old = ($student && isset($student[$f])) ? (string) $student[$f] : '';
                 if ($new !== $old) {
-                    $changes[] = array('field' => $f, 'requested' => $new, 'current' => $old);
+                    $label = ucwords(str_replace('_', ' ', $f));
+                    if ($f === 'class_id') {
+                        $old_class = $old !== '' ? $this->ci->db->select('name')->get_where('classes', array('class_id' => (int) $old))->row_array() : null;
+                        $new_class = $new !== '' ? $this->ci->db->select('name')->get_where('classes', array('class_id' => (int) $new))->row_array() : null;
+                        $old = $old_class && isset($old_class['name']) ? $old_class['name'] : $old;
+                        $new = $new_class && isset($new_class['name']) ? $new_class['name'] : $new;
+                        $label = 'Class';
+                    }
+                    $changes[] = array('field' => $label, 'requested' => $new, 'current' => $old);
                 }
             }
             $out[] = array(
