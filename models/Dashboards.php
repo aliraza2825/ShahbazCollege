@@ -489,6 +489,7 @@ class Dashboards extends CI_Model {
 		{
 			$this->db->where_in('campuses.campus_id', $campuses);
 		}
+		$this->db->order_by('update_student_requests.update_date', 'DESC');
 		$query = $this->db->get()->result_array();
 		return $query;
 	}
