@@ -247,8 +247,10 @@ class Incentiveapi extends CI_Controller {
 	/** Same "users assigned to a designation" lookup used by all_assign_task.php / all_admission_assign_task.php views. */
 	private function _matching_users($designation_id)
 	{
-		$where = '(designation_id ="' . $designation_id . '" or designation_id like "%' . $designation_id . ',%" or designation_id like "%,' . $designation_id . '%") and status = "1"';
-		return $this->db->get_where('users', $where)->result_array();
+		return $this->db->query(
+			'SELECT * FROM users WHERE FIND_IN_SET(?, REPLACE(designation_id, " ", "")) > 0 AND status = "1"',
+			array((string)(int)$designation_id)
+		)->result_array();
 	}
 
 	private function _campus_names($campus_ids)
