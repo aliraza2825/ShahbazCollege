@@ -1686,9 +1686,20 @@ class Hrapi extends CI_Controller {
 
 	public function interviews()
 	{
+		$interview_date = trim((string)$this->input->get('interview_date'));
+		$submitted_date = trim((string)$this->input->get('submitted_date'));
+
 		$this->db->select('interview.*, campuses.campus_name');
 		$this->db->from('interview');
 		$this->db->join('campuses', 'campuses.campus_id=interview.campus_id', 'left');
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $interview_date)) {
+			$this->db->where('interview.date', $interview_date);
+		}
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitted_date)) {
+			$submitted_date_end = date('Y-m-d', strtotime($submitted_date . ' +1 day'));
+			$this->db->where('interview.submitted_at >=', $submitted_date . ' 00:00:00');
+			$this->db->where('interview.submitted_at <', $submitted_date_end . ' 00:00:00');
+		}
 		$this->db->order_by('interview.interview_id', 'DESC');
 		$rows = $this->db->get()->result_array();
 		$this->_json(array('success' => true, 'data' => $rows));
@@ -1721,10 +1732,17 @@ class Hrapi extends CI_Controller {
 			$this->db->set('expert_in', is_array($expert_in) ? implode(',', $expert_in) : $expert_in);
 			$cv = isset($body['cv_url']) ? $body['cv_url'] : (isset($body['cv']) ? $body['cv'] : '');
 			$this->db->set('cv', $cv);
+			$interview_date = isset($body['date']) ? trim((string)$body['date']) : '';
+			$has_valid_interview_date = preg_match('/^\d{4}-\d{2}-\d{2}$/', $interview_date) === 1;
+			if ($has_valid_interview_date) {
+				$this->db->set('date', $interview_date);
+			}
 
 			if ($id === 0) {
 				$this->db->set('add_by', $this->_current_user_name());
-				$this->db->set('date', date('Y-m-d'));
+				if (!$has_valid_interview_date) {
+					$this->db->set('date', date('Y-m-d'));
+				}
 				$this->db->insert('interview');
 				$this->_json(array('success' => true, 'id' => (int)$this->db->insert_id()));
 			}
