@@ -1686,18 +1686,29 @@ class Hrapi extends CI_Controller {
 
 	public function interviews()
 	{
-		$interview_date = trim((string)$this->input->get('interview_date'));
-		$submitted_date = trim((string)$this->input->get('submitted_date'));
+		$position = trim((string)$this->input->get('position'));
+		$interview_date_from = trim((string)$this->input->get('interview_date_from'));
+		$interview_date_to = trim((string)$this->input->get('interview_date_to'));
+		$submitted_date_from = trim((string)$this->input->get('submitted_date_from'));
+		$submitted_date_to = trim((string)$this->input->get('submitted_date_to'));
 
 		$this->db->select('interview.*, campuses.campus_name');
 		$this->db->from('interview');
 		$this->db->join('campuses', 'campuses.campus_id=interview.campus_id', 'left');
-		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $interview_date)) {
-			$this->db->where('interview.date', $interview_date);
+		if ($position !== '') {
+			$this->db->like('interview.job_post_wanted', $position);
 		}
-		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitted_date)) {
-			$submitted_date_end = date('Y-m-d', strtotime($submitted_date . ' +1 day'));
-			$this->db->where('interview.submitted_at >=', $submitted_date . ' 00:00:00');
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $interview_date_from)) {
+			$this->db->where('interview.date >=', $interview_date_from);
+		}
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $interview_date_to)) {
+			$this->db->where('interview.date <=', $interview_date_to);
+		}
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitted_date_from)) {
+			$this->db->where('interview.submitted_at >=', $submitted_date_from . ' 00:00:00');
+		}
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $submitted_date_to)) {
+			$submitted_date_end = date('Y-m-d', strtotime($submitted_date_to . ' +1 day'));
 			$this->db->where('interview.submitted_at <', $submitted_date_end . ' 00:00:00');
 		}
 		$this->db->order_by('interview.interview_id', 'DESC');
