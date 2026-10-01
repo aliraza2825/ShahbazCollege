@@ -1252,12 +1252,22 @@ class Inventoryapi extends CI_Controller {
 			$this->db->select('product_names.product_name_id, product_names.product_name, product_names.sub_of');
 		} else {
 			$this->_ensure_low_stock_alert_column();
-			$this->db->select('product_names.*,
-				(SELECT COUNT(*) FROM products p
-				 WHERE p.product_name_id = product_names.product_name_id
-				   AND p.consume = 0 AND p.sold = 0) AS stock_count', false);
+			// Aggregate stock once and join it to the catalogue. The old correlated
+			// subquery scanned products again for every product-name row.
+			$this->db->select('product_names.*, COALESCE(stock.stock_count, 0) AS stock_count', false);
 		}
 		$this->db->from('product_names');
+		if (!$lightweight) {
+			$this->db->join(
+				'(SELECT product_name_id, COUNT(*) AS stock_count
+				  FROM products
+				  WHERE consume = 0 AND sold = 0
+				  GROUP BY product_name_id) stock',
+				'stock.product_name_id = product_names.product_name_id',
+				'left',
+				false
+			);
+		}
 		if ($q !== '') $this->db->like('product_name', $q);
 		$this->db->order_by('product_names.product_name', 'ASC');
 		$this->db->limit(5000);
