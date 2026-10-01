@@ -157,6 +157,9 @@ class Inventoryapi extends CI_Controller {
 				`comment` VARCHAR(255) NULL DEFAULT NULL,
 				`images_json` TEXT NULL DEFAULT NULL,
 				`request_key` VARCHAR(64) NULL DEFAULT NULL,
+				`reversed_by` VARCHAR(255) NULL DEFAULT NULL,
+				`reversed_at` DATETIME NULL DEFAULT NULL,
+				`reversal_reason` VARCHAR(255) NULL DEFAULT NULL,
 				PRIMARY KEY (`id`),
 				KEY `purchase_request_id` (`purchase_request_id`),
 				KEY `purchase_no` (`purchase_no`)
@@ -167,6 +170,17 @@ class Inventoryapi extends CI_Controller {
 		}
 		if (!$this->db->field_exists('request_key', 'purchase_gate_receives')) {
 			$this->db->query('ALTER TABLE `purchase_gate_receives` ADD `request_key` VARCHAR(64) NULL DEFAULT NULL');
+		}
+		$reverse_cols = array(
+			'reversed_by' => 'ALTER TABLE `purchase_gate_receives` ADD `reversed_by` VARCHAR(255) NULL DEFAULT NULL',
+			'reversed_at' => 'ALTER TABLE `purchase_gate_receives` ADD `reversed_at` DATETIME NULL DEFAULT NULL',
+			'reversal_reason' => 'ALTER TABLE `purchase_gate_receives` ADD `reversal_reason` VARCHAR(255) NULL DEFAULT NULL',
+		);
+		foreach ($reverse_cols as $col => $sql) {
+			if (!$this->db->field_exists($col, 'purchase_gate_receives')) $this->db->query($sql);
+		}
+		if ($this->db->table_exists('products') && !$this->db->field_exists('gate_receive_id', 'products')) {
+			$this->db->query('ALTER TABLE `products` ADD `gate_receive_id` INT(11) NULL DEFAULT NULL, ADD KEY `gate_receive_id` (`gate_receive_id`)');
 		}
 	}
 
@@ -2146,6 +2160,9 @@ class Inventoryapi extends CI_Controller {
 			}
 		}
 		$gate_receives = array();
+		$can_reverse_gate = $this->_is_admin()
+			|| $this->_access_flag('grn_gate_approval')
+			|| $this->_access_flag('grn_approval');
 		if ($this->db->table_exists('purchase_gate_receives')) {
 			$this->db->select('purchase_gate_receives.*, product_names.product_name', false);
 			$this->db->from('purchase_gate_receives');
@@ -2156,6 +2173,8 @@ class Inventoryapi extends CI_Controller {
 			$this->db->order_by('purchase_gate_receives.id', 'DESC');
 			$gate_receives = $this->db->get()->result_array();
 			foreach ($gate_receives as &$receive) {
+				$receive['can_reverse'] = $can_reverse_gate
+					&& empty($receive['reversed_at']);
 				$files = !empty($receive['images_json']) ? json_decode($receive['images_json'], true) : array();
 				if (!is_array($files)) $files = array();
 				$receive['image_files'] = array_values($files);
@@ -2191,6 +2210,7 @@ class Inventoryapi extends CI_Controller {
 				'vendors_with_agreement' => $vendors_with_agreement,
 				'vendors_with_lines' => $vendors_with_lines,
 				'gate_receives' => $gate_receives,
+				'can_reverse_gate_receives' => $can_reverse_gate,
 				'steps' => $steps,
 				'current_step' => $current,
 				// Fully complete only when stock entered AND all installments settled
@@ -3247,6 +3267,7 @@ class Inventoryapi extends CI_Controller {
 				$this->_json(array('success' => false, 'message' => 'This received quantity is already entered in stock (line ' . $pr_id . ')'), 409);
 			}
 			$sale_amount = (float)(isset($pr['purchase_price']) ? $pr['purchase_price'] : 0);
+			$inserted_product_ids = array();
 			for ($i = 0; $i < $stock_qty; $i++) {
 				$this->db->insert('products', $this->_product_insert_row(array(
 					'product_name_id' => $pr['product_name_id'],
@@ -3258,6 +3279,7 @@ class Inventoryapi extends CI_Controller {
 					'purchase_no' => isset($pr['purchase_no']) ? $pr['purchase_no'] : '',
 					'estimated_price' => (int)round($sale_amount),
 				)));
+				$inserted_product_ids[] = (int)$this->db->insert_id();
 			}
 			$new_grn_got = $grn_got + $stock_qty;
 			$this->db->where('purchase_request_id', $pr_id)->update('purchase_requests', array(
@@ -3280,6 +3302,12 @@ class Inventoryapi extends CI_Controller {
 				'images_json' => $image_files_json,
 				'request_key' => $request_key !== '' ? $request_key : null,
 			));
+			$gate_receive_id = (int)$this->db->insert_id();
+			if ($gate_receive_id > 0 && count($inserted_product_ids)
+				&& $this->db->field_exists('gate_receive_id', 'products')) {
+				$this->db->where_in('product_id', $inserted_product_ids)
+					->update('products', array('gate_receive_id' => $gate_receive_id));
+			}
 			$updated++;
 			if ($fully) $completed++;
 			$entries[] = array(
@@ -3307,6 +3335,118 @@ class Inventoryapi extends CI_Controller {
 			'message' => $completed === $updated && $updated > 0
 				? 'Gate entry saved — GRN created and received stock added to inventory'
 				: 'Gate entry saved — received stock added to inventory; more can arrive later',
+		));
+	}
+
+	/** Reverse one mistaken gate receipt and its corresponding available stock. */
+	public function gate_receive_reverse($id = 0)
+	{
+		$id = (int)$id;
+		if (!$id) $this->_json(array('success' => false, 'message' => 'Gate receive id required'), 422);
+		if (!$this->_is_admin()
+			&& !$this->_access_flag('grn_gate_approval')
+			&& !$this->_access_flag('grn_approval')) {
+			$this->_json(array('success' => false, 'message' => 'You do not have permission to reverse gate entries'), 403);
+		}
+
+		$this->_ensure_journey_audit_columns();
+		$body = $this->_body();
+		$reason = isset($body['reason']) ? trim((string)$body['reason']) : '';
+		if ($reason === '') $reason = 'Mistaken gate entry';
+		$reason = substr($reason, 0, 255);
+
+		$this->db->trans_begin();
+		$receive = $this->db->query(
+			'SELECT * FROM purchase_gate_receives WHERE id = ? FOR UPDATE',
+			array($id)
+		)->row_array();
+		if (!$receive) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => 'Gate receive entry not found'), 404);
+		}
+		if (!empty($receive['reversed_at'])) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => 'This gate entry is already reversed'), 409);
+		}
+
+		$pr_id = (int)$receive['purchase_request_id'];
+		$qty = (int)$receive['quantity'];
+		$pr = $this->db->query(
+			'SELECT * FROM purchase_requests WHERE purchase_request_id = ? FOR UPDATE',
+			array($pr_id)
+		)->row_array();
+		if (!$pr || $qty <= 0) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => 'Linked purchase line is invalid'), 422);
+		}
+
+		$removed = 0;
+		$has_link = $this->db->field_exists('gate_receive_id', 'products');
+		$linked_total = 0;
+		if ($has_link) {
+			$linked_total = (int)$this->db->where('gate_receive_id', $id)->count_all_results('products');
+		}
+		if ($linked_total > 0) {
+			$available = (int)$this->db
+				->where(array('gate_receive_id' => $id, 'consume' => 0, 'sold' => 0, 'status' => 1))
+				->count_all_results('products');
+			if ($available < $qty) {
+				$this->db->trans_rollback();
+				$this->_json(array('success' => false, 'message' => 'Cannot reverse: some stock from this receipt has already been used, sold, moved, or cleared'), 409);
+			}
+			$this->db->where(array('gate_receive_id' => $id, 'consume' => 0, 'sold' => 0, 'status' => 1))->delete('products');
+			$removed = $this->db->affected_rows();
+		} else {
+			// Legacy receipts predate gate_receive_id. Match the exact PR product and
+			// original location, then remove the newest still-available units only.
+			$params = array(
+				isset($pr['purchase_no']) ? $pr['purchase_no'] : '',
+				(int)$pr['product_name_id'], (int)$pr['campus_id'],
+				(int)$pr['room_id'], (int)$pr['subroom_id'],
+			);
+			$where = 'purchase_no = ? AND product_name_id = ? AND campus_id = ? AND room_id = ? AND subroom_id = ? AND consume = 0 AND sold = 0 AND status = 1';
+			$count_row = $this->db->query('SELECT COUNT(*) AS qty FROM products WHERE ' . $where, $params)->row_array();
+			$available = $count_row ? (int)$count_row['qty'] : 0;
+			if ($available < $qty) {
+				$this->db->trans_rollback();
+				$this->_json(array('success' => false, 'message' => 'Cannot reverse: enough unused stock from this legacy receipt is not available'), 409);
+			}
+			$this->db->query(
+				'DELETE FROM products WHERE ' . $where . ' ORDER BY product_id DESC LIMIT ' . $qty,
+				$params
+			);
+			$removed = $this->db->affected_rows();
+		}
+
+		if ($removed !== $qty) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => 'Stock reversal count did not match the gate entry'), 409);
+		}
+
+		$ordered = (int)$pr['product_quantity'];
+		$new_gate = max(0, (int)$pr['gate_received_qty'] - $qty);
+		$new_grn = max(0, (int)$pr['grn_received_qty'] - $qty);
+		$this->db->where('purchase_request_id', $pr_id)->update('purchase_requests', array(
+			'gate_received_qty' => $new_gate,
+			'grn_received_qty' => $new_grn,
+			'gate_approval' => $new_gate >= $ordered ? 1 : 0,
+			'approval' => $new_grn >= $ordered ? 1 : 0,
+		));
+		$this->db->where('id', $id)->update('purchase_gate_receives', array(
+			'reversed_by' => $this->_actor_name(),
+			'reversed_at' => date('Y-m-d H:i:s'),
+			'reversal_reason' => $reason,
+		));
+
+		if ($this->db->trans_status() === false) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => 'Gate reversal failed'), 500);
+		}
+		$this->db->trans_commit();
+		$this->_json(array(
+			'success' => true,
+			'reversed_quantity' => $qty,
+			'message' => 'Gate entry reversed and ' . $qty . ' stock units removed',
 		));
 	}
 
