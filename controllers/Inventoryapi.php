@@ -1243,13 +1243,20 @@ class Inventoryapi extends CI_Controller {
 
 	public function names()
 	{
-		$this->_ensure_low_stock_alert_column();
 		// Full catalogue for tree UI (legacy add_product_name). Optional q filters by name.
 		$q = trim((string)$this->input->get('q'));
-		$this->db->select('product_names.*,
-			(SELECT COUNT(*) FROM products p
-			 WHERE p.product_name_id = product_names.product_name_id
-			   AND p.consume = 0 AND p.sold = 0) AS stock_count', false);
+		$lightweight = (int)$this->input->get('lightweight') === 1;
+		if ($lightweight) {
+			// Purchase-request forms only need the catalogue hierarchy. Avoid the
+			// expensive per-name stock subquery and schema check on this hot path.
+			$this->db->select('product_names.product_name_id, product_names.product_name, product_names.sub_of');
+		} else {
+			$this->_ensure_low_stock_alert_column();
+			$this->db->select('product_names.*,
+				(SELECT COUNT(*) FROM products p
+				 WHERE p.product_name_id = product_names.product_name_id
+				   AND p.consume = 0 AND p.sold = 0) AS stock_count', false);
+		}
 		$this->db->from('product_names');
 		if ($q !== '') $this->db->like('product_name', $q);
 		$this->db->order_by('product_names.product_name', 'ASC');
