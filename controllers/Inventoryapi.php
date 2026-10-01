@@ -156,6 +156,7 @@ class Inventoryapi extends CI_Controller {
 				`received_at` DATETIME NULL DEFAULT NULL,
 				`comment` VARCHAR(255) NULL DEFAULT NULL,
 				`images_json` TEXT NULL DEFAULT NULL,
+				`request_key` VARCHAR(64) NULL DEFAULT NULL,
 				PRIMARY KEY (`id`),
 				KEY `purchase_request_id` (`purchase_request_id`),
 				KEY `purchase_no` (`purchase_no`)
@@ -163,6 +164,9 @@ class Inventoryapi extends CI_Controller {
 		}
 		if (!$this->db->field_exists('images_json', 'purchase_gate_receives')) {
 			$this->db->query('ALTER TABLE `purchase_gate_receives` ADD `images_json` TEXT NULL DEFAULT NULL');
+		}
+		if (!$this->db->field_exists('request_key', 'purchase_gate_receives')) {
+			$this->db->query('ALTER TABLE `purchase_gate_receives` ADD `request_key` VARCHAR(64) NULL DEFAULT NULL');
 		}
 	}
 
@@ -3135,6 +3139,8 @@ class Inventoryapi extends CI_Controller {
 			return preg_match('#^(s3/)?[A-Za-z0-9][A-Za-z0-9._-]*$#', $file) === 1;
 		}))), 0, 8);
 		$image_files_json = count($image_files) ? json_encode($image_files) : null;
+		$request_key = isset($body['request_key']) ? trim((string)$body['request_key']) : '';
+		if (!preg_match('/^[A-Za-z0-9_-]{12,64}$/', $request_key)) $request_key = '';
 
 		$items = array();
 		if (isset($body['items']) && is_array($body['items']) && count($body['items'])) {
@@ -3176,17 +3182,37 @@ class Inventoryapi extends CI_Controller {
 		$updated = 0;
 		$completed = 0;
 		$entries = array();
+		$request_key_checked = false;
+		$this->db->trans_begin();
 		foreach ($items as $it) {
 			$pr_id = (int)$it['purchase_request_id'];
 			$qty = (int)$it['quantity'];
-			$pr = $this->db->get_where('purchase_requests', array('purchase_request_id' => $pr_id))->row_array();
+			$pr = $this->db->query(
+				'SELECT * FROM purchase_requests WHERE purchase_request_id = ? FOR UPDATE',
+				array($pr_id)
+			)->row_array();
 			if (!$pr) {
+				$this->db->trans_rollback();
 				$this->_json(array('success' => false, 'message' => 'Line not found: ' . $pr_id), 404);
 			}
+			if (!$request_key_checked && $request_key !== '') {
+				$request_key_checked = true;
+				$duplicate = $this->db->get_where('purchase_gate_receives', array('request_key' => $request_key))->row_array();
+				if ($duplicate) {
+					$this->db->trans_commit();
+					$this->_json(array(
+						'success' => true,
+						'duplicate' => true,
+						'message' => 'Gate entry was already saved; duplicate request ignored',
+					));
+				}
+			}
 			if (empty($pr['purchased'])) {
+				$this->db->trans_rollback();
 				$this->_json(array('success' => false, 'message' => 'Payment agreement not done yet'), 422);
 			}
 			if (!empty($pr['gate_approval'])) {
+				$this->db->trans_rollback();
 				$this->_json(array(
 					'success' => false,
 					'message' => 'Already fully received at gate (line ' . $pr_id . ')',
@@ -3197,6 +3223,7 @@ class Inventoryapi extends CI_Controller {
 			if ($got < 0) $got = 0;
 			$remain = max(0, $ordered - $got);
 			if ($qty > $remain) {
+				$this->db->trans_rollback();
 				$this->_json(array(
 					'success' => false,
 					'message' => 'Qty too high for ' . (isset($pr['purchase_no']) ? $pr['purchase_no'] : 'item')
@@ -3216,6 +3243,7 @@ class Inventoryapi extends CI_Controller {
 			if ($grn_got < 0) $grn_got = 0;
 			$stock_qty = min($qty, max(0, $ordered - $grn_got));
 			if ($stock_qty <= 0) {
+				$this->db->trans_rollback();
 				$this->_json(array('success' => false, 'message' => 'This received quantity is already entered in stock (line ' . $pr_id . ')'), 409);
 			}
 			$sale_amount = (float)(isset($pr['purchase_price']) ? $pr['purchase_price'] : 0);
@@ -3250,6 +3278,7 @@ class Inventoryapi extends CI_Controller {
 				'received_at' => $now,
 				'comment' => $comment,
 				'images_json' => $image_files_json,
+				'request_key' => $request_key !== '' ? $request_key : null,
 			));
 			$updated++;
 			if ($fully) $completed++;
@@ -3262,6 +3291,11 @@ class Inventoryapi extends CI_Controller {
 				'gate_approval' => $fully,
 			);
 		}
+		if ($this->db->trans_status() === false) {
+			$this->db->trans_rollback();
+			$this->_json(array('success' => false, 'message' => 'Gate entry could not be saved'), 500);
+		}
+		$this->db->trans_commit();
 
 		$this->_json(array(
 			'success' => true,
