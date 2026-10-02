@@ -375,7 +375,7 @@ class Posapi extends CI_Controller {
 		return array(
 			'dashboard' => true,
 			'pos' => !empty($row['pos']),
-			'students' => $this->_any_access_flag($row, array('student_sidebar', 'student_add', 'student_all')),
+			'students' => $this->_any_access_flag($row, array('student_sidebar', 'student_add', 'student_all', 'admission_process_access')),
 			'online-applications' => !empty($row['online_application_access']),
 			// Legacy always shows Loans + My Attendence for every staff user;
 			// finer HR tabs are gated in Hrapi::meta / Sidebar.

@@ -16,7 +16,7 @@ class Access_service {
         'product_request_approval_campuses', 'purchase_campuses', 'pos_campuses',
         'council_report_colleges', 'council_report_courses', 'test_engine_subject_ids',
         'assignment_subject_ids', 'fee_dues_campus_ids', 'fee_recovery_class_ids',
-        'cities', 'other_cities_access', 'online_admission_campus_ids',
+        'cities', 'other_cities_access', 'online_admission_campus_ids', 'admission_process_campus_ids',
     );
 
     private static $FORM_ARRAY_FIELDS = array(
@@ -42,12 +42,31 @@ class Access_service {
         'class_ids' => 'class_ids',
         'fee_dues_campus_ids' => 'fee_dues_campus_ids',
         'fee_recovery_class_ids' => 'fee_recovery_class_ids',
+        'admission_process_campus_ids' => 'admission_process_campus_ids',
     );
 
     public function __construct()
     {
         $this->ci =& get_instance();
         $this->ci->load->model('accesses');
+        $this->ensure_admission_process_access_columns();
+    }
+
+    private function ensure_admission_process_access_columns()
+    {
+        $columns = array(
+            'admission_process_access' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'admission_process_edit' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'admission_process_verify' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'admission_process_report' => 'TINYINT(1) NOT NULL DEFAULT 0',
+            'admission_process_campus_ids' => 'TEXT NULL',
+        );
+        foreach (array('access', 'access_rules') as $table) {
+            if (!$this->ci->db->table_exists($table)) continue;
+            foreach ($columns as $name => $ddl) {
+                if (!$this->ci->db->field_exists($name, $table)) $this->ci->db->query("ALTER TABLE `$table` ADD `$name` $ddl");
+            }
+        }
     }
 
     public function assert_admin($user)
@@ -265,6 +284,17 @@ class Access_service {
             }
         }
         $flush();
+
+        $sections[] = array(
+            'title' => 'Student Admission Process',
+            'fields' => array(
+                array('name' => 'admission_process_access', 'label' => 'Admission Process Access', 'type' => 'checkbox'),
+                array('name' => 'admission_process_edit', 'label' => 'Update Admission Checklist', 'type' => 'checkbox'),
+                array('name' => 'admission_process_verify', 'label' => 'Final Admission Verification', 'type' => 'checkbox'),
+                array('name' => 'admission_process_report', 'label' => 'Admission Process Report', 'type' => 'checkbox'),
+                array('name' => 'admission_process_campus_ids', 'label' => 'Admission Process Campuses', 'type' => 'multiselect', 'optionsKey' => 'campuses'),
+            ),
+        );
 
         return array('sections' => $sections);
     }
@@ -494,6 +524,7 @@ class Access_service {
             'class_ids' => 'classes',
             'fee_dues_campus_ids' => 'campuses',
             'fee_recovery_class_ids' => 'classes',
+            'admission_process_campus_ids' => 'campuses',
         );
         return isset($map[$name]) ? $map[$name] : 'campuses';
     }
@@ -548,6 +579,19 @@ class Access_service {
             $this->ci->accesses->updateAccess();
         } else {
             $this->ci->accesses->addAccess();
+        }
+
+        $extra = array(
+            'admission_process_access' => !empty($prepared['admission_process_access']) ? 1 : 0,
+            'admission_process_edit' => !empty($prepared['admission_process_edit']) ? 1 : 0,
+            'admission_process_verify' => !empty($prepared['admission_process_verify']) ? 1 : 0,
+            'admission_process_report' => !empty($prepared['admission_process_report']) ? 1 : 0,
+            'admission_process_campus_ids' => !empty($prepared['admission_process_campus_ids']) ? implode(',', $prepared['admission_process_campus_ids']) : null,
+        );
+        if (!empty($prepared['user_id'])) {
+            $this->ci->db->where('user_id', (int)$prepared['user_id'])->update('access', $extra);
+        } else {
+            $this->ci->db->where('designation_id', (int)$prepared['designation_id'])->update('access_rules', $extra);
         }
 
         return array('success' => true, 'message' => 'Access has been granted successfully');

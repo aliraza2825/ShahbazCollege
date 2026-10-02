@@ -140,6 +140,7 @@ class Studentsapi extends CI_Controller {
 			'student_upload_documents', 'student_payments', 'student_payment_reset',
 			'student_payment_edit', 'can_student_struckof', 'student_issue_refund',
 			'council_list_report', 'extra_fee_access',
+			'admission_process_access',
 		);
 		foreach ($keys as $key) {
 			if (!empty($row[$key])) {
@@ -227,6 +228,10 @@ class Studentsapi extends CI_Controller {
 			'student_issue_refund' => $this->_perm('student_issue_refund'),
 			'council_list_report' => $this->_perm('council_list_report'),
 			'extra_fee_access' => $this->_perm('extra_fee_access'),
+			'admission_process_access' => $this->_perm('admission_process_access'),
+			'admission_process_edit' => $this->_perm('admission_process_edit'),
+			'admission_process_verify' => $this->_perm('admission_process_verify'),
+			'admission_process_report' => $this->_perm('admission_process_report'),
 			'fee_by_bank' => $this->_perm('fee_by_bank'),
 			'fee_by_cash' => $this->_perm('fee_by_cash'),
 			'fee_by_paypro' => $this->_perm('fee_by_paypro'),
