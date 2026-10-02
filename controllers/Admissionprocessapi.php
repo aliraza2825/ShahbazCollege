@@ -57,6 +57,25 @@ class Admissionprocessapi extends CI_Controller
 		return array_values(array_filter(array_map('intval', explode(',', $this->access_row['admission_process_campus_ids']))));
 	}
 	private function _actor() { $n = trim($this->current_user['first_name'] . ' ' . $this->current_user['last_name']); return $n !== '' ? $n : 'POS'; }
+	private function _occupation_label($id)
+	{
+		$names = array(); $seen = array(); $id = (int)$id;
+		while ($id > 0 && !isset($seen[$id])) {
+			$seen[$id] = true; $row = $this->db->get_where('occupations', array('occupation_id' => $id))->row_array();
+			if (!$row) break; array_unshift($names, $row['occupation_name']); $id = (int)$row['sub_of'];
+		}
+		return implode(' / ', $names);
+	}
+	private function _safe_display_fields($row, $exclude = array())
+	{
+		$out = array(); $blocked = array_merge(array('password', 'device_id', 'token', 'api_token'), $exclude);
+		foreach ((array)$row as $key => $value) {
+			if (in_array($key, $blocked, true) || is_array($value) || is_object($value)) continue;
+			if ($value === null || trim((string)$value) === '') continue;
+			$out[$key] = $value;
+		}
+		return $out;
+	}
 
 	private function _ensure_schema()
 	{
@@ -169,16 +188,30 @@ class Admissionprocessapi extends CI_Controller
 		$allowed = $this->_campus_ids();
 		if (is_array($allowed) && !in_array((int)$student['campus_id'], $allowed, true)) $this->_json(array('success' => false, 'message' => 'This campus is not assigned to you'), 403);
 		$process = $this->_process($student_id, true); $sections = $this->_sections_for((int)$process['id']);
-		$docs = $this->db->select('type')->where('student_id', $student_id)->get('student_documents')->result_array();
-		$payments = $this->db->select('id, payment_plan, amount, paid, dead_line')->where('student_id', $student_id)->order_by('dead_line')->get('payments')->result_array();
+		$docs = $this->db->where('student_id', $student_id)->order_by('id', 'DESC')->get('student_documents')->result_array();
+		$payments = $this->db->where('student_id', $student_id)->order_by('dead_line')->order_by('id')->get('payments')->result_array();
 		$logs = $this->db->where('process_id', (int)$process['id'])->order_by('id', 'DESC')->limit(30)->get('student_admission_process_logs')->result_array();
+		$eligibility_source = array(); $eligibility_source_name = 'Student admission record';
+		if ($this->db->table_exists('admission_applications') && trim((string)$student['cnic']) !== '') {
+			$eligibility_source = $this->db->where('cnic', $student['cnic'])->order_by('application_id', 'DESC')->get('admission_applications')->row_array();
+			if ($eligibility_source) $eligibility_source_name = 'Admission application form';
+		}
+		if (!$eligibility_source && $this->db->table_exists('apply_now') && trim((string)$student['cnic']) !== '') {
+			$eligibility_source = $this->db->where('cnic', $student['cnic'])->order_by('apply_now_id', 'DESC')->get('apply_now')->row_array();
+			if ($eligibility_source) $eligibility_source_name = 'Online eligibility/application form';
+		}
+		if (!$eligibility_source) $eligibility_source = $student;
+		$eligibility_fields = $this->_safe_display_fields($eligibility_source, array('application_id', 'apply_now_id', 'student_id', 'status', 'clear_by_admin', 'pending_status'));
+		$student_fields = $this->_safe_display_fields($student, array('student_id', 'class_id', 'course_id', 'campus_id', 'plan_id', 'contractor_id', 'status'));
+		$parent_keys = array('father_name', 'mother_name', 'guardian_name', 'guardian_relation', 'emergency_no', 'father_cnic', 'mother_cnic', 'guardian_cnic', 'father_mobile', 'mother_mobile', 'guardian_mobile', 'father_occupation', 'mother_occupation', 'address', 'city', 'district', 'tehsil');
+		$parent_fields = array(); foreach ($parent_keys as $key) if (isset($student[$key]) && trim((string)$student[$key]) !== '') $parent_fields[$key] = $student[$key];
 		$summary = array(
-			'eligibility' => array('course' => isset($student['course_name']) ? $student['course_name'] : '', 'note' => 'Eligibility result is recorded during admission where criteria are configured.'),
-			'student_detail' => array('name' => trim($student['first_name'].' '.$student['last_name']), 'cnic' => isset($student['cnic']) ? $student['cnic'] : '', 'mobile' => isset($student['mobile']) ? $student['mobile'] : '', 'roll_no' => isset($student['roll_no']) ? $student['roll_no'] : ''),
-			'parents_detail' => array('father_name' => isset($student['father_name']) ? $student['father_name'] : '', 'mother_name' => isset($student['mother_name']) ? $student['mother_name'] : '', 'emergency_no' => isset($student['emergency_no']) ? $student['emergency_no'] : ''),
-			'occupations' => array('student' => isset($student['student_occupation_id']) ? $student['student_occupation_id'] : null, 'father' => isset($student['father_occupation_id']) ? $student['father_occupation_id'] : null, 'mother' => isset($student['mother_occupation_id']) ? $student['mother_occupation_id'] : null),
-			'fee_plan' => array('installments' => count($payments), 'paid' => count(array_filter($payments, function($p){ return (int)$p['paid'] === 1; })), 'payments' => $payments),
-			'documents' => array('count' => count($docs), 'types' => array_values(array_unique(array_map(function($d){ return $d['type']; }, $docs)))),
+			'eligibility' => array('source' => $eligibility_source_name, 'course' => isset($student['course_name']) ? $student['course_name'] : '', 'fields' => $eligibility_fields),
+			'student_detail' => array('name' => trim($student['first_name'].' '.$student['last_name']), 'cnic' => isset($student['cnic']) ? $student['cnic'] : '', 'mobile' => isset($student['mobile']) ? $student['mobile'] : '', 'roll_no' => isset($student['roll_no']) ? $student['roll_no'] : '', 'fields' => $student_fields),
+			'parents_detail' => array('father_name' => isset($student['father_name']) ? $student['father_name'] : '', 'mother_name' => isset($student['mother_name']) ? $student['mother_name'] : '', 'emergency_no' => isset($student['emergency_no']) ? $student['emergency_no'] : '', 'fields' => $parent_fields),
+			'occupations' => array('student' => isset($student['student_occupation_id']) ? $student['student_occupation_id'] : null, 'student_label' => $this->_occupation_label(isset($student['student_occupation_id']) ? $student['student_occupation_id'] : 0), 'father' => isset($student['father_occupation_id']) ? $student['father_occupation_id'] : null, 'father_label' => $this->_occupation_label(isset($student['father_occupation_id']) ? $student['father_occupation_id'] : 0), 'mother' => isset($student['mother_occupation_id']) ? $student['mother_occupation_id'] : null, 'mother_label' => $this->_occupation_label(isset($student['mother_occupation_id']) ? $student['mother_occupation_id'] : 0)),
+			'fee_plan' => array('plan_name' => isset($student['payment_plan']) ? $student['payment_plan'] : '', 'total_fee' => isset($student['total_fee']) ? $student['total_fee'] : 0, 'installments' => count($payments), 'paid' => count(array_filter($payments, function($p){ return (int)$p['paid'] === 1; })), 'payments' => $payments),
+			'documents' => array('count' => count($docs), 'types' => array_values(array_unique(array_map(function($d){ return $d['type']; }, $docs))), 'documents' => $docs),
 			'verification' => array('completed_sections' => count(array_filter($sections, function($s){ return $s['section_key'] !== 'verification' && $s['status'] === 'complete'; })), 'required_sections' => 6),
 		);
 		$auto_complete = 0;
