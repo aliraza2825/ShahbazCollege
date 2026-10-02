@@ -153,11 +153,14 @@ class Admissionprocessapi extends CI_Controller
 			$definitions = array(
 				'campuses' => array('id' => (int)$row['campus_id'], 'name' => trim((string)$row['campus_name'])),
 				'courses' => array('id' => (int)$row['course_id'], 'name' => trim((string)$row['course_name'])),
-				'classes' => array('id' => (int)$row['class_id'], 'name' => trim((string)$row['class_name'])),
+				'classes' => array('id' => (int)$row['class_id'], 'name' => trim((string)$row['class_name']), 'course_id' => (int)$row['course_id']),
 			);
 			foreach ($definitions as $type => $definition) {
 				$key = (string)$definition['id'];
-				if (!isset($groups[$type][$key])) $groups[$type][$key] = array('id' => $definition['id'], 'name' => $definition['name'] !== '' ? $definition['name'] : 'Not assigned', 'total' => 0, 'verified' => 0);
+				if (!isset($groups[$type][$key])) {
+					$groups[$type][$key] = array('id' => $definition['id'], 'name' => $definition['name'] !== '' ? $definition['name'] : 'Not assigned', 'total' => 0, 'verified' => 0);
+					if ($type === 'classes') $groups[$type][$key]['course_id'] = $definition['course_id'];
+				}
 				$groups[$type][$key]['total']++;
 				if ($is_verified) $groups[$type][$key]['verified']++;
 			}
