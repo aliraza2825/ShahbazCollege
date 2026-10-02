@@ -178,7 +178,7 @@ class Admissionprocessapi extends CI_Controller
 
 	public function students()
 	{
-		$q = trim((string)$this->input->get('q')); $campus = (int)$this->input->get('campus_id'); $class_id = (int)$this->input->get('class_id'); $class_ids_raw = trim((string)$this->input->get('class_ids')); $class_ids = array_values(array_filter(array_map('intval', explode(',', $class_ids_raw)))); $course_id = (int)$this->input->get('course_id'); $status = trim((string)$this->input->get('status')); $all_dates = (int)$this->input->get('all_dates') === 1;
+		$q = trim((string)$this->input->get('q')); $campus = (int)$this->input->get('campus_id'); $class_id = (int)$this->input->get('class_id'); $class_ids_raw = trim((string)$this->input->get('class_ids')); $class_ids = array_values(array_filter(array_map('intval', explode(',', $class_ids_raw)))); $course_id = (int)$this->input->get('course_id'); $status = trim((string)$this->input->get('status')); $all_dates_value = strtolower(trim((string)$this->input->get('all_dates'))); $all_dates = in_array($all_dates_value, array('1', 'true', 'yes'), true);
 		$date_from = trim((string)$this->input->get('date_from')); $date_to = trim((string)$this->input->get('date_to'));
 		if ($date_from === '') $date_from = date('Y-m-01');
 		if ($date_to === '') $date_to = date('Y-m-d');
