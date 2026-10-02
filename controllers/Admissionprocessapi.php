@@ -129,13 +129,54 @@ class Admissionprocessapi extends CI_Controller
 		$this->_json(array('success' => true, 'data' => array('permissions' => array('view' => true, 'edit' => $this->_is_admin() || !empty($this->access_row['admission_process_edit']), 'verify' => $this->_is_admin() || !empty($this->access_row['admission_process_verify']), 'report' => $this->_is_admin() || !empty($this->access_row['admission_process_report'])), 'campuses' => $campuses, 'classes' => $classes, 'sections' => $this->sections)));
 	}
 
+	public function dashboard()
+	{
+		$this->db->select("students.student_id, classes.class_id, classes.name AS class_name, campuses.campus_id, campuses.campus_name, courses.course_id, courses.course_name, verification.status AS verification_status", false);
+		$this->db->from('students');
+		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
+		$this->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'left');
+		$this->db->join('courses', 'courses.course_id=students.course_id', 'left');
+		$this->db->join('student_admission_processes ap', 'ap.student_id=students.student_id', 'left');
+		$this->db->join('student_admission_process_sections verification', "verification.process_id=ap.id AND verification.section_key='verification'", 'left', false);
+		$this->db->where('students.status', '1');
+		$allowed_campuses = $this->_campus_ids();
+		if (is_array($allowed_campuses)) $this->db->where_in('classes.campus_id', count($allowed_campuses) ? $allowed_campuses : array(0));
+		$rows = $this->db->get()->result_array();
+		$groups = array('campuses' => array(), 'courses' => array(), 'classes' => array());
+		$verified = 0;
+		foreach ($rows as $row) {
+			$is_verified = isset($row['verification_status']) && $row['verification_status'] === 'complete';
+			if ($is_verified) $verified++;
+			$definitions = array(
+				'campuses' => array('id' => (int)$row['campus_id'], 'name' => trim((string)$row['campus_name'])),
+				'courses' => array('id' => (int)$row['course_id'], 'name' => trim((string)$row['course_name'])),
+				'classes' => array('id' => (int)$row['class_id'], 'name' => trim((string)$row['class_name'])),
+			);
+			foreach ($definitions as $type => $definition) {
+				$key = (string)$definition['id'];
+				if (!isset($groups[$type][$key])) $groups[$type][$key] = array('id' => $definition['id'], 'name' => $definition['name'] !== '' ? $definition['name'] : 'Not assigned', 'total' => 0, 'verified' => 0);
+				$groups[$type][$key]['total']++;
+				if ($is_verified) $groups[$type][$key]['verified']++;
+			}
+		}
+		foreach ($groups as $type => &$items) {
+			$items = array_values($items);
+			foreach ($items as &$item) { $item['pending'] = $item['total'] - $item['verified']; $item['percent'] = $item['total'] ? (int)round(($item['verified'] / $item['total']) * 100) : 0; }
+			unset($item);
+			usort($items, function($a, $b){ return $a['pending'] === $b['pending'] ? ($a['total'] === $b['total'] ? strcasecmp($a['name'], $b['name']) : $b['total'] - $a['total']) : $b['pending'] - $a['pending']; });
+		}
+		unset($items);
+		$total = count($rows);
+		$this->_json(array('success' => true, 'data' => array('summary' => array('total' => $total, 'verified' => $verified, 'pending' => $total - $verified, 'percent' => $total ? (int)round(($verified / $total) * 100) : 0), 'campuses' => $groups['campuses'], 'courses' => $groups['courses'], 'classes' => $groups['classes'])));
+	}
+
 	public function students()
 	{
-		$q = trim((string)$this->input->get('q')); $campus = (int)$this->input->get('campus_id'); $class_id = (int)$this->input->get('class_id'); $status = trim((string)$this->input->get('status'));
+		$q = trim((string)$this->input->get('q')); $campus = (int)$this->input->get('campus_id'); $class_id = (int)$this->input->get('class_id'); $course_id = (int)$this->input->get('course_id'); $status = trim((string)$this->input->get('status')); $all_dates = (int)$this->input->get('all_dates') === 1;
 		$date_from = trim((string)$this->input->get('date_from')); $date_to = trim((string)$this->input->get('date_to'));
 		if ($date_from === '') $date_from = date('Y-m-01');
 		if ($date_to === '') $date_to = date('Y-m-d');
-		$this->db->select("students.student_id, students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile, students.father_name, students.emergency_no, students.student_occupation_id, students.father_occupation_id, students.mother_occupation_id, students.entry_date, classes.name AS class_name, campuses.campus_name, courses.course_name, ap.id AS process_id, ap.updated_at", false);
+		$this->db->select("students.student_id, students.class_id, students.course_id, classes.campus_id, students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile, students.father_name, students.emergency_no, students.student_occupation_id, students.father_occupation_id, students.mother_occupation_id, students.entry_date, classes.name AS class_name, campuses.campus_name, courses.course_name, ap.id AS process_id, ap.updated_at", false);
 		$this->db->from('students');
 		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
 		$this->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'left');
@@ -146,10 +187,12 @@ class Admissionprocessapi extends CI_Controller
 		if (is_array($allowed_campuses)) $this->db->where_in('classes.campus_id', count($allowed_campuses) ? $allowed_campuses : array(0));
 		if ($campus) $this->db->where('classes.campus_id', $campus);
 		if ($class_id) $this->db->where('students.class_id', $class_id);
-		$this->db->where('students.entry_date >=', $date_from)->where('students.entry_date <=', $date_to);
+		if ($course_id) $this->db->where('students.course_id', $course_id);
+		if (!$all_dates) $this->db->where('students.entry_date >=', $date_from)->where('students.entry_date <=', $date_to);
 		if ($status !== '') $status === 'not_started' ? $this->db->where('ap.id IS NULL', null, false) : $this->db->where('ap.overall_status', $status);
 		if ($q !== '') { $this->db->group_start()->like('students.first_name', $q)->or_like('students.last_name', $q)->or_like('students.roll_no', $q)->or_like('students.cnic', $q)->or_like('students.mobile', $q)->group_end(); }
-		$this->db->order_by('students.student_id', 'DESC')->limit(1000);
+		$this->db->order_by('students.student_id', 'DESC');
+		if (!$all_dates) $this->db->limit(1000);
 		$rows = $this->db->get()->result_array();
 		$student_ids = array_map(function($r){ return (int)$r['student_id']; }, $rows);
 		$payment_counts = array(); $document_counts = array(); $verified = array();
