@@ -123,10 +123,13 @@ class Admissionprocessapi extends CI_Controller
 		$this->db->select('campus_id, campus_name')->order_by('campus_name');
 		if (is_array($ids)) $this->db->where_in('campus_id', count($ids) ? $ids : array(0));
 		$campuses = $this->db->get('campuses')->result_array();
-		$this->db->select('class_id, name, campus_id')->where('status', 1)->order_by('name');
+		$this->db->select('class_id, name, campus_id, course_id')->where('status', 1)->order_by('name');
 		if (is_array($ids)) $this->db->where_in('campus_id', count($ids) ? $ids : array(0));
 		$classes = $this->db->get('classes')->result_array();
-		$this->_json(array('success' => true, 'data' => array('permissions' => array('view' => true, 'edit' => $this->_is_admin() || !empty($this->access_row['admission_process_edit']), 'verify' => $this->_is_admin() || !empty($this->access_row['admission_process_verify']), 'report' => $this->_is_admin() || !empty($this->access_row['admission_process_report'])), 'campuses' => $campuses, 'classes' => $classes, 'sections' => $this->sections)));
+		$course_ids = array_values(array_unique(array_filter(array_map(function($row){ return (int)$row['course_id']; }, $classes))));
+		$courses = array();
+		if (count($course_ids)) $courses = $this->db->select('course_id, course_name')->where_in('course_id', $course_ids)->order_by('course_name')->get('courses')->result_array();
+		$this->_json(array('success' => true, 'data' => array('permissions' => array('view' => true, 'edit' => $this->_is_admin() || !empty($this->access_row['admission_process_edit']), 'verify' => $this->_is_admin() || !empty($this->access_row['admission_process_verify']), 'report' => $this->_is_admin() || !empty($this->access_row['admission_process_report'])), 'campuses' => $campuses, 'courses' => $courses, 'classes' => $classes, 'sections' => $this->sections)));
 	}
 
 	public function dashboard()
@@ -172,7 +175,7 @@ class Admissionprocessapi extends CI_Controller
 
 	public function students()
 	{
-		$q = trim((string)$this->input->get('q')); $campus = (int)$this->input->get('campus_id'); $class_id = (int)$this->input->get('class_id'); $course_id = (int)$this->input->get('course_id'); $status = trim((string)$this->input->get('status')); $all_dates = (int)$this->input->get('all_dates') === 1;
+		$q = trim((string)$this->input->get('q')); $campus = (int)$this->input->get('campus_id'); $class_id = (int)$this->input->get('class_id'); $class_ids_raw = trim((string)$this->input->get('class_ids')); $class_ids = array_values(array_filter(array_map('intval', explode(',', $class_ids_raw)))); $course_id = (int)$this->input->get('course_id'); $status = trim((string)$this->input->get('status')); $all_dates = (int)$this->input->get('all_dates') === 1;
 		$date_from = trim((string)$this->input->get('date_from')); $date_to = trim((string)$this->input->get('date_to'));
 		if ($date_from === '') $date_from = date('Y-m-01');
 		if ($date_to === '') $date_to = date('Y-m-d');
@@ -187,6 +190,7 @@ class Admissionprocessapi extends CI_Controller
 		if (is_array($allowed_campuses)) $this->db->where_in('classes.campus_id', count($allowed_campuses) ? $allowed_campuses : array(0));
 		if ($campus) $this->db->where('classes.campus_id', $campus);
 		if ($class_id) $this->db->where('students.class_id', $class_id);
+		if (count($class_ids)) $this->db->where_in('students.class_id', $class_ids);
 		if ($course_id) $this->db->where('students.course_id', $course_id);
 		if (!$all_dates) $this->db->where('students.entry_date >=', $date_from)->where('students.entry_date <=', $date_to);
 		if ($status !== '') $status === 'not_started' ? $this->db->where('ap.id IS NULL', null, false) : $this->db->where('ap.overall_status', $status);
