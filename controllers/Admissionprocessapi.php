@@ -116,7 +116,7 @@ class Admissionprocessapi extends CI_Controller
 		$date_from = trim((string)$this->input->get('date_from')); $date_to = trim((string)$this->input->get('date_to'));
 		if ($date_from === '') $date_from = date('Y-m-01');
 		if ($date_to === '') $date_to = date('Y-m-d');
-		$this->db->select("students.student_id, students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile, students.entry_date, classes.name AS class_name, campuses.campus_name, courses.course_name, ap.id AS process_id, COALESCE(ap.overall_status, 'not_started') AS overall_status, ap.updated_at", false);
+		$this->db->select("students.student_id, students.first_name, students.last_name, students.roll_no, students.cnic, students.mobile, students.father_name, students.emergency_no, students.student_occupation_id, students.father_occupation_id, students.mother_occupation_id, students.entry_date, classes.name AS class_name, campuses.campus_name, courses.course_name, ap.id AS process_id, ap.updated_at", false);
 		$this->db->from('students');
 		$this->db->join('classes', 'classes.class_id=students.class_id', 'left');
 		$this->db->join('campuses', 'campuses.campus_id=classes.campus_id', 'left');
@@ -132,10 +132,27 @@ class Admissionprocessapi extends CI_Controller
 		if ($q !== '') { $this->db->group_start()->like('students.first_name', $q)->or_like('students.last_name', $q)->or_like('students.roll_no', $q)->or_like('students.cnic', $q)->or_like('students.mobile', $q)->group_end(); }
 		$this->db->order_by('students.student_id', 'DESC')->limit(1000);
 		$rows = $this->db->get()->result_array();
-		$ids = array(); foreach ($rows as $r) if (!empty($r['process_id'])) $ids[] = (int)$r['process_id'];
-		$counts = array();
-		if (count($ids)) foreach ($this->db->select('process_id, SUM(status="complete") AS done', false)->where_in('process_id', $ids)->group_by('process_id')->get('student_admission_process_sections')->result_array() as $c) $counts[(int)$c['process_id']] = (int)$c['done'];
-		foreach ($rows as &$r) { $done = isset($counts[(int)$r['process_id']]) ? $counts[(int)$r['process_id']] : 0; $r['completed_sections'] = $done; $r['progress'] = (int)round(($done / count($this->sections)) * 100); $r['student_name'] = trim($r['first_name'].' '.$r['last_name']); }
+		$student_ids = array_map(function($r){ return (int)$r['student_id']; }, $rows);
+		$payment_counts = array(); $document_counts = array(); $verified = array();
+		if (count($student_ids)) {
+			foreach ($this->db->select('student_id, COUNT(*) AS total', false)->where_in('student_id', $student_ids)->group_by('student_id')->get('payments')->result_array() as $c) $payment_counts[(int)$c['student_id']] = (int)$c['total'];
+			foreach ($this->db->select('student_id, COUNT(*) AS total', false)->where_in('student_id', $student_ids)->group_by('student_id')->get('student_documents')->result_array() as $c) $document_counts[(int)$c['student_id']] = (int)$c['total'];
+			$this->db->select('sap.student_id, s.status')->from('student_admission_process_sections s')->join('student_admission_processes sap', 'sap.id=s.process_id')->where('s.section_key', 'verification')->where_in('sap.student_id', $student_ids);
+			foreach ($this->db->get()->result_array() as $v) $verified[(int)$v['student_id']] = $v['status'] === 'complete';
+		}
+		foreach ($rows as &$r) {
+			$id = (int)$r['student_id']; $done = 0;
+			if (trim((string)$r['course_name']) !== '') $done++;
+			if (trim($r['first_name'].' '.$r['last_name']) !== '' && trim((string)$r['cnic']) !== '' && trim((string)$r['mobile']) !== '' && trim((string)$r['roll_no']) !== '') $done++;
+			if (trim((string)$r['father_name']) !== '' && trim((string)$r['emergency_no']) !== '') $done++;
+			if ((int)$r['student_occupation_id'] > 0 || (int)$r['father_occupation_id'] > 0 || (int)$r['mother_occupation_id'] > 0) $done++;
+			if (!empty($payment_counts[$id])) $done++;
+			if (!empty($document_counts[$id])) $done++;
+			if (!empty($verified[$id])) $done++;
+			$r['completed_sections'] = $done; $r['progress'] = (int)round(($done / count($this->sections)) * 100);
+			$r['overall_status'] = !empty($verified[$id]) ? 'complete' : ($done > 0 ? 'in_progress' : 'not_started');
+			$r['student_name'] = trim($r['first_name'].' '.$r['last_name']);
+		}
 		$this->_json(array('success' => true, 'data' => $rows));
 	}
 
@@ -164,6 +181,15 @@ class Admissionprocessapi extends CI_Controller
 			'documents' => array('count' => count($docs), 'types' => array_values(array_unique(array_map(function($d){ return $d['type']; }, $docs)))),
 			'verification' => array('completed_sections' => count(array_filter($sections, function($s){ return $s['section_key'] !== 'verification' && $s['status'] === 'complete'; })), 'required_sections' => 6),
 		);
+		$auto_complete = 0;
+		if (trim((string)$summary['eligibility']['course']) !== '') $auto_complete++;
+		if (trim((string)$summary['student_detail']['name']) !== '' && trim((string)$summary['student_detail']['cnic']) !== '' && trim((string)$summary['student_detail']['mobile']) !== '' && trim((string)$summary['student_detail']['roll_no']) !== '') $auto_complete++;
+		if (trim((string)$summary['parents_detail']['father_name']) !== '' && trim((string)$summary['parents_detail']['emergency_no']) !== '') $auto_complete++;
+		if ((int)$summary['occupations']['student'] > 0 || (int)$summary['occupations']['father'] > 0 || (int)$summary['occupations']['mother'] > 0) $auto_complete++;
+		if ((int)$summary['fee_plan']['installments'] > 0) $auto_complete++;
+		if ((int)$summary['documents']['count'] > 0) $auto_complete++;
+		$summary['verification']['completed_sections'] = $auto_complete;
+		foreach ($sections as $section_row) if ($section_row['section_key'] === 'verification' && $section_row['status'] === 'complete') $process['overall_status'] = 'complete';
 		$this->_json(array('success' => true, 'data' => array('student' => $student, 'process' => $process, 'sections' => $sections, 'summary' => $summary, 'logs' => $logs)));
 	}
 
@@ -175,15 +201,11 @@ class Admissionprocessapi extends CI_Controller
 		$body = $this->_body(); $status = isset($body['status']) ? $body['status'] : 'pending';
 		if (!in_array($status, array('pending', 'complete', 'needs_attention'), true)) $this->_json(array('success' => false, 'message' => 'Invalid status'), 422);
 		$process = $this->_process((int)$student_id, true); $existing = $this->db->get_where('student_admission_process_sections', array('process_id' => $process['id'], 'section_key' => $section))->row_array();
-		if ($section === 'verification' && $status === 'complete') {
-			$ready = $this->db->where('process_id', $process['id'])->where_in('section_key', array('eligibility', 'student_detail', 'parents_detail', 'occupations', 'fee_plan', 'documents'))->where('status', 'complete')->count_all_results('student_admission_process_sections');
-			if ($ready < 6) $this->_json(array('success' => false, 'message' => 'Complete all six prerequisite sections before final verification'), 422);
-		}
 		$data = array('process_id' => $process['id'], 'section_key' => $section, 'status' => $status, 'remarks' => isset($body['remarks']) ? trim($body['remarks']) : '', 'updated_by' => (int)$this->current_user['user_id'], 'updated_by_name' => $this->_actor(), 'updated_at' => date('Y-m-d H:i:s'));
 		$existing ? $this->db->where('id', $existing['id'])->update('student_admission_process_sections', $data) : $this->db->insert('student_admission_process_sections', $data);
 		$this->db->insert('student_admission_process_logs', array('process_id' => $process['id'], 'section_key' => $section, 'action' => 'section_updated', 'old_status' => $existing ? $existing['status'] : 'pending', 'new_status' => $status, 'remarks' => $data['remarks'], 'user_id' => $data['updated_by'], 'user_name' => $data['updated_by_name'], 'created_at' => $data['updated_at']));
 		$sections = $this->_sections_for((int)$process['id']); $done = count(array_filter($sections, function($s){ return $s['status'] === 'complete'; }));
-		$overall = $done === count($this->sections) ? 'complete' : ($done > 0 ? 'in_progress' : 'draft');
+		$overall = ($section === 'verification' && $status === 'complete') ? 'complete' : ($done > 0 ? 'in_progress' : 'draft');
 		$this->db->where('id', $process['id'])->update('student_admission_processes', array('overall_status' => $overall, 'completed_at' => $overall === 'complete' ? date('Y-m-d H:i:s') : null, 'completed_by' => $overall === 'complete' ? (int)$this->current_user['user_id'] : null, 'updated_at' => date('Y-m-d H:i:s')));
 		$this->_json(array('success' => true, 'message' => 'Section saved'));
 	}
