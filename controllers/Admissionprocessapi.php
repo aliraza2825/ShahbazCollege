@@ -129,7 +129,7 @@ class Admissionprocessapi extends CI_Controller
 		$course_ids = array_values(array_unique(array_filter(array_map(function($row){ return (int)$row['course_id']; }, $classes))));
 		$courses = array();
 		if (count($course_ids)) $courses = $this->db->select('course_id, course_name')->where_in('course_id', $course_ids)->order_by('course_name')->get('courses')->result_array();
-		$this->_json(array('success' => true, 'data' => array('permissions' => array('view' => true, 'edit' => $this->_is_admin() || !empty($this->access_row['admission_process_edit']), 'verify' => $this->_is_admin() || !empty($this->access_row['admission_process_verify']), 'report' => $this->_is_admin() || !empty($this->access_row['admission_process_report'])), 'campuses' => $campuses, 'courses' => $courses, 'classes' => $classes, 'sections' => $this->sections)));
+		$this->_json(array('success' => true, 'data' => array('permissions' => array('view' => true, 'edit' => $this->_is_admin() || !empty($this->access_row['admission_process_edit']), 'verify' => $this->_is_admin() || !empty($this->access_row['admission_process_verify']), 'report' => $this->_is_admin() || !empty($this->access_row['admission_process_report']), 'student_edit' => $this->_is_admin() || !empty($this->access_row['student_edit']), 'student_upload_documents' => $this->_is_admin() || !empty($this->access_row['student_upload_documents'])), 'campuses' => $campuses, 'courses' => $courses, 'classes' => $classes, 'sections' => $this->sections)));
 	}
 
 	public function dashboard()
