@@ -128,6 +128,7 @@ class Public_website_service {
 			'phone' => isset($campus['phone']) ? $campus['phone'] : '',
 			'phone1' => isset($campus['phone1']) ? $campus['phone1'] : '',
 			'phone2' => isset($campus['phone2']) ? $campus['phone2'] : '',
+			'whatsapp' => isset($campus['whatsapp']) ? $campus['whatsapp'] : '',
 			'email' => isset($campus['email']) ? $campus['email'] : '',
 			'logo' => !empty($campus['logo']) ? $this->asset_url('uploads', $campus['logo']) : '',
 		);
