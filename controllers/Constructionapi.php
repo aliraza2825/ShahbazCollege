@@ -1391,16 +1391,43 @@ class Constructionapi extends CI_Controller {
 		return $row && !empty($row['for_date']) ? $row['for_date'] : null;
 	}
 
-	/** Next calendar day after last verify; if never verified, start from today. */
+	/** Earliest unverified day through today that actually has construction expenses. */
 	private function _next_pending_expense_date()
 	{
+		if (!$this->db->table_exists('expenses')) return null;
+
 		$today = date('Y-m-d');
 		$last = $this->_last_verified_expense_date();
-		if ($last) {
-			$next = date('Y-m-d', strtotime($last . ' +1 day'));
-			return $next <= $today ? $next : null;
+		$where_after = $last ? 'AND DATE(e.actual_date) > ?' : '';
+		$binds = array($today);
+		if ($last) $binds[] = $last;
+
+		$pr_join = $this->_purchase_project_join_sql();
+		if ($pr_join) {
+			$sql = "SELECT MIN(DATE(e.actual_date)) AS pending_date
+				FROM expenses e
+				LEFT JOIN {$pr_join} pr ON pr.purchase_no = e.purchase_no
+				WHERE e.actual_date IS NOT NULL
+				  AND DATE(e.actual_date) <= ?
+				  {$where_after}
+				  AND (
+					(e.construction_project_id IS NOT NULL AND e.construction_project_id > 0)
+					OR (pr.project_id IS NOT NULL AND pr.project_id > 0)
+				  )";
+		} elseif ($this->db->field_exists('construction_project_id', 'expenses')) {
+			$sql = "SELECT MIN(DATE(e.actual_date)) AS pending_date
+				FROM expenses e
+				WHERE e.actual_date IS NOT NULL
+				  AND DATE(e.actual_date) <= ?
+				  {$where_after}
+				  AND e.construction_project_id IS NOT NULL
+				  AND e.construction_project_id > 0";
+		} else {
+			return null;
 		}
-		return $today;
+
+		$row = $this->db->query($sql, $binds)->row_array();
+		return $row && !empty($row['pending_date']) ? $row['pending_date'] : null;
 	}
 
 	private function _expense_day_is_verified($date)
@@ -3665,7 +3692,7 @@ class Constructionapi extends CI_Controller {
 	/**
 	 * POST verify_expense_day
 	 * Body: { for_date?: Y-m-d, notes?: string }
-	 * Only the sequential next pending day (≤ today) can be verified.
+	 * Only the next pending day containing expenses (≤ today) can be verified.
 	 */
 	public function verify_expense_day()
 	{
@@ -3687,6 +3714,12 @@ class Constructionapi extends CI_Controller {
 		}
 
 		$totals = $this->_day_expense_totals($for_date);
+		if ((int)$totals['expense_count'] <= 0) {
+			$this->_json(array(
+				'success' => false,
+				'message' => 'No construction expenses exist on this day.',
+			), 400);
+		}
 		$name = $this->_user_name();
 		$now = date('Y-m-d H:i:s');
 		$notes = isset($body['notes']) ? trim($body['notes']) : '';
