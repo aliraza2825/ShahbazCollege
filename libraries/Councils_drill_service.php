@@ -410,9 +410,9 @@ class Councils_drill_service {
                     'paper_pass' => $paper_pass,
                     'paper_fail' => $paper_fail,
                     'pass_pct_with_absent' => $total_students_all > 0
-                        ? round(($total_results / $total_students_all) * 100, 2) : 0,
+                        ? round(($total_pass / $total_students_all) * 100, 2) : 0,
                     'pass_pct_without_absent' => $appeared_students > 0
-                        ? round(($total_results / $appeared_students) * 100, 2) : 0,
+                        ? round(($total_pass / $appeared_students) * 100, 2) : 0,
                     'college_totals' => $college_summary,
                 ),
                 'students' => $rows,
