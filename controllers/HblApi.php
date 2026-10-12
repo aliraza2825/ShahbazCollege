@@ -272,6 +272,7 @@ class HblApi extends CI_Controller
 
             $updateData = [
                 'paid'             => 1,
+                'actual_amount'    => $amount,
                 'paid_date'        => $this->todayDate(),
                 'actual_paid_date' => $this->todayDate(),
                 'tid_no'           => $transactionId,

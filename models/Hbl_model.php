@@ -58,6 +58,8 @@ class Hbl_model extends CI_Model
 
     public function mark_invoice_paid($invoice, $transactionId, $referenceNumber, $paidDate)
     {
+        $this->load->helper('payment_validation');
+        if (student_payment_amount_error($invoice['amount'], array())) return false;
         $challans = array_values(array_filter(array_map('trim', explode(',', (string)$invoice['challan_ids']))));
         if (!count($challans)) return false;
         $this->db->trans_begin();
@@ -72,6 +74,8 @@ class Hbl_model extends CI_Model
         foreach ($rows as $row) {
             $this->db->where('id', $row['id'])->update('payments', array(
                 'paid' => 1,
+                // Existing merged-payment reports count the receipt total once per group.
+                'actual_amount' => (float)$invoice['amount'],
                 'paid_date' => $paidDate,
                 'actual_paid_date' => $paidDate,
                 'merged_challan' => $merged,
@@ -183,6 +187,8 @@ class Hbl_model extends CI_Model
 
     public function mark_bill_paid($consumerNumber, $data)
     {
+        $this->load->helper('payment_validation');
+        if (student_payment_amount_error(isset($data['actual_amount']) ? $data['actual_amount'] : null, array())) return false;
         // Keep the payment update on the same HBL consumer identifier used at inquiry.
         $this->db->where('challan_no', $consumerNumber);
         $this->db->where('paid', 0);

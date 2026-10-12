@@ -1342,6 +1342,13 @@ class Students extends CI_Controller {
 
     public function addfreezedetails($studentid)
     {
+        $this->load->helper('payment_validation');
+        $fee_error = student_payment_amount_error($this->input->post('fee'), array());
+        if ($fee_error) {
+            $this->session->set_flashdata('error', $fee_error);
+            redirect('students/freezestudentview/' . (int)$studentid);
+            return;
+        }
         $image = '';
         //load the helper
         $this->load->helper('form');
@@ -2225,6 +2232,17 @@ class Students extends CI_Controller {
     public function paid_payment_action($student_id)
     {
 
+        $this->load->helper('payment_validation');
+        $payment_ids = array_values(array_unique(array_filter(array_map('intval', explode(',', ltrim((string)$this->input->post('fee_ids'), ','))))));
+        $selected_fees = $payment_ids ? $this->db->where_in('id', $payment_ids)->get('payments')->result_array() : array();
+        $validation_error = student_payment_selection_error($selected_fees, $payment_ids, $student_id);
+        if (!$validation_error) $validation_error = student_payment_amount_error($this->input->post('actual_amount'), $selected_fees);
+        if ($validation_error) {
+            $this->session->set_flashdata('error', $validation_error);
+            redirect('students/payments_paid/' . (int)$student_id);
+            return;
+        }
+
         $this->load->helper('form');
         $config['upload_path'] = 'uploads/';
         $config['allowed_types'] = 'gif|jpg|png';
@@ -2257,10 +2275,6 @@ class Students extends CI_Controller {
         }
 
         
-        $payment_ids = $this->input->post('fee_ids');
-        $payment_ids=substr($payment_ids,1,strlen($payment_ids));
-        $payment_ids = @explode(',',$payment_ids);
-
         if (count($payment_ids)>1) {
             $merged_challan=$this->getChallanNo();
         }

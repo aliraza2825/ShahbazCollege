@@ -3002,6 +3002,9 @@ class Studentsapi extends CI_Controller {
 			$from_date = isset($body['from_date']) ? trim($body['from_date']) : date('Y-m-d');
 			$campus_id = isset($body['campus_id']) ? (int)$body['campus_id'] : 0;
 			if ($reason === '') $this->_json(array('success' => false, 'message' => 'Reason required'), 422);
+			$this->load->helper('payment_validation');
+			$fee_error = student_payment_amount_error(isset($body['fee']) ? $body['fee'] : null, array());
+			if ($fee_error) $this->_json(array('success' => false, 'message' => $fee_error), 422);
 
 			$pending = $this->db->get_where('update_student_requests', array('student_id' => $student_id, 'ok_by_admin' => 0))->row_array();
 			if ($pending) {
@@ -3618,6 +3621,13 @@ class Studentsapi extends CI_Controller {
 			$payment_ids = array_filter(array_map('intval', explode(',', $fee_ids_raw)));
 		}
 		if (!count($payment_ids)) $this->_json(array('success' => false, 'message' => 'fee_ids required'), 422);
+		$payment_ids = array_values(array_unique($payment_ids));
+		$this->load->helper('payment_validation');
+		$selected_fees = $this->db->where_in('id', $payment_ids)->get('payments')->result_array();
+		$validation_error = student_payment_selection_error($selected_fees, $payment_ids, $student_id);
+		$actual_amount = isset($body['actual_amount']) ? $body['actual_amount'] : null;
+		if (!$validation_error) $validation_error = student_payment_amount_error($actual_amount, $selected_fees);
+		if ($validation_error) $this->_json(array('success' => false, 'message' => $validation_error), 422);
 
 		$pay_through = isset($body['fee_pay_through']) ? $body['fee_pay_through'] : 'college';
 		$this->_assert_pay_through($pay_through);
@@ -3640,7 +3650,7 @@ class Studentsapi extends CI_Controller {
 		$actor = $this->_actor_name();
 		$i = 0;
 		$challans = isset($body['challans']) ? $body['challans'] : '';
-		$actual_amount = isset($body['actual_amount']) ? $body['actual_amount'] : 0;
+		$actual_amount = (float)$actual_amount;
 		$bill_url = '';
 		$hbl_invoice = null;
 
