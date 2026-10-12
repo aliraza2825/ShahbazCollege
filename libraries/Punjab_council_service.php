@@ -154,11 +154,18 @@ class Punjab_council_service {
 
     public function upload_roll_csv($post)
     {
-        $upload = $this->_upload_file('roll_no', 'results');
-        if (!$upload) return array('success' => false, 'message' => 'CSV upload failed');
-        $path = FCPATH . 'results/' . $upload;
-        if (!file_exists($path)) return array('success' => false, 'message' => 'Uploaded file missing');
-        $file = fopen($path, 'r');
+        // Import input must stay in PHP's request temp directory. The persistent
+        // upload library moves assets to S3 and removes their local copies.
+        $upload_error = isset($_FILES['roll_no']['error']) ? (int) $_FILES['roll_no']['error'] : UPLOAD_ERR_NO_FILE;
+        if ($upload_error !== UPLOAD_ERR_OK) {
+            return array('success' => false, 'message' => 'CSV upload failed (error ' . $upload_error . ')');
+        }
+        $path = isset($_FILES['roll_no']['tmp_name']) ? $_FILES['roll_no']['tmp_name'] : '';
+        if (!is_string($path) || $path === '' || !is_file($path) || !is_readable($path)) {
+            return array('success' => false, 'message' => 'Unable to read uploaded CSV');
+        }
+        $file = @fopen($path, 'r');
+        if (!$file) return array('success' => false, 'message' => 'Unable to read uploaded CSV');
         $row = 1;
         while (!feof($file)) {
             $index = fgetcsv($file);
