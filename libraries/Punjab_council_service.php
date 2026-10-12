@@ -350,6 +350,7 @@ class Punjab_council_service {
         $s3dir = 'results/result_' . $class . '_' . $exam;
         $this->ci->load->library('s3_direct_storage');
         $linked = 0;
+        $failed = array();
         if (empty($_FILES['filefield']['name']) || !is_array($_FILES['filefield']['name'])) {
             return array('success' => false, 'message' => 'No images uploaded');
         }
@@ -359,18 +360,22 @@ class Punjab_council_service {
             $exists = $this->ci->db->get_where('punjab_council_roll_number', array(
                 'roll_no' => $roll, 'class' => $class, 'course_id' => (isset($post['course_id']) ? $post['course_id'] : 1), 'council_exam_no' => $exam,
             ))->result_array();
-            if (!count($exists)) continue;
+            if (!count($exists)) { $failed[] = array('name' => $name, 'reason' => 'No matching roll number'); continue; }
+            if ($_FILES['filefield']['error'][$key] !== UPLOAD_ERR_OK) { $failed[] = array('name' => $name, 'reason' => 'File upload failed'); continue; }
             $stored = $this->ci->s3_direct_storage->put_file($_FILES['filefield']['tmp_name'][$key], $s3dir, basename($name), 'image/jpeg');
             if ($stored !== false) {
                 $this->ci->db->set('result_image', $s3dir . '/' . $stored);
                 $this->ci->db->where('roll_no', $roll);
                 $this->ci->db->where('class', $class);
+                $this->ci->db->where('course_id', isset($post['course_id']) ? $post['course_id'] : 1);
                 $this->ci->db->where('council_exam_no', $exam);
-                $this->ci->db->update('punjab_council_roll_number');
-                $linked++;
+                if ($this->ci->db->update('punjab_council_roll_number')) { $linked++; }
+                else { $failed[] = array('name' => $name, 'reason' => 'Unable to link image'); }
+            } else {
+                $failed[] = array('name' => $name, 'reason' => 'Image storage failed');
             }
         }
-        return array('success' => true, 'message' => "$linked result cards linked");
+        return array('success' => true, 'message' => "$linked result cards linked", 'linked' => $linked, 'failed' => $failed);
     }
 
     public function update_cnic($id, $cnic, $council_mistake)
