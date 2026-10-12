@@ -11,6 +11,11 @@ function student_payment_amount_error($amount, $rows)
     if ($amount < 0 || $amount > 2147483647 || ($amount > 0 && $amount < 1)) {
         return 'Received amount must be at least Rs 1.';
     }
+    $minimum = 0.0;
+    foreach ($rows as $row) $minimum += (float)$row['amount'];
+    if ($amount < $minimum) {
+        return 'Received amount cannot be less than the original fee total of Rs ' . number_format($minimum, 2, '.', ',') . '.';
+    }
     if ($amount > 0) return null;
 
     if (!count($rows)) return 'Select a fee before submitting payment.';

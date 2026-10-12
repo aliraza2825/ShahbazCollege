@@ -70,6 +70,10 @@ class Hbl_model extends CI_Model
             $this->db->trans_rollback();
             return false;
         }
+        if (student_payment_amount_error($invoice['amount'], $rows)) {
+            $this->db->trans_rollback();
+            return false;
+        }
         $merged = count($challans) > 1 ? $invoice['consumer_number'] : null;
         foreach ($rows as $row) {
             $this->db->where('id', $row['id'])->update('payments', array(

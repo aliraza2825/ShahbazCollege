@@ -53,6 +53,10 @@ eval('class PaymentTestAction {
 foreach (array(
  array('normal zero',array($normal),0,422),
  array('missing amount',array($readmission),null,422),
+ array('one rupee below original',array($normal),7899,422),
+ array('above original',array($normal),8000,200),
+ array('merged below sum',array($normal,array_merge($normal,array('id'=>2))),15799,422),
+ array('merged above sum',array($normal,array_merge($normal,array('id'=>2))),15801,200),
  array('normal positive',array($normal),7900,200),
  array('zero readmission',array($readmission),0,200),
  array('mixed zero',array($readmission,array_merge($normal,array('id'=>2))),0,422),
@@ -89,11 +93,11 @@ foreach (array(0, null, -1, 7900) as $amount) {
     check($ok===($amount===7900),'HBL single validation '.var_export($amount,true));
     check(count($hbl->db->writes)===($amount===7900?1:0),'HBL invalid callback performs no writes');
 }
-foreach (array(0,15800) as $amount) {
+foreach (array(0,15799,15800) as $amount) {
     $hbl=new Hbl_model;$hbl->load=new PaymentTestLoader;$hbl->db=new HblCaptureDb(array($normal,array_merge($normal,array('id'=>2))));
     $ok=$hbl->mark_invoice_paid(array('id'=>1,'student_id'=>123,'challan_ids'=>'A,B','consumer_number'=>'MERGE','amount'=>$amount),'TXN','REF','2026-10-12');
-    check($ok===($amount>0),'HBL merged validation '.$amount);
-    if($amount>0) {
+    check($ok===($amount>=15800),'HBL merged validation '.$amount);
+    if($amount>=15800) {
         foreach(array_slice($hbl->db->writes,0,2) as $write)check($write['data']['actual_amount']===15800.0,'HBL merged received total persisted');
     } else check(count($hbl->db->writes)===0,'HBL zero invoice no writes');
 }
