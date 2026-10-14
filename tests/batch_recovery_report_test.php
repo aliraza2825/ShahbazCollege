@@ -21,6 +21,7 @@ verify($r['courses'][0]['students'][0]['recovery']==540,'received amount used an
 verify($r['courses'][0]['students'][1]['recovery']==80,'receipt date wins; fallback and month boundaries work');
 verify($r['totals']['2023-2025']['recovery']==585,'same merge label on different students remains separate');
 verify($r['student_count']==4 && count($r['courses'])==2 && count($r['batches'])==3,'courses, all batches and unassigned students retained');
+verify($r['batches']===array('2024-2026','2023-2025','Unassigned'),'newest batch first; unassigned last');
 verify($r['totals']['2024-2026']['recovery']==80 && $r['totals']['Unassigned']['due']==0,'grand totals include each course once and retain zeros');
 $empty=(new Batch_recovery_report)->build(array(),$payments,'2026-10','2026-10-31');
 verify(!$empty['courses'] && !$empty['totals'],'out of scope payments excluded');

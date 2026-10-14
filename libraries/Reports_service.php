@@ -171,7 +171,7 @@ class Reports_service {
         $this->ci->db->from('students s')->join('classes cl','cl.class_id=s.class_id')->join('courses co','co.course_id=s.course_id');
         $this->ci->db->where('s.status',1)->where('cl.campus_id',(int)$campus_id);
         if (!$this->_is_admin($user)) $this->ci->db->where_in('cl.class_id',$class_ids);
-        $students=$this->ci->db->order_by('co.course_name','ASC')->order_by('cl.session','ASC')->order_by('s.roll_no','ASC')->order_by('s.student_id','ASC')->get()->result_array();
+        $students=$this->ci->db->order_by('co.course_name','ASC')->order_by('cl.session','DESC')->order_by('s.roll_no','ASC')->order_by('s.student_id','ASC')->get()->result_array();
         $payments=array();
         $from=$month.'-01'; $until=date('Y-m-d',strtotime($from.' +1 month'));
         foreach (array_chunk(array_column($students,'student_id'),500) as $ids) {

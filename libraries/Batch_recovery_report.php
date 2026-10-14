@@ -41,7 +41,12 @@ class Batch_recovery_report {
             foreach ($course['totals'] as &$total) { $total['due']/=100; $total['recovery']/=100; } unset($total);
         } unset($course);
         foreach ($grand as &$total) { $total['due']/=100; $total['recovery']/=100; } unset($total);
-        $batches = array_keys($batches); natcasesort($batches);
+        $batches = array_keys($batches);
+        usort($batches, function ($a, $b) {
+            if ($a === 'Unassigned') return $b === 'Unassigned' ? 0 : 1;
+            if ($b === 'Unassigned') return -1;
+            return strnatcasecmp($b, $a);
+        });
         return array('batches'=>array_values($batches),'courses'=>array_values($courses),'totals'=>$grand,'student_count'=>count($students),'month'=>$month,'due_date'=>$due_date);
     }
 }
