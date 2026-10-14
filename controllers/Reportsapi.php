@@ -91,6 +91,18 @@ class Reportsapi extends CI_Controller {
         $this->_json(array('success' => true, 'data' => $this->service->meta($this->current_user)));
     }
 
+    public function batch_recovery_campuses()
+    {
+        $result=$this->service->batch_recovery_campuses($this->current_user);
+        $this->_json($result, empty($result['success']) ? 403 : 200);
+    }
+
+    public function batch_recovery()
+    {
+        $result=$this->service->batch_recovery($this->current_user, (int)$this->input->get('campus_id'), $this->input->get('month'), $this->input->get('due_date'));
+        $this->_json($result, empty($result['success']) ? $result['code'] : 200);
+    }
+
     public function course_subjects($course_id)
     {
         $this->_json(array(
