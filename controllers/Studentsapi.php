@@ -3380,11 +3380,14 @@ class Studentsapi extends CI_Controller {
 			$this->_json(array('success' => false, 'message' => 'Restore request already pending'), 422);
 		}
 
-		$data = $student;
+		// Student-only fields (such as device_id) do not belong to the request table.
+		$request_fields = $this->db->list_fields('update_student_requests');
+		$data = array_intersect_key($student, array_flip($request_fields));
 		$data['status'] = 1;
-		unset($data['student_id']);
 		$data['student_id'] = $student_id;
-		$this->db->insert('update_student_requests', $data);
+		if (!$this->db->insert('update_student_requests', $data)) {
+			$this->_json(array('success' => false, 'message' => 'Unable to submit restore request'), 500);
+		}
 		$this->_json(array('success' => true, 'message' => 'Restore request submitted'));
 	}
 
