@@ -4292,6 +4292,16 @@ class Accountsapi extends CI_Controller {
 
 	private function _brs_parse_csv_lines($account_id, $filepath)
 	{
+		$account = $this->db->get_where('accounts', array('id'=>(int)$account_id))->row_array();
+		$is_alhabib = $account && preg_match('/bank\s+al\s*habib\s+limited/i', $account['account_name']);
+		if ($is_alhabib) {
+			require_once APPPATH . 'libraries/Alhabib_statement_parser.php';
+			$parser = new Alhabib_statement_parser();
+			$parsed = $parser->parse($filepath);
+			if ($parsed !== null) return $parsed;
+			// All Al Habib accounts share the existing legacy Date / amount / Dr format.
+			$account_id = 5;
+		}
 		$lines = array();
 		$fh = @fopen($filepath, 'r');
 		if (!$fh) return $lines;
@@ -4413,6 +4423,7 @@ class Accountsapi extends CI_Controller {
 			}
 		}
 		fclose($fh);
+		if ($is_alhabib && !count($lines)) return array('error'=>'No transactions found in Al Habib CSV.');
 		return $lines;
 	}
 
