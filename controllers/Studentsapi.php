@@ -5450,16 +5450,19 @@ class Studentsapi extends CI_Controller {
 		$max_extra = max(0, $plan_total - $allowed_discount);
 		if ($request_more > $max_extra) $request_more = $max_extra;
 
-		$allowed_applied = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, $allowed_discount);
-		$if_extra_approved = $this->_build_payment_plan_rows(
+		$total_requested_discount = min($plan_total, $allowed_discount + $request_more);
+
+		// Plan is always created with zero admission discount; approved discounts adjust installments later.
+		$at_create = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, 0);
+		$if_discount_approved = $this->_build_payment_plan_rows(
 			$student_id,
 			$plan,
 			$instdate,
 			$extendinstallments,
-			min($plan_total, $allowed_discount + $request_more)
+			$total_requested_discount
 		);
 
-		$errors = array_merge($allowed_applied['errors'], $if_extra_approved['errors']);
+		$errors = array_merge($at_create['errors'], $if_discount_approved['errors']);
 		$errors = array_values(array_unique($errors));
 		if (!empty($errors)) {
 			$this->_json(array('success' => false, 'message' => implode("\n", $errors)), 422);
@@ -5468,10 +5471,11 @@ class Studentsapi extends CI_Controller {
 		$this->_json(array(
 			'success' => true,
 			'data' => array(
-				'allowed_applied' => $allowed_applied,
-				'if_extra_approved' => $if_extra_approved,
+				'at_create' => $at_create,
+				'if_discount_approved' => $if_discount_approved,
 				'allowed_discount' => $allowed_discount,
 				'request_more_discount' => $request_more,
+				'total_requested_discount' => $total_requested_discount,
 				'max_allowed_discount' => $max_discount,
 				'max_request_more_discount' => $max_extra,
 			),
