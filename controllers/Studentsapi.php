@@ -5419,6 +5419,48 @@ class Studentsapi extends CI_Controller {
 		exit;
 	}
 
+	public function payments_plan_preview($student_id = 0)
+	{
+		$this->_require_student_payments();
+		$student_id = (int)$student_id;
+		$body = $this->_body();
+
+		$plan_id = isset($body['plan_id']) ? (int)$body['plan_id'] : 0;
+		if (!$plan_id) {
+			$this->_json(array('success' => false, 'message' => 'Please select payment plan.'), 422);
+		}
+
+		$plan_rows = $this->db->get_where('fee_rules', array('fee_rule_id' => $plan_id))->result_array();
+		if (!count($plan_rows)) {
+			$this->_json(array('success' => false, 'message' => 'Plan not found'), 404);
+		}
+		$plan = $plan_rows[0];
+
+		$instdate = isset($body['instdate']) ? (int)$body['instdate'] : 10;
+		$extendinstallments = isset($body['installments']) ? (int)$body['installments'] : 0;
+		$discount = isset($body['discount']) ? (float)$body['discount'] : 0;
+		$max_discount = (float)(isset($plan['max_discount']) ? $plan['max_discount'] : 0);
+		if ($discount < 0) $discount = 0;
+		if ($discount > $max_discount) $discount = $max_discount;
+
+		$without = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, 0);
+		$with = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, $discount);
+
+		$errors = array_merge($without['errors'], $with['errors']);
+		$errors = array_values(array_unique($errors));
+		if (!empty($errors)) {
+			$this->_json(array('success' => false, 'message' => implode("\n", $errors)), 422);
+		}
+
+		$this->_json(array(
+			'success' => true,
+			'data' => array(
+				'without_discount' => $without,
+				'with_discount' => $with,
+			),
+		));
+	}
+
 	public function payments_add_plan($student_id = 0)
 	{
 		$this->_require_student_payments();
@@ -5435,19 +5477,18 @@ class Studentsapi extends CI_Controller {
 		$discount = isset($body['discount']) ? (float)$body['discount'] : 0;
 		$actor = $this->_actor_name();
 
-		$this->db->trans_start();
-
 		$plan_rows = $this->db->get_where('fee_rules', array('fee_rule_id' => $payment_plan))->result_array();
 		if (!count($plan_rows)) {
-			$this->db->trans_complete();
 			$this->_json(array('success' => false, 'message' => 'Plan not found'), 404);
 		}
 		$plan = $plan_rows[0];
 
-		$session = $this->db->get_where('course_sessions', array(
-			'session_name' => $plan['session'],
-			'course_id' => $plan['course_id'],
-		))->row_array();
+		$built = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, $discount);
+		if (!empty($built['errors'])) {
+			$this->_json(array('success' => false, 'message' => implode("\n", $built['errors'])), 422);
+		}
+
+		$this->db->trans_start();
 
 		$this->db->set('total_fee', $plan['total_fee'] - $discount);
 		$this->db->set('plan_id', $payment_plan);
@@ -5455,98 +5496,8 @@ class Studentsapi extends CI_Controller {
 		$this->db->where('student_id', $student_id);
 		$this->db->update('students');
 
-		$studentDetails = $this->db->get_where('students', array('student_id' => $student_id))->result_array();
-		$class_id = $studentDetails[0]['class_id'];
-		$classDeatils = $this->db->get_where('classes', array('class_id' => $class_id))->result_array();
-		$exam_no = $classDeatils[0]['exam_no'];
-
-		if ($session) {
-			$exam_sequence_row = $this->db->get_where('exam_sequence', array(
-				'course_id' => $plan['course_id'],
-				'first_year' => $session['first_council_exam_no'],
-				'class' => 1,
-			))->row_array();
-
-			$exam_sequence_id = $exam_sequence_row['id'];
-
-			$this->db->select('*');
-			$this->db->from('council_sequence');
-			$this->db->where('course_id', $plan['course_id']);
-			$this->db->where('has_fee', 1);
-			$this->db->where('action_type', 'fee');
-			$this->db->where_in('recurring', array('One Time', 'Each Exam', 'Every Semester'));
-			$sequences = $this->db->get()->result_array();
-			$today = date('Y-m-d');
-			$errors = array();
-
-			foreach ($sequences as $sequence) {
-				$fee = $this->db
-					->where('sequence_fee_id', $sequence['council_sequence_id'])
-					->where('exam_sequence_id', $exam_sequence_id)
-					->where('to_date >=', $today)
-					->order_by('from_date', 'ASC')
-					->get('council_sequence_fee_rules')
-					->row_array();
-				if ($fee) {
-					$dead_line = $fee['from_date'];
-					$challan_no = $this->_new_challan_no();
-
-					$this->db->set('amount', $fee['exam_fee']);
-					$this->db->set('disc_per_inst', $plan['disc_per_inst']);
-					$this->db->set('dead_line', $dead_line);
-					$this->db->set('student_id', $student_id);
-					$this->db->set('payment_plan', 'consulation fee');
-					$this->db->set('payment_comment', 'This fee for next exam # ' . $exam_no . ' 1st Year');
-					$this->db->set('challan_no', $challan_no);
-					$this->db->set('add_by', $actor);
-					$this->db->set('last_edit', $actor);
-					$this->db->set('exam_sequence_id', $exam_sequence_id);
-					$this->db->set('council_sequence_id', $sequence['council_sequence_id']);
-
-					$this->db->insert('payments');
-				} else {
-					$errors[] = 'Please Generate Fee For ' . $sequence['type_name'];
-				}
-			}
-		}
-
-		if (!empty($errors)) {
-			$this->db->trans_rollback();
-			$this->_json(array('success' => false, 'message' => implode("\n", $errors)), 422);
-		}
-
-		if ($extendinstallments < $plan['no_of_installments']) {
-			$extendinstallments = $plan['no_of_installments'];
-		}
-
-		$dead_line = date('Y-m-d');
-		$challan_no = $this->_new_challan_no();
-		$this->db->set('amount', $plan['installment_on_admission']);
-		$this->db->set('dead_line', $dead_line);
-		$this->db->set('student_id', $student_id);
-		$this->db->set('payment_plan', 'Auto');
-		$this->db->set('disc_per_inst', $plan['disc_per_inst']);
-		$this->db->set('challan_no', $challan_no);
-		$this->db->set('payment_comment', 'College Fee');
-		$this->db->set('add_by', $actor);
-		$this->db->set('last_edit', $actor);
-		$this->db->insert('payments');
-
-		$totalamount = $plan['total_fee'] - $discount - $plan['installment_on_admission'];
-		$permonth = $extendinstallments > 0 ? ($totalamount / $extendinstallments) : $totalamount;
-		for ($i = 1; $i <= $extendinstallments; $i++) {
-			$dead_line = date('Y-m-' . $instdate, strtotime('first day of +' . $i . ' month'));
-			$challan_no = $this->_new_challan_no();
-			$this->db->set('amount', $permonth);
-			$this->db->set('dead_line', $dead_line);
-			$this->db->set('student_id', $student_id);
-			$this->db->set('payment_plan', 'Auto');
-			$this->db->set('disc_per_inst', $plan['disc_per_inst']);
-			$this->db->set('challan_no', $challan_no);
-			$this->db->set('payment_comment', 'College Fee');
-			$this->db->set('add_by', $actor);
-			$this->db->set('last_edit', $actor);
-			$this->db->insert('payments');
+		foreach ($built['rows'] as $row) {
+			$this->_insert_payment_plan_row($student_id, $row, $actor);
 		}
 
 		$this->db->trans_complete();
@@ -5556,6 +5507,152 @@ class Studentsapi extends CI_Controller {
 		}
 
 		$this->_json(array('success' => true, 'message' => 'Payment plan created successfully'));
+	}
+
+	private function _build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, $discount)
+	{
+		$student_id = (int)$student_id;
+		$discount = (float)$discount;
+		$instdate = (int)$instdate;
+		if ($instdate < 1) $instdate = 10;
+		if ($instdate > 30) $instdate = 30;
+
+		$extendinstallments = (int)$extendinstallments;
+		if ($extendinstallments < (int)$plan['no_of_installments']) {
+			$extendinstallments = (int)$plan['no_of_installments'];
+		}
+
+		$rows = array();
+		$errors = array();
+
+		$studentDetails = $this->db->get_where('students', array('student_id' => $student_id))->row_array();
+		if (!$studentDetails) {
+			return array('rows' => array(), 'errors' => array('Student not found'), 'summary' => array());
+		}
+
+		$classDeatils = $this->db->get_where('classes', array('class_id' => $studentDetails['class_id']))->row_array();
+		$exam_no = $classDeatils ? $classDeatils['exam_no'] : '';
+
+		$session = $this->db->get_where('course_sessions', array(
+			'session_name' => $plan['session'],
+			'course_id' => $plan['course_id'],
+		))->row_array();
+
+		if ($session) {
+			$exam_sequence_row = $this->db->get_where('exam_sequence', array(
+				'course_id' => $plan['course_id'],
+				'first_year' => $session['first_council_exam_no'],
+				'class' => 1,
+			))->row_array();
+
+			if (!empty($exam_sequence_row['id'])) {
+				$exam_sequence_id = (int)$exam_sequence_row['id'];
+				$this->db->select('*');
+				$this->db->from('council_sequence');
+				$this->db->where('course_id', $plan['course_id']);
+				$this->db->where('has_fee', 1);
+				$this->db->where('action_type', 'fee');
+				$this->db->where_in('recurring', array('One Time', 'Each Exam', 'Every Semester'));
+				$sequences = $this->db->get()->result_array();
+				$today = date('Y-m-d');
+
+				foreach ($sequences as $sequence) {
+					$fee = $this->db
+						->where('sequence_fee_id', $sequence['council_sequence_id'])
+						->where('exam_sequence_id', $exam_sequence_id)
+						->where('to_date >=', $today)
+						->order_by('from_date', 'ASC')
+						->get('council_sequence_fee_rules')
+						->row_array();
+					if ($fee) {
+						$rows[] = array(
+							'amount' => (float)$fee['exam_fee'],
+							'disc_per_inst' => $plan['disc_per_inst'],
+							'dead_line' => $fee['from_date'],
+							'payment_plan' => 'consulation fee',
+							'payment_comment' => 'This fee for next exam # ' . $exam_no . ' 1st Year',
+							'exam_sequence_id' => $exam_sequence_id,
+							'council_sequence_id' => (int)$sequence['council_sequence_id'],
+							'council_type_name' => isset($sequence['type_name']) ? $sequence['type_name'] : '',
+							'paid' => 0,
+							'discount' => 0,
+						);
+					} else {
+						$errors[] = 'Please Generate Fee For ' . $sequence['type_name'];
+					}
+				}
+			}
+		}
+
+		$rows[] = array(
+			'amount' => (float)$plan['installment_on_admission'],
+			'dead_line' => date('Y-m-d'),
+			'payment_plan' => 'Auto',
+			'disc_per_inst' => $plan['disc_per_inst'],
+			'payment_comment' => 'College Fee',
+			'paid' => 0,
+			'discount' => 0,
+			'row_kind' => 'admission',
+		);
+
+		$totalamount = (float)$plan['total_fee'] - $discount - (float)$plan['installment_on_admission'];
+		$permonth = $extendinstallments > 0 ? ($totalamount / $extendinstallments) : $totalamount;
+		for ($i = 1; $i <= $extendinstallments; $i++) {
+			$rows[] = array(
+				'amount' => (float)$permonth,
+				'dead_line' => date('Y-m-' . $instdate, strtotime('first day of +' . $i . ' month')),
+				'payment_plan' => 'Auto',
+				'disc_per_inst' => $plan['disc_per_inst'],
+				'payment_comment' => 'College Fee',
+				'paid' => 0,
+				'discount' => 0,
+				'row_kind' => 'installment',
+				'installment_no' => $i,
+			);
+		}
+
+		$installment_total = 0;
+		foreach ($rows as $r) {
+			if (isset($r['row_kind']) && $r['row_kind'] === 'installment') {
+				$installment_total += (float)$r['amount'];
+			}
+		}
+
+		$summary = array(
+			'plan_total_fee' => (float)$plan['total_fee'],
+			'discount' => $discount,
+			'student_total_fee' => (float)$plan['total_fee'] - $discount,
+			'admission_fee' => (float)$plan['installment_on_admission'],
+			'installment_count' => $extendinstallments,
+			'per_installment' => (float)$permonth,
+			'installment_total' => $installment_total,
+			'row_count' => count($rows),
+		);
+
+		return array('rows' => $rows, 'errors' => $errors, 'summary' => $summary);
+	}
+
+	private function _insert_payment_plan_row($student_id, $row, $actor)
+	{
+		$challan_no = $this->_new_challan_no();
+		$this->db->set('amount', $row['amount']);
+		$this->db->set('dead_line', $row['dead_line']);
+		$this->db->set('student_id', (int)$student_id);
+		$this->db->set('payment_plan', $row['payment_plan']);
+		if (isset($row['disc_per_inst'])) {
+			$this->db->set('disc_per_inst', $row['disc_per_inst']);
+		}
+		$this->db->set('payment_comment', $row['payment_comment']);
+		$this->db->set('challan_no', $challan_no);
+		$this->db->set('add_by', $actor);
+		$this->db->set('last_edit', $actor);
+		if (!empty($row['exam_sequence_id'])) {
+			$this->db->set('exam_sequence_id', (int)$row['exam_sequence_id']);
+		}
+		if (!empty($row['council_sequence_id'])) {
+			$this->db->set('council_sequence_id', (int)$row['council_sequence_id']);
+		}
+		$this->db->insert('payments');
 	}
 
 	public function payments_council_date($student_id = 0, $fee_id = 0)
