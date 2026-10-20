@@ -172,17 +172,19 @@ class Reports_service {
         $this->ci->db->where('s.status',1)->where('cl.campus_id',(int)$campus_id);
         if (!$this->_is_admin($user)) $this->ci->db->where_in('cl.class_id',$class_ids);
         $students=$this->ci->db->order_by('co.course_name','ASC')->order_by('cl.session','DESC')->order_by('s.roll_no','ASC')->order_by('s.student_id','ASC')->get()->result_array();
-        // Count recorded letters, not phone/SMS-only contacts or empty procedures.
-        $letter_counts=array();
+        // Only the current pending process contributes letters; completed history is excluded.
+        $letter_counts=array(); $letter_processes=array();
         foreach (array_chunk(array_column($students,'student_id'),500) as $ids) {
             $marks=implode(',',array_fill(0,count($ids),'?'));
-            $sql="SELECT student_id, COUNT(*) AS letter_count FROM struckofdetails_students WHERE student_id IN ($marks) AND (LOWER(TRIM(COALESCE(proof_image,''))) NOT IN ('','null','0') OR LOWER(TRIM(COALESCE(post_receipt,''))) NOT IN ('','null','0')) GROUP BY student_id";
+            $sql="SELECT d.student_id, p.process_count, COUNT(*) AS letter_count FROM struckofdetails_students d JOIN (SELECT student_id, MAX(process_count) AS process_count FROM struckof_procedures WHERE status='pending' GROUP BY student_id) p ON p.student_id=d.student_id AND p.process_count=d.process_count WHERE d.student_id IN ($marks) AND (LOWER(TRIM(COALESCE(d.proof_image,''))) NOT IN ('','null','0') OR LOWER(TRIM(COALESCE(d.post_receipt,''))) NOT IN ('','null','0')) GROUP BY d.student_id,p.process_count";
             foreach ($this->ci->db->query($sql,$ids)->result_array() as $row) {
                 $letter_counts[(int)$row['student_id']]=(int)$row['letter_count'];
+                $letter_processes[(int)$row['student_id']]=(int)$row['process_count'];
             }
         }
         foreach ($students as &$student) {
             $student['struckoff_letters']=isset($letter_counts[(int)$student['student_id']]) ? $letter_counts[(int)$student['student_id']] : 0;
+            $student['struckoff_process']=isset($letter_processes[(int)$student['student_id']]) ? $letter_processes[(int)$student['student_id']] : null;
         }
         unset($student);
         $payments=array();
