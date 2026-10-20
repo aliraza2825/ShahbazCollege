@@ -5,6 +5,7 @@ function verify($ok,$label) { if (!$ok) throw new Exception($label); echo "PASS:
 function student($id,$course,$batch) { return array('student_id'=>$id,'course_id'=>$course,'course_name'=>'Course '.$course,'session'=>$batch,'roll_no'=>'R'.$id,'first_name'=>'Student','last_name'=>(string)$id,'mobile'=>'03000000000'); }
 function payment($id,$sid,$paid,$amount,$actual,$deadline,$date='',$merged='',$fallback='') { return array('id'=>$id,'student_id'=>$sid,'paid'=>$paid,'amount'=>$amount,'actual_amount'=>$actual,'dead_line'=>$deadline,'actual_paid_date'=>$date,'paid_date'=>$fallback,'merged_challan'=>$merged); }
 $students=array(student(1,1,'2023-2025'),student(2,1,'2024-2026'),student(3,2,'2023-2025'),student(4,2,''));
+$students[0]['struckoff_letters']=3;
 $payments=array(
  payment(1,1,0,100.10,0,'2026-09-30'), payment(2,1,0,200.20,0,'2026-10-31'), payment(3,1,0,999,0,'2026-11-01'),
  payment(4,1,1,100,90,'2025-01-01','2026-10-01'),
@@ -25,3 +26,5 @@ verify($r['batches']===array('2024-2026','2023-2025','Unassigned'),'newest batch
 verify($r['totals']['2024-2026']['recovery']==80 && $r['totals']['Unassigned']['due']==0,'grand totals include each course once and retain zeros');
 $empty=(new Batch_recovery_report)->build(array(),$payments,'2026-10','2026-10-31');
 verify(!$empty['courses'] && !$empty['totals'],'out of scope payments excluded');
+
+verify($r['courses'][0]['students'][0]['struckoff_letters']===3 && $r['courses'][0]['students'][1]['struckoff_letters']===0,'letter counts retained with zero for no letters');
