@@ -360,9 +360,25 @@ class Reports_service {
         $badge=$this->ci->db->get_where('struckoff_badges',array('badge_id'=>$badge_id))->row_array();
         if (!$badge) return array('success'=>false,'message'=>'Badge not found','code'=>404);
         $status=isset($body['status']) && $body['status']==='sent' ? 'sent' : 'pending'; $now=date('Y-m-d H:i:s');
-        $data=array('status'=>$status,'post_amount'=>isset($body['post_amount']) && $body['post_amount']!=='' ? (float)$body['post_amount'] : null,'post_date'=>isset($body['post_date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/',(string)$body['post_date']) ? $body['post_date'] : null,'sent_by'=>$status==='sent' ? $this->_actor_name($user) : null,'sent_at'=>$status==='sent' ? $now : null,'updated_by'=>$this->_actor_name($user),'updated_at'=>$now);
+        $amount=isset($body['post_amount']) && $body['post_amount']!=='' ? round((float)$body['post_amount'],2) : 0;
+        if ($status==='sent' && $badge['status']==='sent') return array('success'=>false,'message'=>'This batch has already been sent','code'=>422);
+        $petty=null;
+        if ($status==='sent' && $amount>0) {
+            $petty=$this->ci->db->where(array('assign_to'=>(int)$user['user_id'],'petty_status'=>1))->get('petty_cash_college_wise')->row_array();
+            if (!$petty) return array('success'=>false,'message'=>'No active petty cash account assigned to you','code'=>422);
+            $balance=function_exists('pettycash_statement') ? (float)pettycash_statement((int)$petty['id']) : (float)$petty['remaining_amount'];
+            if ($balance < $amount) return array('success'=>false,'message'=>'Insufficient petty cash balance. Available: '.number_format($balance,2),'code'=>422);
+            $category=$this->ci->db->select('expense_category_id')->order_by('expense_category_id','ASC')->limit(1)->get('expense_category')->row_array();
+            if (!$category) return array('success'=>false,'message'=>'Expense category is not configured','code'=>422);
+        }
+        $data=array('status'=>$status,'post_amount'=>$amount>0 ? $amount : null,'post_date'=>isset($body['post_date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/',(string)$body['post_date']) ? $body['post_date'] : null,'sent_by'=>$status==='sent' ? $this->_actor_name($user) : null,'sent_at'=>$status==='sent' ? $now : null,'updated_by'=>$this->_actor_name($user),'updated_at'=>$now);
         if (!empty($body['post_receipt'])) $data['post_receipt']=basename((string)$body['post_receipt']);
         $this->ci->db->trans_start();
+        if ($status==='sent' && $amount>0) {
+            $this->ci->db->insert('expenses',array('date'=>date('Y-m-d'),'actual_date'=>$now,'title'=>'Pakistan Post Dispatch','amount'=>$amount,'add_by'=>$this->_actor_name($user),'add_by_id'=>(int)$user['user_id'],'last_edit'=>$this->_actor_name($user),'expense_category_id'=>(int)$category['expense_category_id'],'campus_id'=>(int)$petty['campus_id'],'purpose'=>'Struck-off batch '.$badge['badge_no'],'approved_status'=>1,'payment_type'=>'cash','paid_type'=>'cash','purchase_no'=>'','month_year'=>'','class'=>0,'council_exam_no'=>'','clear_by'=>'','upload_image'=>0));
+            if (!$this->ci->db->insert_id()) { $this->ci->db->trans_rollback(); return array('success'=>false,'message'=>'Unable to create petty cash expense','code'=>500); }
+            $this->ci->db->set('remaining_amount','remaining_amount - '.$amount,false)->where('id',(int)$petty['id'])->update('petty_cash_college_wise');
+        }
         $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badges',$data);
         $items=$this->ci->db->select('student_id,process_count')->get_where('struckoff_badge_items',array('badge_id'=>$badge_id))->result_array();
         $receipt_value=isset($data['post_receipt']) ? $data['post_receipt'] : null;
