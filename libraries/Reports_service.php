@@ -167,7 +167,7 @@ class Reports_service {
         foreach ($allowed['data'] as $c) if ((int)$c['campus_id'] === (int)$campus_id) $campus=$c;
         if (!$campus) return array('success'=>false,'message'=>'College not available','code'=>403);
         $class_ids = $this->_is_admin($user) ? array() : $this->_class_ids($user);
-        $this->ci->db->select('s.student_id,s.roll_no,s.first_name,s.last_name,s.mobile,s.course_id,cl.session,co.course_name');
+        $this->ci->db->select('s.student_id,s.roll_no,s.first_name,s.last_name,s.mobile,s.add_by,s.course_id,cl.session,co.course_name');
         $this->ci->db->from('students s')->join('classes cl','cl.class_id=s.class_id')->join('courses co','co.course_id=s.course_id');
         $this->ci->db->where('s.status',1)->where('cl.campus_id',(int)$campus_id);
         if (!$this->_is_admin($user)) $this->ci->db->where_in('cl.class_id',$class_ids);
@@ -185,6 +185,19 @@ class Reports_service {
         foreach ($students as &$student) {
             $student['struckoff_letters']=isset($letter_counts[(int)$student['student_id']]) ? $letter_counts[(int)$student['student_id']] : 0;
             $student['struckoff_process']=isset($letter_processes[(int)$student['student_id']]) ? $letter_processes[(int)$student['student_id']] : null;
+        }
+        unset($student);
+        // Latest receipt across all months, independent of the report's recovery month.
+        $last_paid_dates=array();
+        foreach (array_chunk(array_column($students,'student_id'),500) as $ids) {
+            $marks=implode(',',array_fill(0,count($ids),'?'));
+            $sql="SELECT student_id, MAX(CASE WHEN actual_paid_date >= '1000-01-01' THEN actual_paid_date WHEN paid_date >= '1000-01-01' THEN paid_date ELSE NULL END) AS last_paid_fee_date FROM payments WHERE paid=1 AND student_id IN ($marks) GROUP BY student_id";
+            foreach ($this->ci->db->query($sql,$ids)->result_array() as $row) {
+                $last_paid_dates[(int)$row['student_id']]=$row['last_paid_fee_date'];
+            }
+        }
+        foreach ($students as &$student) {
+            $student['last_paid_fee_date']=isset($last_paid_dates[(int)$student['student_id']]) ? substr($last_paid_dates[(int)$student['student_id']],0,10) : null;
         }
         unset($student);
         $payments=array();

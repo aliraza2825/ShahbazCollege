@@ -29,7 +29,7 @@ class Batch_recovery_report {
             $batches[$batch] = true;
             if (!isset($courses[$cid])) $courses[$cid] = array('course_id'=>$cid,'course_name'=>$s['course_name'],'students'=>array(),'totals'=>array());
             $a = $amounts[(int)$s['student_id']];
-            $courses[$cid]['students'][] = array('student_id'=>(int)$s['student_id'],'roll_no'=>$s['roll_no'], 'name'=>trim($s['first_name'].' '.$s['last_name']), 'phone'=>$s['mobile'], 'struckoff_process'=>isset($s['struckoff_process']) ? (int)$s['struckoff_process'] : null, 'struckoff_letters'=>isset($s['struckoff_letters']) ? (int)$s['struckoff_letters'] : 0, 'batch'=>$batch,'due'=>$a['due']/100,'recovery'=>$a['recovery']/100);
+            $courses[$cid]['students'][] = array('student_id'=>(int)$s['student_id'],'roll_no'=>$s['roll_no'], 'name'=>trim($s['first_name'].' '.$s['last_name']), 'phone'=>$s['mobile'], 'created_by'=>isset($s['add_by']) ? $s['add_by'] : '', 'last_paid_fee_date'=>isset($s['last_paid_fee_date']) ? $s['last_paid_fee_date'] : null, 'struckoff_process'=>isset($s['struckoff_process']) ? (int)$s['struckoff_process'] : null, 'struckoff_letters'=>isset($s['struckoff_letters']) ? (int)$s['struckoff_letters'] : 0, 'batch'=>$batch,'due'=>$a['due']/100,'recovery'=>$a['recovery']/100);
             foreach (array('due','recovery') as $key) {
                 if (!isset($courses[$cid]['totals'][$batch][$key])) $courses[$cid]['totals'][$batch][$key]=0;
                 if (!isset($grand[$batch][$key])) $grand[$batch][$key]=0;
