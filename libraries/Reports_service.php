@@ -167,7 +167,7 @@ class Reports_service {
         foreach ($allowed['data'] as $c) if ((int)$c['campus_id'] === (int)$campus_id) $campus=$c;
         if (!$campus) return array('success'=>false,'message'=>'College not available','code'=>403);
         $class_ids = $this->_is_admin($user) ? array() : $this->_class_ids($user);
-        $this->ci->db->select('s.student_id,s.roll_no,s.first_name,s.last_name,s.mobile,s.add_by,s.course_id,cl.session,co.course_name');
+        $this->ci->db->select('s.student_id,s.roll_no,s.first_name,s.last_name,s.mobile,s.add_by,s.last_edit,s.course_id,cl.session,co.course_name');
         $this->ci->db->from('students s')->join('classes cl','cl.class_id=s.class_id')->join('courses co','co.course_id=s.course_id');
         $this->ci->db->where('s.status',1)->where('cl.campus_id',(int)$campus_id);
         if (!$this->_is_admin($user)) $this->ci->db->where_in('cl.class_id',$class_ids);

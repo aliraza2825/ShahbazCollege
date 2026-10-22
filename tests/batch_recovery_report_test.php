@@ -28,3 +28,9 @@ $empty=(new Batch_recovery_report)->build(array(),$payments,'2026-10','2026-10-3
 verify(!$empty['courses'] && !$empty['totals'],'out of scope payments excluded');
 
 verify($r['courses'][0]['students'][0]['struckoff_letters']===3 && $r['courses'][0]['students'][1]['struckoff_letters']===0,'letter counts retained with zero for no letters');
+
+$creators=array(student(1,1,'2026'),student(2,1,'2026'),student(3,1,'2026'));
+$creators[0]['add_by']='Original'; $creators[0]['last_edit']='Editor';
+$creators[1]['add_by']='  '; $creators[1]['last_edit']='Editor';
+$creatorReport=(new Batch_recovery_report)->build($creators,array(),'2026-10','2026-10-31');
+verify(array_column($creatorReport['courses'][0]['students'],'created_by')===array('Original','Editor',''),'creator retained, blank creator falls back to editor, missing names remain blank');
