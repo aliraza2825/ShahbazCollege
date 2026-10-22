@@ -284,9 +284,27 @@ class Rulesapi extends CI_Controller {
 		$this->_json(array('success' => true, 'data' => $plans));
 	}
 
-	public function save_fee_rule()
+	public function save_fee_rule($provided_body = null, $bulk_child = false)
 	{
-		$body = $this->_body();
+		$body = is_array($provided_body) ? $provided_body : $this->_body();
+		if (!$bulk_child) {
+			$course_ids = isset($body['course_ids']) && is_array($body['course_ids']) ? $body['course_ids'] : explode(',', (string) $this->_body_val($body, 'course_ids'));
+			$session_ids = isset($body['session_ids']) && is_array($body['session_ids']) ? $body['session_ids'] : explode(',', (string) $this->_body_val($body, 'session_ids'));
+			$course_ids = array_values(array_unique(array_filter(array_map('intval', $course_ids))));
+			$session_ids = array_values(array_unique(array_filter(array_map('trim', $session_ids), function ($v) { return $v !== ''; })));
+			if (!$course_ids && $this->_body_val($body, 'course_id') !== '') $course_ids = array((int) $this->_body_val($body, 'course_id'));
+			if (!$session_ids && $this->_body_val($body, 'class_id') !== '') $session_ids = array((string) $this->_body_val($body, 'class_id'));
+			if (count($course_ids) > 1 || count($session_ids) > 1) {
+				foreach ($course_ids as $bulk_course_id) foreach ($session_ids as $bulk_session_id) {
+					$child = $body;
+					unset($child['course_ids'], $child['session_ids']);
+					$child['course_id'] = $bulk_course_id;
+					$child['class_id'] = $bulk_session_id;
+					$this->save_fee_rule($child, true);
+				}
+				$this->_json(array('success' => true, 'message' => 'Fee plans created for all selected courses and sessions.'));
+			}
+		}
 		$class_id = $this->_body_val($body, 'class_id');
 		$course_id = $this->_body_val($body, 'course_id');
 		$fee_rule_type = $this->_body_val($body, 'fee_rule_type');
@@ -311,6 +329,10 @@ class Rulesapi extends CI_Controller {
 		}
 
 		$session = $this->db->get_where('classes', array('session' => $class_id, 'course_id' => $course_id))->row_array();
+		if (!$session) {
+			if ($bulk_child) return false;
+			$this->_json(array('success' => false, 'message' => 'Selected course/session combination was not found.'), 422);
+		}
 		$exam_sequence = $this->db->get_where('exam_sequence', array(
 			'course_id' => $course_id,
 			'first_year' => $session['exam_no'],
@@ -360,6 +382,7 @@ class Rulesapi extends CI_Controller {
 			$this->db->insert('fee_rules');
 		}
 
+		if ($bulk_child) return true;
 		$this->_json(array('success' => true, 'message' => 'Fee Rules Updated Successfully.'));
 	}
 
