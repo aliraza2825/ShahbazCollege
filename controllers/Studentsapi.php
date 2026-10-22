@@ -3137,6 +3137,20 @@ class Studentsapi extends CI_Controller {
 		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
 	}
 
+	public function struck_badge_remove_item()
+	{
+		$this->_require_struckof();
+		$result=$this->_reports_service()->struck_badge_remove_item($this->current_user, $this->_body());
+		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
+	}
+
+	public function struck_badge_delete()
+	{
+		$this->_require_struckof();
+		$result=$this->_reports_service()->struck_badge_delete($this->current_user, $this->_body());
+		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
+	}
+
 	public function struckof_process($student_id = 0, $process_count = 0)
 	{
 		$this->_require_struckof();

@@ -301,8 +301,31 @@ class Reports_service {
     {
         if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
-        $rows=$this->ci->db->query("SELECT b.*, COUNT(i.item_id) AS student_count FROM struckoff_badges b LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
+        $rows=$this->ci->db->query("SELECT b.*, COUNT(i.item_id) AS student_count, GROUP_CONCAT(i.struck_of_id ORDER BY i.struck_of_id) AS struck_of_ids FROM struckoff_badges b LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
+        foreach ($rows as &$row) $row['struck_of_ids'] = $row['struck_of_ids'] ? array_map('intval', explode(',', $row['struck_of_ids'])) : array();
+        unset($row);
         return array('success'=>true,'data'=>$rows);
+    }
+
+    public function struck_badge_remove_item($user, $body)
+    {
+        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        $this->_ensure_struck_badge_schema();
+        $badge_id=(int)(isset($body['badge_id']) ? $body['badge_id'] : 0); $struck_of_id=(int)(isset($body['struck_of_id']) ? $body['struck_of_id'] : 0);
+        if (!$badge_id || !$struck_of_id) return array('success'=>false,'message'=>'Badge and student are required','code'=>422);
+        $this->ci->db->where(array('badge_id'=>$badge_id,'struck_of_id'=>$struck_of_id))->delete('struckoff_badge_items');
+        $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badges',array('updated_by'=>$this->_actor_name($user),'updated_at'=>date('Y-m-d H:i:s')));
+        return array('success'=>true);
+    }
+
+    public function struck_badge_delete($user, $body)
+    {
+        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        $this->_ensure_struck_badge_schema();
+        $badge_id=(int)(isset($body['badge_id']) ? $body['badge_id'] : 0);
+        if (!$badge_id) return array('success'=>false,'message'=>'Badge is required','code'=>422);
+        $this->ci->db->where('badge_id',$badge_id)->delete('struckoff_badges');
+        return array('success'=>true);
     }
 
     public function batch_recovery_campuses($user)
