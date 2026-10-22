@@ -242,6 +242,9 @@ class Reports_service {
             PRIMARY KEY (`item_id`), UNIQUE KEY `uq_struckoff_badge_item` (`badge_id`,`struck_of_id`), KEY `idx_struckoff_badge_student` (`student_id`),
             CONSTRAINT `fk_struckoff_badge_item_badge` FOREIGN KEY (`badge_id`) REFERENCES `struckoff_badges` (`badge_id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        foreach (array('post_receipt'=>'VARCHAR(255) NULL','post_amount'=>'DECIMAL(12,2) NULL','post_date'=>'DATE NULL','sent_by'=>'VARCHAR(255) NULL','sent_at'=>'DATETIME NULL') as $field=>$ddl) {
+            if (!$this->ci->db->field_exists($field, 'struckoff_badges')) $this->ci->db->query("ALTER TABLE `struckoff_badges` ADD `$field` $ddl");
+        }
     }
 
     private function _struck_badge_rows($user, $ids)
@@ -251,6 +254,7 @@ class Reports_service {
         $q = $this->_struck_management_query($user);
         if (!$q) return array();
         list($from, $where, $params) = $q;
+        $where = preg_replace("/ WHERE p\.status='pending' AND EXISTS \(SELECT 1 FROM struckofdetails_students pending_detail WHERE pending_detail\.student_id=p\.student_id AND pending_detail\.process_count=p\.process_count AND pending_detail\.status='0'\)/", ' WHERE 1=1', $where, 1);
         $marks = implode(',', array_fill(0, count($ids), '?'));
         $sql = "SELECT p.struck_of_id,p.student_id,p.process_count,p.created_at,p.created_by,p.reason,p.status,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,cl.name AS class_name,ca.campus_name,co.course_name
             {$from}{$where} AND p.struck_of_id IN ($marks) ORDER BY p.struck_of_id ASC";
@@ -267,6 +271,10 @@ class Reports_service {
             $marks = implode(',', array_fill(0, count($ids), '?'));
             $row = $this->ci->db->query("SELECT b.badge_id FROM struckoff_badges b JOIN struckoff_badge_items i ON i.badge_id=b.badge_id WHERE b.status='pending' AND i.struck_of_id IN ($marks) ORDER BY b.badge_id DESC LIMIT 1", array_map('intval',$ids))->row_array();
             $badge_id = $row ? (int)$row['badge_id'] : 0;
+        }
+        if (!$badge_id) {
+            $latest=$this->ci->db->where('status','pending')->order_by('badge_id','DESC')->limit(1)->get('struckoff_badges')->row_array();
+            $badge_id=$latest ? (int)$latest['badge_id'] : 0;
         }
         $badge = $badge_id ? $this->ci->db->get_where('struckoff_badges', array('badge_id'=>$badge_id))->row_array() : null;
         if ($badge && $badge['status'] !== 'pending') $badge = null;
@@ -286,6 +294,10 @@ class Reports_service {
             $marks=implode(',',array_fill(0,count($ids),'?'));
             $found=$this->ci->db->query("SELECT b.badge_id FROM struckoff_badges b JOIN struckoff_badge_items i ON i.badge_id=b.badge_id WHERE b.status='pending' AND i.struck_of_id IN ($marks) ORDER BY b.badge_id DESC LIMIT 1",$ids)->row_array();
             $badge_id=$found ? (int)$found['badge_id'] : 0;
+        }
+        if (!$badge_id) {
+            $latest=$this->ci->db->where('status','pending')->order_by('badge_id','DESC')->limit(1)->get('struckoff_badges')->row_array();
+            $badge_id=$latest ? (int)$latest['badge_id'] : 0;
         }
         $badge=$badge_id ? $this->ci->db->get_where('struckoff_badges',array('badge_id'=>$badge_id))->row_array() : null;
         if (!$badge || $badge['status'] !== 'pending') {
@@ -338,6 +350,24 @@ class Reports_service {
         if (!$badge_id) return array('success'=>false,'message'=>'Badge is required','code'=>422);
         $this->ci->db->where('badge_id',$badge_id)->delete('struckoff_badges');
         return array('success'=>true);
+    }
+
+    public function struck_badge_dispatch_update($user, $body)
+    {
+        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        $this->_ensure_struck_badge_schema(); $badge_id=(int)(isset($body['badge_id']) ? $body['badge_id'] : 0);
+        if (!$badge_id) return array('success'=>false,'message'=>'Badge is required','code'=>422);
+        $badge=$this->ci->db->get_where('struckoff_badges',array('badge_id'=>$badge_id))->row_array();
+        if (!$badge) return array('success'=>false,'message'=>'Badge not found','code'=>404);
+        $status=isset($body['status']) && $body['status']==='sent' ? 'sent' : 'pending'; $now=date('Y-m-d H:i:s');
+        $data=array('status'=>$status,'post_amount'=>isset($body['post_amount']) && $body['post_amount']!=='' ? (float)$body['post_amount'] : null,'post_date'=>isset($body['post_date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/',(string)$body['post_date']) ? $body['post_date'] : null,'sent_by'=>$status==='sent' ? $this->_actor_name($user) : null,'sent_at'=>$status==='sent' ? $now : null,'updated_by'=>$this->_actor_name($user),'updated_at'=>$now);
+        if (!empty($body['post_receipt'])) $data['post_receipt']=basename((string)$body['post_receipt']);
+        $this->ci->db->trans_start();
+        $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badges',$data);
+        $items=$this->ci->db->select('student_id,process_count')->get_where('struckoff_badge_items',array('badge_id'=>$badge_id))->result_array();
+        foreach ($items as $item) $this->ci->db->where(array('student_id'=>(int)$item['student_id'],'process_count'=>(int)$item['process_count']))->update('struckofdetails_students',array('status'=>$status==='sent'?'1':'0','post_receipt'=>$data['post_receipt'] ?? null,'post_amount'=>$data['post_amount'],'post_date'=>$data['post_date'],'sent_by'=>$data['sent_by'],'sent_at'=>$data['sent_at']));
+        $this->ci->db->trans_complete();
+        return array('success'=>true,'data'=>$this->ci->db->get_where('struckoff_badges',array('badge_id'=>$badge_id))->row_array());
     }
 
     public function struck_detail_dispatch_update($user, $body)
