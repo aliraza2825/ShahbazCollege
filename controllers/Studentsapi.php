@@ -3102,6 +3102,20 @@ class Studentsapi extends CI_Controller {
 		$this->_json(array('success' => true, 'data' => $result['data']));
 	}
 
+	public function struck_management_filters()
+	{
+		$this->_require_struckof();
+		$result=$this->_reports_service()->struck_management_filters($this->current_user);
+		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
+	}
+
+	public function struck_management_list()
+	{
+		$this->_require_struckof();
+		$result=$this->_reports_service()->struck_management_list($this->current_user, $this->input->get() ?: array());
+		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
+	}
+
 	public function struckof_process($student_id = 0, $process_count = 0)
 	{
 		$this->_require_struckof();

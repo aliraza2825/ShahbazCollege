@@ -143,6 +143,65 @@ class Reports_service {
         );
     }
 
+    /** Shared pending-only population for the management filters and paginated list. */
+    private function _struck_management_query($user)
+    {
+        if (!$this->_user_perm($user, 'can_student_struckof')) return null;
+        $scope=$this->_struckoff_scope_filters($user);
+        if (empty($scope['allowed'])) return null;
+        $from=" FROM struckof_procedures p INNER JOIN students s ON s.student_id=p.student_id INNER JOIN classes cl ON cl.class_id=s.class_id LEFT JOIN campuses ca ON ca.campus_id=cl.campus_id LEFT JOIN courses co ON co.course_id=s.course_id";
+        $where=" WHERE p.status='pending'";
+        $params=array();
+        foreach (array('class_ids'=>'s.class_id','campus_ids'=>'cl.campus_id') as $key=>$column) {
+            if (!empty($scope[$key])) {
+                $ids=array_map('intval',$scope[$key]);
+                $where.=" AND $column IN (".implode(',',array_fill(0,count($ids),'?')).")";
+                $params=array_merge($params,$ids);
+            }
+        }
+        return array($from,$where,$params);
+    }
+
+    public function struck_management_filters($user)
+    {
+        $query=$this->_struck_management_query($user);
+        if (!$query) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        list($from,$where,$params)=$query;
+        $rows=$this->ci->db->query("SELECT DISTINCT cl.class_id,cl.name AS class_name,cl.campus_id,ca.campus_name,s.course_id,co.course_name".$from.$where." ORDER BY ca.campus_name,co.course_name,cl.name",$params)->result_array();
+        $months=$this->ci->db->query("SELECT DISTINCT DATE_FORMAT(p.created_at,'%Y-%m') AS month".$from.$where." AND p.created_at >= '1000-01-01' ORDER BY month DESC",$params)->result_array();
+        return array('success'=>true,'data'=>array('classes'=>$rows,'months'=>array_column($months,'month')));
+    }
+
+    public function struck_management_list($user, $filters)
+    {
+        $query=$this->_struck_management_query($user);
+        if (!$query) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        list($from,$where,$params)=$query;
+        foreach (array('campus_id'=>'cl.campus_id','course_id'=>'s.course_id','class_id'=>'cl.class_id') as $key=>$column) {
+            $value=isset($filters[$key]) ? (string)$filters[$key] : '';
+            if ($value === '' || $value === '0') continue;
+            if (!ctype_digit($value)) return array('success'=>false,'message'=>'Invalid filter','code'=>422);
+            $where.=" AND $column=?"; $params[]=(int)$value;
+        }
+        $month=isset($filters['month']) ? (string)$filters['month'] : '';
+        if ($month !== '') {
+            if (!preg_match('/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/',$month)) return array('success'=>false,'message'=>'Invalid month','code'=>422);
+            $where.=" AND p.created_at >= ? AND p.created_at < ?";
+            $params[]=$month.'-01'; $params[]=date('Y-m-d',strtotime($month.'-01 +1 month'));
+        }
+        $page=max(1,isset($filters['page']) ? (int)$filters['page'] : 1);
+        $per_page=isset($filters['per_page']) ? (int)$filters['per_page'] : 25;
+        if (!in_array($per_page,array(25,50,100))) $per_page=25;
+        $count=$this->ci->db->query("SELECT COUNT(*) AS total".$from.$where,$params)->row_array();
+        $total=(int)$count['total']; $pages=max(1,(int)ceil($total/$per_page)); $page=min($page,$pages);
+        $offset=($page-1)*$per_page;
+        $sql="SELECT p.struck_of_id,p.student_id,p.process_count,p.created_at,p.created_by,p.reason,p.status,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,cl.name AS class_name,ca.campus_name,co.course_name,
+            (SELECT COUNT(*) FROM struckofdetails_students d WHERE d.student_id=p.student_id AND d.process_count=p.process_count AND (LOWER(TRIM(COALESCE(d.proof_image,''))) NOT IN ('','null','0') OR LOWER(TRIM(COALESCE(d.post_receipt,''))) NOT IN ('','null','0'))) AS letters"
+            .$from.$where." ORDER BY p.created_at DESC,p.struck_of_id DESC LIMIT $per_page OFFSET $offset";
+        $rows=$this->ci->db->query($sql,$params)->result_array();
+        return array('success'=>true,'data'=>array('rows'=>$rows,'total'=>$total,'page'=>$page,'per_page'=>$per_page,'pages'=>$pages));
+    }
+
     public function batch_recovery_campuses($user)
     {
         if (!$this->_user_perm($user, 'reports_student_fee_problem')) return array('success'=>false, 'message'=>'Fee report access required');

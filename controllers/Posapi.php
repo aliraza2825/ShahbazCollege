@@ -349,7 +349,7 @@ class Posapi extends CI_Controller {
 	private function _module_permissions($user, $row, $is_admin)
 	{
 		$ids = array(
-			'dashboard', 'pos', 'students', 'online-applications', 'hr', 'classes',
+			'dashboard', 'pos', 'students', 'struck-off-management', 'online-applications', 'hr', 'classes',
 			'courses-management', 'course-sessions', 'schedule-management', 'papers-results',
 			'councils', 'reports', 'punjab-council', 'council-list', 'accounts', 'fees',
 			'expenses', 'tax', 'inventory', 'construction', 'incentive', 'complaints',
@@ -376,6 +376,7 @@ class Posapi extends CI_Controller {
 			'dashboard' => true,
 			'pos' => !empty($row['pos']),
 			'students' => $this->_any_access_flag($row, array('student_sidebar', 'student_add', 'student_all', 'admission_process_access')),
+			'struck-off-management' => !empty($row['can_student_struckof']),
 			'online-applications' => !empty($row['online_application_access']),
 			// Legacy always shows Loans + My Attendence for every staff user;
 			// finer HR tabs are gated in Hrapi::meta / Sidebar.
