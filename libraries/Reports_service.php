@@ -209,7 +209,7 @@ class Reports_service {
         $count=$this->ci->db->query("SELECT COUNT(*) AS total".$from.$where,$params)->row_array();
         $total=(int)$count['total']; $pages=max(1,(int)ceil($total/$per_page)); $page=min($page,$pages);
         $offset=($page-1)*$per_page;
-        $sql="SELECT p.struck_of_id,p.student_id,p.process_count,p.created_at,p.created_by,p.reason,p.status,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,cl.name AS class_name,ca.campus_name,co.course_name,
+        $sql="SELECT p.struck_of_id,p.student_id,p.process_count,p.created_at,p.created_by,p.reason,p.status,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,s.address,cl.name AS class_name,ca.campus_name,co.course_name,
             (SELECT COUNT(*) FROM struckofdetails_students d WHERE d.student_id=p.student_id AND d.process_count=p.process_count AND d.status='0') AS letters"
             .$from.$where." ORDER BY p.created_at DESC,p.struck_of_id DESC LIMIT $per_page OFFSET $offset";
         $rows=$this->ci->db->query($sql,$params)->result_array();
@@ -256,7 +256,7 @@ class Reports_service {
         list($from, $where, $params) = $q;
         $where = preg_replace("/ WHERE p\.status='pending' AND EXISTS \(SELECT 1 FROM struckofdetails_students pending_detail WHERE pending_detail\.student_id=p\.student_id AND pending_detail\.process_count=p\.process_count AND pending_detail\.status='0'\)/", ' WHERE 1=1', $where, 1);
         $marks = implode(',', array_fill(0, count($ids), '?'));
-        $sql = "SELECT p.struck_of_id,p.student_id,p.process_count,p.created_at,p.created_by,p.reason,p.status,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,cl.name AS class_name,ca.campus_name,co.course_name
+        $sql = "SELECT p.struck_of_id,p.student_id,p.process_count,p.created_at,p.created_by,p.reason,p.status,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,s.address,cl.name AS class_name,ca.campus_name,co.course_name
             {$from}{$where} AND p.struck_of_id IN ($marks) ORDER BY p.struck_of_id ASC";
         return $this->ci->db->query($sql, array_merge($params, $ids))->result_array();
     }
@@ -278,7 +278,7 @@ class Reports_service {
         }
         $badge = $badge_id ? $this->ci->db->get_where('struckoff_badges', array('badge_id'=>$badge_id))->row_array() : null;
         if ($badge && $badge['status'] !== 'pending') $badge = null;
-        $existing = $badge_id ? $this->ci->db->get_where('struckoff_badge_items', array('badge_id'=>$badge_id))->result_array() : array();
+        $existing = !empty($body['only_selected']) ? array() : ($badge_id ? $this->ci->db->get_where('struckoff_badge_items', array('badge_id'=>$badge_id))->result_array() : array());
         $all = array_merge(array_column($existing, 'struck_of_id'), $ids);
         return array('success'=>true,'data'=>array('badge'=>$badge,'rows'=>$this->_struck_badge_rows($user,$all),'badge_id'=>$badge ? (int)$badge['badge_id'] : null));
     }
