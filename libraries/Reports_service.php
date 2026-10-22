@@ -153,10 +153,11 @@ class Reports_service {
     private function _struck_management_query($user)
     {
         if (!$this->_user_perm($user, 'can_student_struckof')) return null;
+        $this->_ensure_struck_detail_dispatch_schema();
         $scope=$this->_struckoff_scope_filters($user);
         if (empty($scope['allowed'])) return null;
         $from=" FROM struckof_procedures p INNER JOIN students s ON s.student_id=p.student_id INNER JOIN classes cl ON cl.class_id=s.class_id LEFT JOIN campuses ca ON ca.campus_id=cl.campus_id LEFT JOIN courses co ON co.course_id=s.course_id";
-        $where=" WHERE p.status='pending'";
+        $where=" WHERE p.status='pending' AND EXISTS (SELECT 1 FROM struckofdetails_students pending_detail WHERE pending_detail.student_id=p.student_id AND pending_detail.process_count=p.process_count AND pending_detail.status='0')";
         $params=array();
         foreach (array('class_ids'=>'s.class_id','campus_ids'=>'cl.campus_id') as $key=>$column) {
             if (!empty($scope[$key])) {
@@ -166,6 +167,13 @@ class Reports_service {
             }
         }
         return array($from,$where,$params);
+    }
+
+    private function _ensure_struck_detail_dispatch_schema()
+    {
+        if (!$this->ci->db->table_exists('struckofdetails_students')) return;
+        $fields = array('post_amount' => 'DECIMAL(12,2) NULL DEFAULT NULL', 'post_date' => 'DATE NULL DEFAULT NULL', 'sent_by' => 'VARCHAR(255) NULL', 'sent_at' => 'DATETIME NULL');
+        foreach ($fields as $field => $ddl) if (!$this->ci->db->field_exists($field, 'struckofdetails_students')) $this->ci->db->query("ALTER TABLE `struckofdetails_students` ADD `$field` $ddl");
     }
 
     public function struck_management_filters($user)
@@ -202,9 +210,13 @@ class Reports_service {
         $total=(int)$count['total']; $pages=max(1,(int)ceil($total/$per_page)); $page=min($page,$pages);
         $offset=($page-1)*$per_page;
         $sql="SELECT p.struck_of_id,p.student_id,p.process_count,p.created_at,p.created_by,p.reason,p.status,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,cl.name AS class_name,ca.campus_name,co.course_name,
-            (SELECT COUNT(*) FROM struckofdetails_students d WHERE d.student_id=p.student_id AND d.process_count=p.process_count AND (LOWER(TRIM(COALESCE(d.proof_image,''))) NOT IN ('','null','0') OR LOWER(TRIM(COALESCE(d.post_receipt,''))) NOT IN ('','null','0'))) AS letters"
+            (SELECT COUNT(*) FROM struckofdetails_students d WHERE d.student_id=p.student_id AND d.process_count=p.process_count AND d.status='0') AS letters"
             .$from.$where." ORDER BY p.created_at DESC,p.struck_of_id DESC LIMIT $per_page OFFSET $offset";
         $rows=$this->ci->db->query($sql,$params)->result_array();
+        foreach ($rows as &$row) {
+            $row['pending_details']=$this->ci->db->select('id,contact_from_no,contact_to_no,created_at,reason,post_receipt,post_amount,post_date,sent_by,sent_at')->order_by('created_at','ASC')->get_where('struckofdetails_students',array('student_id'=>(int)$row['student_id'],'process_count'=>(int)$row['process_count'],'status'=>'0'))->result_array();
+        }
+        unset($row);
         return array('success'=>true,'data'=>array('rows'=>$rows,'total'=>$total,'page'=>$page,'per_page'=>$per_page,'pages'=>$pages));
     }
 
@@ -325,6 +337,21 @@ class Reports_service {
         $badge_id=(int)(isset($body['badge_id']) ? $body['badge_id'] : 0);
         if (!$badge_id) return array('success'=>false,'message'=>'Badge is required','code'=>422);
         $this->ci->db->where('badge_id',$badge_id)->delete('struckoff_badges');
+        return array('success'=>true);
+    }
+
+    public function struck_detail_dispatch_update($user, $body)
+    {
+        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        $this->_ensure_struck_detail_dispatch_schema();
+        $detail_id=(int)(isset($body['detail_id']) ? $body['detail_id'] : 0);
+        if (!$detail_id) return array('success'=>false,'message'=>'Letter detail is required','code'=>422);
+        $row=$this->ci->db->get_where('struckofdetails_students',array('id'=>$detail_id))->row_array();
+        if (!$row) return array('success'=>false,'message'=>'Letter detail not found','code'=>404);
+        $status=isset($body['status']) && $body['status']==='sent' ? '1' : '0';
+        $data=array('post_amount'=>isset($body['post_amount']) && $body['post_amount']!=='' ? (float)$body['post_amount'] : null,'post_date'=>isset($body['post_date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/',(string)$body['post_date']) ? $body['post_date'] : null,'status'=>$status,'sent_by'=>$status==='1' ? $this->_actor_name($user) : null,'sent_at'=>$status==='1' ? date('Y-m-d H:i:s') : null);
+        if (!empty($body['post_receipt'])) $data['post_receipt']=basename((string)$body['post_receipt']);
+        $this->ci->db->where('id',$detail_id)->update('struckofdetails_students',$data);
         return array('success'=>true);
     }
 

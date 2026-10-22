@@ -3151,6 +3151,16 @@ class Studentsapi extends CI_Controller {
 		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
 	}
 
+	public function struck_detail_dispatch_update()
+	{
+		$this->_require_struckof();
+		$body=$this->_body();
+		$receipt=$this->_upload_field('post_image');
+		if ($receipt !== '') $body['post_receipt']=$receipt;
+		$result=$this->_reports_service()->struck_detail_dispatch_update($this->current_user, $body);
+		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
+	}
+
 	public function struckof_process($student_id = 0, $process_count = 0)
 	{
 		$this->_require_struckof();
