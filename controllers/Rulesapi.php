@@ -1169,7 +1169,14 @@ class Rulesapi extends CI_Controller {
 
 	public function fee_plan_sessions()
 	{
-		$this->course_sessions();
+		$course_id = $this->input->get('course_id');
+		if (!$course_id) $this->_json(array('success' => false, 'message' => 'course_id required'), 422);
+		$this->db->select('classes.session, classes.course_id, courses.course_name');
+		$this->db->from('classes');
+		$this->db->join('courses', 'courses.course_id = classes.course_id', 'left');
+		$this->db->where('classes.course_id', (int) $course_id);
+		$this->db->group_by(array('classes.course_id', 'classes.session', 'courses.course_name'));
+		$this->_json(array('success' => true, 'data' => $this->db->order_by('classes.session', 'ASC')->get()->result_array()));
 	}
 
 	public function save_fee_plan()
