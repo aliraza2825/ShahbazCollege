@@ -365,7 +365,8 @@ class Reports_service {
         $this->ci->db->trans_start();
         $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badges',$data);
         $items=$this->ci->db->select('student_id,process_count')->get_where('struckoff_badge_items',array('badge_id'=>$badge_id))->result_array();
-        foreach ($items as $item) $this->ci->db->where(array('student_id'=>(int)$item['student_id'],'process_count'=>(int)$item['process_count']))->update('struckofdetails_students',array('status'=>$status==='sent'?'1':'0','post_receipt'=>$data['post_receipt'] ?? null,'post_amount'=>$data['post_amount'],'post_date'=>$data['post_date'],'sent_by'=>$data['sent_by'],'sent_at'=>$data['sent_at']));
+        $receipt_value=isset($data['post_receipt']) ? $data['post_receipt'] : null;
+        foreach ($items as $item) $this->ci->db->where(array('student_id'=>(int)$item['student_id'],'process_count'=>(int)$item['process_count']))->update('struckofdetails_students',array('status'=>$status==='sent'?'1':'0','post_receipt'=>$receipt_value,'post_amount'=>$data['post_amount'],'post_date'=>$data['post_date'],'sent_by'=>$data['sent_by'],'sent_at'=>$data['sent_at']));
         $this->ci->db->trans_complete();
         return array('success'=>true,'data'=>$this->ci->db->get_where('struckoff_badges',array('badge_id'=>$badge_id))->row_array());
     }
