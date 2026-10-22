@@ -245,6 +245,9 @@ class Reports_service {
         foreach (array('post_receipt'=>'VARCHAR(255) NULL','post_amount'=>'DECIMAL(12,2) NULL','post_date'=>'DATE NULL','sent_by'=>'VARCHAR(255) NULL','sent_at'=>'DATETIME NULL','expense_id'=>'INT NULL') as $field=>$ddl) {
             if (!$this->ci->db->field_exists($field, 'struckoff_badges')) $this->ci->db->query("ALTER TABLE `struckoff_badges` ADD `$field` $ddl");
         }
+        if ($this->ci->db->table_exists('expenses') && !$this->ci->db->field_exists('struckoff_badge_id', 'expenses')) {
+            $this->ci->db->query("ALTER TABLE `expenses` ADD `struckoff_badge_id` INT NULL");
+        }
     }
 
     private function _struck_badge_rows($user, $ids)
@@ -325,7 +328,7 @@ class Reports_service {
     {
         if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
-        $rows=$this->ci->db->query("SELECT b.*, COUNT(i.item_id) AS student_count, GROUP_CONCAT(i.struck_of_id ORDER BY i.struck_of_id) AS struck_of_ids FROM struckoff_badges b LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
+        $rows=$this->ci->db->query("SELECT b.*, e.id AS attached_expense_id, e.expense_category_id AS attached_expense_category_id, COUNT(i.item_id) AS student_count, GROUP_CONCAT(i.struck_of_id ORDER BY i.struck_of_id) AS struck_of_ids FROM struckoff_badges b LEFT JOIN expenses e ON (e.struckoff_badge_id=b.badge_id OR e.id=b.expense_id) LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
         foreach ($rows as &$row) $row['struck_of_ids'] = $row['struck_of_ids'] ? array_map('intval', explode(',', $row['struck_of_ids'])) : array();
         unset($row);
         return array('success'=>true,'data'=>$rows);
@@ -376,7 +379,7 @@ class Reports_service {
         $expense_id=0;
         $this->ci->db->trans_start();
         if ($status==='sent' && $amount>0) {
-            $this->ci->db->insert('expenses',array('date'=>date('Y-m-d'),'actual_date'=>$now,'title'=>'Pakistan Post Dispatch','amount'=>$amount,'add_by'=>$this->_actor_name($user),'add_by_id'=>(int)$user['user_id'],'last_edit'=>$this->_actor_name($user),'expense_category_id'=>(int)$category['expense_category_id'],'campus_id'=>(int)$petty['campus_id'],'purpose'=>'Struck-off batch '.$badge['badge_no'],'approved_status'=>1,'payment_type'=>'cash','paid_type'=>'cash','purchase_no'=>'','month_year'=>'','class'=>0,'council_exam_no'=>'','clear_by'=>'','upload_image'=>0));
+            $this->ci->db->insert('expenses',array('date'=>date('Y-m-d'),'actual_date'=>$now,'title'=>'Pakistan Post Dispatch','amount'=>$amount,'add_by'=>$this->_actor_name($user),'add_by_id'=>(int)$user['user_id'],'last_edit'=>$this->_actor_name($user),'expense_category_id'=>(int)$category['expense_category_id'],'campus_id'=>(int)$petty['campus_id'],'purpose'=>'Struck-off batch '.$badge['badge_no'],'struckoff_badge_id'=>$badge_id,'approved_status'=>1,'payment_type'=>'cash','paid_type'=>'cash','purchase_no'=>'','month_year'=>'','class'=>0,'council_exam_no'=>'','clear_by'=>'','upload_image'=>0));
             $expense_id=(int)$this->ci->db->insert_id();
             if (!$expense_id) { $this->ci->db->trans_rollback(); return array('success'=>false,'message'=>'Unable to create petty cash expense','code'=>500); }
             $this->ci->db->set('remaining_amount','remaining_amount - '.$amount,false)->where('id',(int)$petty['id'])->update('petty_cash_college_wise');
