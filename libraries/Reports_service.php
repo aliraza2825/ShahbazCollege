@@ -242,7 +242,7 @@ class Reports_service {
             PRIMARY KEY (`item_id`), UNIQUE KEY `uq_struckoff_badge_item` (`badge_id`,`struck_of_id`), KEY `idx_struckoff_badge_student` (`student_id`),
             CONSTRAINT `fk_struckoff_badge_item_badge` FOREIGN KEY (`badge_id`) REFERENCES `struckoff_badges` (`badge_id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-        foreach (array('post_receipt'=>'VARCHAR(255) NULL','post_amount'=>'DECIMAL(12,2) NULL','post_date'=>'DATE NULL','sent_by'=>'VARCHAR(255) NULL','sent_at'=>'DATETIME NULL') as $field=>$ddl) {
+        foreach (array('post_receipt'=>'VARCHAR(255) NULL','post_amount'=>'DECIMAL(12,2) NULL','post_date'=>'DATE NULL','sent_by'=>'VARCHAR(255) NULL','sent_at'=>'DATETIME NULL','expense_id'=>'INT NULL') as $field=>$ddl) {
             if (!$this->ci->db->field_exists($field, 'struckoff_badges')) $this->ci->db->query("ALTER TABLE `struckoff_badges` ADD `$field` $ddl");
         }
     }
@@ -368,17 +368,20 @@ class Reports_service {
             if (!$petty) return array('success'=>false,'message'=>'No active petty cash account assigned to you','code'=>422);
             $balance=function_exists('pettycash_statement') ? (float)pettycash_statement((int)$petty['id']) : (float)$petty['remaining_amount'];
             if ($balance < $amount) return array('success'=>false,'message'=>'Insufficient petty cash balance. Available: '.number_format($balance,2),'code'=>422);
-            $category=$this->ci->db->select('expense_category_id')->order_by('expense_category_id','ASC')->limit(1)->get('expense_category')->row_array();
+            $category=$this->ci->db->get_where('expense_category',array('expense_category_id'=>32))->row_array();
             if (!$category) return array('success'=>false,'message'=>'Expense category is not configured','code'=>422);
         }
         $data=array('status'=>$status,'post_amount'=>$amount>0 ? $amount : null,'post_date'=>isset($body['post_date']) && preg_match('/^\d{4}-\d{2}-\d{2}$/',(string)$body['post_date']) ? $body['post_date'] : null,'sent_by'=>$status==='sent' ? $this->_actor_name($user) : null,'sent_at'=>$status==='sent' ? $now : null,'updated_by'=>$this->_actor_name($user),'updated_at'=>$now);
         if (!empty($body['post_receipt'])) $data['post_receipt']=basename((string)$body['post_receipt']);
+        $expense_id=0;
         $this->ci->db->trans_start();
         if ($status==='sent' && $amount>0) {
             $this->ci->db->insert('expenses',array('date'=>date('Y-m-d'),'actual_date'=>$now,'title'=>'Pakistan Post Dispatch','amount'=>$amount,'add_by'=>$this->_actor_name($user),'add_by_id'=>(int)$user['user_id'],'last_edit'=>$this->_actor_name($user),'expense_category_id'=>(int)$category['expense_category_id'],'campus_id'=>(int)$petty['campus_id'],'purpose'=>'Struck-off batch '.$badge['badge_no'],'approved_status'=>1,'payment_type'=>'cash','paid_type'=>'cash','purchase_no'=>'','month_year'=>'','class'=>0,'council_exam_no'=>'','clear_by'=>'','upload_image'=>0));
-            if (!$this->ci->db->insert_id()) { $this->ci->db->trans_rollback(); return array('success'=>false,'message'=>'Unable to create petty cash expense','code'=>500); }
+            $expense_id=(int)$this->ci->db->insert_id();
+            if (!$expense_id) { $this->ci->db->trans_rollback(); return array('success'=>false,'message'=>'Unable to create petty cash expense','code'=>500); }
             $this->ci->db->set('remaining_amount','remaining_amount - '.$amount,false)->where('id',(int)$petty['id'])->update('petty_cash_college_wise');
         }
+        if ($expense_id) $data['expense_id']=$expense_id;
         $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badges',$data);
         $items=$this->ci->db->select('student_id,process_count')->get_where('struckoff_badge_items',array('badge_id'=>$badge_id))->result_array();
         $receipt_value=isset($data['post_receipt']) ? $data['post_receipt'] : null;
