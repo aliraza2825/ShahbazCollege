@@ -225,6 +225,15 @@ class Studentsapi extends CI_Controller {
 			'student_payment_reset' => $this->_perm('student_payment_reset'),
 			'student_payment_edit' => $this->_perm('student_payment_edit'),
 			'can_student_struckof' => $this->_perm('can_student_struckof'),
+			'struckoff_management_access' => $this->_perm('struckoff_management_access') || $this->_perm('can_student_struckof'),
+			'struckoff_management_pending' => $this->_perm('struckoff_management_pending') || $this->_perm('can_student_struckof'),
+			'struckoff_management_batches' => $this->_perm('struckoff_management_batches') || $this->_perm('can_student_struckof'),
+			'struckoff_management_batch_create' => $this->_perm('struckoff_management_batch_create') || $this->_perm('can_student_struckof'),
+			'struckoff_management_batch_open' => $this->_perm('struckoff_management_batch_open') || $this->_perm('can_student_struckof'),
+			'struckoff_management_batch_print' => $this->_perm('struckoff_management_batch_print') || $this->_perm('can_student_struckof'),
+			'struckoff_management_batch_dispatch' => $this->_perm('struckoff_management_batch_dispatch') || $this->_perm('can_student_struckof'),
+			'struckoff_management_batch_delete' => $this->_perm('struckoff_management_batch_delete') || $this->_perm('can_student_struckof'),
+			'struckoff_management_batch_remove_student' => $this->_perm('struckoff_management_batch_remove_student') || $this->_perm('can_student_struckof'),
 			'student_issue_refund' => $this->_perm('student_issue_refund'),
 			'council_list_report' => $this->_perm('council_list_report'),
 			'extra_fee_access' => $this->_perm('extra_fee_access'),
@@ -4050,7 +4059,10 @@ class Studentsapi extends CI_Controller {
 
 	private function _require_struckof()
 	{
-		if (!$this->_perm('can_student_struckof') && !$this->_is_admin()) {
+		$keys = array('can_student_struckof','struckoff_management_access','struckoff_management_pending','struckoff_management_batches','struckoff_management_batch_create','struckoff_management_batch_open','struckoff_management_batch_print','struckoff_management_batch_dispatch','struckoff_management_batch_delete','struckoff_management_batch_remove_student');
+		$allowed = false;
+		foreach ($keys as $key) if ($this->_perm($key)) { $allowed = true; break; }
+		if (!$allowed && !$this->_is_admin()) {
 			$this->_json(array('success' => false, 'message' => 'No permission'), 403);
 		}
 	}

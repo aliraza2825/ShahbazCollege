@@ -14,6 +14,25 @@ class Reports_service {
         $this->ci =& get_instance();
         $this->ci->load->helper('custom');
         $this->ensure_discount_report_columns();
+        $this->ensure_struck_management_access_columns();
+    }
+
+    private function ensure_struck_management_access_columns()
+    {
+        $columns = array(
+            'struckoff_management_access', 'struckoff_management_pending', 'struckoff_management_batches',
+            'struckoff_management_batch_create', 'struckoff_management_batch_open',
+            'struckoff_management_batch_print', 'struckoff_management_batch_dispatch',
+            'struckoff_management_batch_delete', 'struckoff_management_batch_remove_student',
+        );
+        foreach (array('access', 'access_rules') as $table) {
+            if (!$this->ci->db->table_exists($table)) continue;
+            foreach ($columns as $name) {
+                if (!$this->ci->db->field_exists($name, $table)) {
+                    $this->ci->db->query("ALTER TABLE `$table` ADD `$name` TINYINT(1) NULL DEFAULT NULL");
+                }
+            }
+        }
     }
 
     private function ensure_discount_report_columns()
@@ -54,6 +73,15 @@ class Reports_service {
         }
         $acc = $this->_access_row($user);
         return $acc && !empty($acc[$key]);
+    }
+
+    private function _struck_perm($user, $key)
+    {
+        if ($this->_is_admin($user)) return true;
+        $acc = $this->_access_row($user);
+        if (!$acc) return false;
+        if (array_key_exists($key, $acc) && $acc[$key] !== null && $acc[$key] !== '') return !empty($acc[$key]);
+        return !empty($acc['can_student_struckof']);
     }
 
     private function _actor_name($user)
@@ -98,6 +126,15 @@ class Reports_service {
             'agent_statement_coo' => $is_admin || !empty($acc['agent_view_statement_coo']),
             'students_backup' => $is_admin || !empty($acc['student_backup_report']),
             'coo_cash_report' => $is_admin || !empty($acc['closing_coo']),
+            'struckoff_management_access' => $this->_struck_perm($user, 'struckoff_management_access'),
+            'struckoff_management_pending' => $this->_struck_perm($user, 'struckoff_management_pending'),
+            'struckoff_management_batches' => $this->_struck_perm($user, 'struckoff_management_batches'),
+            'struckoff_management_batch_create' => $this->_struck_perm($user, 'struckoff_management_batch_create'),
+            'struckoff_management_batch_open' => $this->_struck_perm($user, 'struckoff_management_batch_open'),
+            'struckoff_management_batch_print' => $this->_struck_perm($user, 'struckoff_management_batch_print'),
+            'struckoff_management_batch_dispatch' => $this->_struck_perm($user, 'struckoff_management_batch_dispatch'),
+            'struckoff_management_batch_delete' => $this->_struck_perm($user, 'struckoff_management_batch_delete'),
+            'struckoff_management_batch_remove_student' => $this->_struck_perm($user, 'struckoff_management_batch_remove_student'),
         );
     }
 
@@ -152,7 +189,7 @@ class Reports_service {
     /** Shared pending-only population for the management filters and paginated list. */
     private function _struck_management_query($user)
     {
-        if (!$this->_user_perm($user, 'can_student_struckof')) return null;
+        if (!$this->_struck_perm($user, 'struckoff_management_pending')) return null;
         $this->_ensure_struck_detail_dispatch_schema();
         $scope=$this->_struckoff_scope_filters($user);
         if (empty($scope['allowed'])) return null;
@@ -178,6 +215,7 @@ class Reports_service {
 
     public function struck_management_filters($user)
     {
+        if (!$this->_struck_perm($user, 'struckoff_management_pending')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $query=$this->_struck_management_query($user);
         if (!$query) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         list($from,$where,$params)=$query;
@@ -188,6 +226,7 @@ class Reports_service {
 
     public function struck_management_list($user, $filters)
     {
+        if (!$this->_struck_perm($user, 'struckoff_management_pending')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $query=$this->_struck_management_query($user);
         if (!$query) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         list($from,$where,$params)=$query;
@@ -266,7 +305,7 @@ class Reports_service {
 
     public function struck_badge_preview($user, $body)
     {
-        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        if (!$this->_struck_perm($user, 'struckoff_management_batch_create')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
         $ids = isset($body['struck_of_ids']) && is_array($body['struck_of_ids']) ? $body['struck_of_ids'] : array();
         $badge_id = isset($body['badge_id']) ? (int)$body['badge_id'] : 0;
@@ -288,7 +327,7 @@ class Reports_service {
 
     public function struck_badge_save($user, $body)
     {
-        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        if (!$this->_struck_perm($user, 'struckoff_management_batch_create')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
         $ids = isset($body['struck_of_ids']) && is_array($body['struck_of_ids']) ? array_values(array_unique(array_filter(array_map('intval',$body['struck_of_ids'])))) : array();
         $badge_id = isset($body['badge_id']) ? (int)$body['badge_id'] : 0;
@@ -326,7 +365,7 @@ class Reports_service {
 
     public function struck_badges($user)
     {
-        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        if (!$this->_struck_perm($user, 'struckoff_management_batches')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
         $rows=$this->ci->db->query("SELECT b.*, e.expense_id AS attached_expense_id, e.expense_category_id AS attached_expense_category_id, COUNT(i.item_id) AS student_count, GROUP_CONCAT(i.struck_of_id ORDER BY i.struck_of_id) AS struck_of_ids FROM struckoff_badges b LEFT JOIN expenses e ON (e.struckoff_badge_id=b.badge_id OR e.expense_id=b.expense_id) LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
         foreach ($rows as &$row) $row['struck_of_ids'] = $row['struck_of_ids'] ? array_map('intval', explode(',', $row['struck_of_ids'])) : array();
@@ -336,7 +375,7 @@ class Reports_service {
 
     public function struck_badge_remove_item($user, $body)
     {
-        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        if (!$this->_struck_perm($user, 'struckoff_management_batch_remove_student')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
         $badge_id=(int)(isset($body['badge_id']) ? $body['badge_id'] : 0); $struck_of_id=(int)(isset($body['struck_of_id']) ? $body['struck_of_id'] : 0);
         if (!$badge_id || !$struck_of_id) return array('success'=>false,'message'=>'Badge and student are required','code'=>422);
@@ -347,7 +386,7 @@ class Reports_service {
 
     public function struck_badge_delete($user, $body)
     {
-        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        if (!$this->_struck_perm($user, 'struckoff_management_batch_delete')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
         $badge_id=(int)(isset($body['badge_id']) ? $body['badge_id'] : 0);
         if (!$badge_id) return array('success'=>false,'message'=>'Badge is required','code'=>422);
@@ -357,7 +396,7 @@ class Reports_service {
 
     public function struck_badge_dispatch_update($user, $body)
     {
-        if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        if (!$this->_struck_perm($user, 'struckoff_management_batch_dispatch')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema(); $badge_id=(int)(isset($body['badge_id']) ? $body['badge_id'] : 0);
         if (!$badge_id) return array('success'=>false,'message'=>'Badge is required','code'=>422);
         $badge=$this->ci->db->get_where('struckoff_badges',array('badge_id'=>$badge_id))->row_array();

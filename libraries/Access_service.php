@@ -50,6 +50,16 @@ class Access_service {
         $this->ci =& get_instance();
         $this->ci->load->model('accesses');
         $this->ensure_admission_process_access_columns();
+        $this->ensure_struck_management_access_columns();
+    }
+
+    private function ensure_struck_management_access_columns()
+    {
+        $columns = array('struckoff_management_access','struckoff_management_pending','struckoff_management_batches','struckoff_management_batch_create','struckoff_management_batch_open','struckoff_management_batch_print','struckoff_management_batch_dispatch','struckoff_management_batch_delete','struckoff_management_batch_remove_student');
+        foreach (array('access','access_rules') as $table) {
+            if (!$this->ci->db->table_exists($table)) continue;
+            foreach ($columns as $name) if (!$this->ci->db->field_exists($name, $table)) $this->ci->db->query("ALTER TABLE `$table` ADD `$name` TINYINT(1) NULL DEFAULT NULL");
+        }
     }
 
     private function ensure_admission_process_access_columns()
@@ -588,6 +598,9 @@ class Access_service {
             'admission_process_report' => !empty($prepared['admission_process_report']) ? 1 : 0,
             'admission_process_campus_ids' => !empty($prepared['admission_process_campus_ids']) ? implode(',', $prepared['admission_process_campus_ids']) : null,
         );
+        foreach (array('struckoff_management_access','struckoff_management_pending','struckoff_management_batches','struckoff_management_batch_create','struckoff_management_batch_open','struckoff_management_batch_print','struckoff_management_batch_dispatch','struckoff_management_batch_delete','struckoff_management_batch_remove_student') as $key) {
+            $extra[$key] = !empty($prepared[$key]) ? 1 : 0;
+        }
         if (!empty($prepared['user_id'])) {
             $this->ci->db->where('user_id', (int)$prepared['user_id'])->update('access', $extra);
         } else {
