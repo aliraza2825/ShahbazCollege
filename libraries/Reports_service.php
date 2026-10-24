@@ -328,7 +328,7 @@ class Reports_service {
     {
         if (!$this->_user_perm($user, 'can_student_struckof')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
-        $rows=$this->ci->db->query("SELECT b.*, e.id AS attached_expense_id, e.expense_category_id AS attached_expense_category_id, COUNT(i.item_id) AS student_count, GROUP_CONCAT(i.struck_of_id ORDER BY i.struck_of_id) AS struck_of_ids FROM struckoff_badges b LEFT JOIN expenses e ON (e.struckoff_badge_id=b.badge_id OR e.id=b.expense_id) LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
+        $rows=$this->ci->db->query("SELECT b.*, e.expense_id AS attached_expense_id, e.expense_category_id AS attached_expense_category_id, COUNT(i.item_id) AS student_count, GROUP_CONCAT(i.struck_of_id ORDER BY i.struck_of_id) AS struck_of_ids FROM struckoff_badges b LEFT JOIN expenses e ON (e.struckoff_badge_id=b.badge_id OR e.expense_id=b.expense_id) LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
         foreach ($rows as &$row) $row['struck_of_ids'] = $row['struck_of_ids'] ? array_map('intval', explode(',', $row['struck_of_ids'])) : array();
         unset($row);
         return array('success'=>true,'data'=>$rows);
