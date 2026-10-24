@@ -306,6 +306,23 @@ class Access_service {
             ),
         );
 
+        // Keep Struck-off Management visible as its own access tab even when
+        // the legacy HTML view is changed or deployed from an older template.
+        $sections[] = array(
+            'title' => 'Struck-off Management',
+            'fields' => array(
+                array('name' => 'struckoff_management_access', 'label' => 'Struck-off Management Tab', 'type' => 'checkbox'),
+                array('name' => 'struckoff_management_pending', 'label' => 'Pending Lists', 'type' => 'checkbox'),
+                array('name' => 'struckoff_management_batches', 'label' => 'Batches', 'type' => 'checkbox'),
+                array('name' => 'struckoff_management_batch_create', 'label' => 'Create / Update Batch', 'type' => 'checkbox'),
+                array('name' => 'struckoff_management_batch_open', 'label' => 'Open Batch Students', 'type' => 'checkbox'),
+                array('name' => 'struckoff_management_batch_print', 'label' => 'Print Batch List', 'type' => 'checkbox'),
+                array('name' => 'struckoff_management_batch_dispatch', 'label' => 'Dispatch Batch', 'type' => 'checkbox'),
+                array('name' => 'struckoff_management_batch_delete', 'label' => 'Delete Batch', 'type' => 'checkbox'),
+                array('name' => 'struckoff_management_batch_remove_student', 'label' => 'Remove Batch Student', 'type' => 'checkbox'),
+            ),
+        );
+
         return array('sections' => $sections);
     }
 
