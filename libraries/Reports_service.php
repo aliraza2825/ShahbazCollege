@@ -242,6 +242,12 @@ class Reports_service {
             $where.=" AND p.created_at >= ? AND p.created_at < ?";
             $params[]=$month.'-01'; $params[]=date('Y-m-d',strtotime($month.'-01 +1 month'));
         }
+        $search = trim(isset($filters['search']) ? (string)$filters['search'] : '');
+        if ($search !== '') {
+            $like = '%'.$search.'%';
+            $where .= " AND (s.roll_no LIKE ? OR CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,'')) LIKE ? OR s.mobile LIKE ? OR s.address LIKE ? OR ca.campus_name LIKE ? OR co.course_name LIKE ? OR cl.name LIKE ? OR p.reason LIKE ? OR p.created_by LIKE ? )";
+            for ($i = 0; $i < 9; $i++) $params[] = $like;
+        }
         $page=max(1,isset($filters['page']) ? (int)$filters['page'] : 1);
         $per_page=isset($filters['per_page']) ? (int)$filters['per_page'] : 25;
         if (!in_array($per_page,array(25,50,100))) $per_page=25;
