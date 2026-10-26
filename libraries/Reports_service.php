@@ -253,13 +253,13 @@ class Reports_service {
         }
         $page=max(1,isset($filters['page']) ? (int)$filters['page'] : 1);
         $per_page=isset($filters['per_page']) ? (int)$filters['per_page'] : 25;
-        if (!in_array($per_page,array(25,50,100))) $per_page=25;
+        if (!in_array($per_page,array(25,50,100,1000))) $per_page=25;
         $count=$this->ci->db->query("SELECT COUNT(*) AS total".$from.$where,$params)->row_array();
         $total=(int)$count['total']; $pages=max(1,(int)ceil($total/$per_page)); $page=min($page,$pages);
         $offset=($page-1)*$per_page;
         $sql="SELECT p.struck_of_id,p.student_id,p.process_count,p.created_at,p.created_by,p.reason,p.status,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,s.address,cl.name AS class_name,ca.campus_name,co.course_name,
             (SELECT COUNT(*) FROM struckofdetails_students d WHERE d.student_id=p.student_id AND d.process_count=p.process_count AND d.status='0') AS letters"
-            .$from.$where." ORDER BY p.created_at DESC,p.struck_of_id DESC LIMIT $per_page OFFSET $offset";
+            .$from.$where." ORDER BY letters DESC,p.created_at DESC,p.struck_of_id DESC LIMIT $per_page OFFSET $offset";
         $rows=$this->ci->db->query($sql,$params)->result_array();
         foreach ($rows as &$row) {
             $row['pending_details']=$this->ci->db->select('id,contact_from_no,contact_to_no,created_at,reason,post_receipt,post_amount,post_date,sent_by,sent_at')->order_by('created_at','ASC')->get_where('struckofdetails_students',array('student_id'=>(int)$row['student_id'],'process_count'=>(int)$row['process_count'],'status'=>'0'))->result_array();
