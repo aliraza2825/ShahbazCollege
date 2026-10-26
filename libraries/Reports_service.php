@@ -239,7 +239,10 @@ class Reports_service {
         $month=isset($filters['month']) ? (string)$filters['month'] : '';
         if ($month !== '') {
             if (!preg_match('/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/',$month)) return array('success'=>false,'message'=>'Invalid month','code'=>422);
-            $where.=" AND p.created_at >= ? AND p.created_at < ?";
+            // A process can start in an earlier month while its latest pending
+            // letter is created later. Filter by that pending letter date so
+            // the management list reflects the letters being worked on.
+            $where.=" AND EXISTS (SELECT 1 FROM struckofdetails_students month_detail WHERE month_detail.student_id=p.student_id AND month_detail.process_count=p.process_count AND month_detail.status='0' AND month_detail.created_at >= ? AND month_detail.created_at < ?)";
             $params[]=$month.'-01'; $params[]=date('Y-m-d',strtotime($month.'-01 +1 month'));
         }
         $search = trim(isset($filters['search']) ? (string)$filters['search'] : '');
