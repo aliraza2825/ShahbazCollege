@@ -12,6 +12,15 @@ class Councils_drill_service {
     /** @var Councils_service */
     private $councils_service;
 
+    private function _actor_name($user)
+    {
+        $name = trim(isset($user['name']) ? $user['name'] : '');
+        if ($name === '') {
+            $name = trim((isset($user['first_name']) ? $user['first_name'] : '') . ' ' . (isset($user['last_name']) ? $user['last_name'] : ''));
+        }
+        return $name !== '' ? $name : 'User #' . (int) $user['user_id'];
+    }
+
     public function __construct()
     {
         $this->ci =& get_instance();
@@ -38,8 +47,42 @@ class Councils_drill_service {
         }
     }
 
+    /** Mark whether a paid council-fee student has been added to the portal. */
+    public function set_portal_details($user, $data)
+    {
+        $student_id = (int) (isset($data['student_id']) ? $data['student_id'] : 0);
+        $exam_no = isset($data['exam_no']) ? trim((string) $data['exam_no']) : '';
+        $class = isset($data['class']) ? trim((string) $data['class']) : '';
+        $sequence_id = (int) (isset($data['sequence_id']) ? $data['sequence_id'] : 0);
+        $marked = !empty($data['marked']) && (string) $data['marked'] !== '0';
+        if (!$student_id || $exam_no === '' || $class === '' || !$sequence_id) {
+            return array('success' => false, 'message' => 'Student, exam, class, and sequence are required');
+        }
+
+        $this->_ensure_portal_details_table();
+        $where = array(
+            'student_id' => $student_id,
+            'council_exam_no' => $exam_no,
+            'council_sequence_id' => $sequence_id,
+            'class' => $class,
+        );
+        if ($marked) {
+            if (!$this->ci->db->get_where('council_portal_details', $where)->row_array()) {
+                $this->ci->db->insert('council_portal_details', $where + array(
+                    'added_by_id' => (int) $user['user_id'],
+                    'added_by' => $this->_actor_name($user),
+                    'created_at' => date('Y-m-d H:i:s'),
+                ));
+            }
+        } else {
+            $this->ci->db->delete('council_portal_details', $where);
+        }
+        return array('success' => true, 'marked' => $marked);
+    }
+
     private function _drill_students($user, $params)
     {
+        $this->_ensure_portal_details_table();
         $course_id = (int) $params['course_id'];
         $session = isset($params['session']) ? $params['session'] : 0;
         $exam_no = $params['exam_no'];
@@ -123,6 +166,12 @@ class Councils_drill_service {
             $row = $this->_format_student_row($student);
             if ($type === 'paid' && $sequence_id) {
                 $row['expense'] = $this->_get_student_expense($student['student_id'], $exam_no, $sequence_id, $class);
+                $row['portal_details'] = (bool) $this->ci->db->get_where('council_portal_details', array(
+                    'student_id' => (int) $student['student_id'],
+                    'council_exam_no' => (string) $exam_no,
+                    'council_sequence_id' => $sequence_id,
+                    'class' => (string) $class,
+                ))->row_array();
             }
             $rows[] = $row;
         }
@@ -1352,6 +1401,24 @@ class Councils_drill_service {
             'payment_type' => $expense['payment_type'],
             'image' => isset($expense['image']) ? $expense['image'] : '',
         );
+    }
+
+    private function _ensure_portal_details_table()
+    {
+        if (!$this->ci->db->table_exists('council_portal_details')) {
+            $this->ci->db->query("CREATE TABLE IF NOT EXISTS `council_portal_details` (
+                `id` INT NOT NULL AUTO_INCREMENT,
+                `student_id` INT NOT NULL,
+                `council_exam_no` VARCHAR(100) NOT NULL,
+                `council_sequence_id` INT NOT NULL,
+                `class` VARCHAR(100) NOT NULL,
+                `added_by_id` INT NULL,
+                `added_by` VARCHAR(255) NULL,
+                `created_at` DATETIME NOT NULL,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `uniq_council_portal_detail` (`student_id`,`council_exam_no`,`council_sequence_id`,`class`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
     }
 
     private function _inform_reports($sequence_id)

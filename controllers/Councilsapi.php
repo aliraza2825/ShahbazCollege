@@ -460,6 +460,12 @@ class Councilsapi extends CI_Controller {
         $this->_json($this->drill_service->add_expense($this->current_user, $data));
     }
 
+    public function set_portal_details()
+    {
+        $this->_require_council_report();
+        $this->_json($this->drill_service->set_portal_details($this->current_user, $this->_body()));
+    }
+
     public function save_informed()
     {
         $this->_require_council_report();
