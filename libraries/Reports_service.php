@@ -1130,6 +1130,34 @@ class Reports_service {
         return $details;
     }
 
+    private function _struckoff_dispatch_for_process($student_id, $process_count)
+    {
+        if (!$this->ci->db->table_exists('struckoff_badges') || !$this->ci->db->table_exists('struckoff_badge_items')) {
+            return null;
+        }
+
+        $this->_ensure_struck_badge_schema();
+        $row = $this->ci->db
+            ->select('b.badge_id,b.badge_no,b.status,b.created_by,b.created_at,b.updated_by,b.updated_at,b.post_receipt,b.post_amount,b.post_date,b.sent_by,b.sent_at,b.expense_id,e.expense_id AS attached_expense_id,e.expense_category_id')
+            ->from('struckoff_badge_items i')
+            ->join('struckoff_badges b', 'b.badge_id=i.badge_id', 'inner')
+            ->join('expenses e', 'e.expense_id=b.expense_id', 'left')
+            ->where(array('i.student_id' => (int)$student_id, 'i.process_count' => (int)$process_count))
+            ->order_by('b.badge_id', 'DESC')
+            ->limit(1)
+            ->get()
+            ->row_array();
+
+        if (!$row) {
+            return null;
+        }
+
+        $row['student_count'] = (int)$this->ci->db
+            ->where('badge_id', (int)$row['badge_id'])
+            ->count_all_results('struckoff_badge_items');
+        return $row;
+    }
+
     public function struckoff_student_view($user, $student_id)
     {
         $perms = $this->permissions($user);
@@ -1231,6 +1259,25 @@ class Reports_service {
         }
 
         $details = $this->_struckoff_detail_rows($student_id, $process_count);
+        $dispatch = $this->_struckoff_dispatch_for_process($student_id, $process_count);
+        if (!$dispatch && $details) {
+            foreach ($details as $detail) {
+                if (!empty($detail['post_receipt']) || (isset($detail['post_amount']) && $detail['post_amount'] !== null) || !empty($detail['post_date']) || !empty($detail['sent_by']) || !empty($detail['sent_at'])) {
+                    $dispatch = array(
+                        'status' => (string)$detail['status'] === '1' ? 'sent' : 'pending',
+                        'post_receipt' => isset($detail['post_receipt']) ? $detail['post_receipt'] : null,
+                        'post_amount' => isset($detail['post_amount']) ? $detail['post_amount'] : null,
+                        'post_date' => isset($detail['post_date']) ? $detail['post_date'] : null,
+                        'sent_by' => isset($detail['sent_by']) ? $detail['sent_by'] : null,
+                        'sent_at' => isset($detail['sent_at']) ? $detail['sent_at'] : null,
+                    );
+                    break;
+                }
+            }
+        }
+        foreach ($details as $i => $detail) {
+            $details[$i]['dispatch'] = $dispatch;
+        }
         $can_add_details = false;
         if ((int)$ctx['student']['status'] === 1) {
             if (($process['action_type'] === 'immediate' && count($details) === 0) || $process['action_type'] === 'process') {
@@ -1259,6 +1306,7 @@ class Reports_service {
                 'council_fees' => $ctx['council_fees'],
                 'process' => $process,
                 'details' => $details,
+                'dispatch' => $dispatch,
                 'can_add_details' => $can_add_details,
                 'can_finalize' => $can_finalize,
                 'can_reject' => $can_finalize,
