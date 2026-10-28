@@ -347,12 +347,15 @@ class Reports_service {
     public function struck_free_books($user, $filters = array())
     {
         if (!$this->_struck_perm($user, 'struckoff_management_pending')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        $this->_ensure_struck_badge_schema();
         $month = isset($filters['month']) ? trim((string)$filters['month']) : '';
         $where = " WHERE (s.books_1=1 OR s.books_2=1)"; $params = array();
         if (preg_match('/^\\d{4}-\\d{2}$/', $month)) { $where .= " AND DATE_FORMAT(s.entry_date,'%Y-%m')=?"; $params[] = $month; }
         $sql = "SELECT s.student_id,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,s.address,s.books_1,s.books_2,s.entry_date AS issued_at,cl.name AS class_name,ca.campus_name,co.course_name FROM students s INNER JOIN classes cl ON cl.class_id=s.class_id LEFT JOIN campuses ca ON ca.campus_id=cl.campus_id LEFT JOIN courses co ON co.course_id=s.course_id".$where." ORDER BY issued_at DESC,s.student_id DESC";
         $rows = $this->ci->db->query($sql,$params)->result_array(); $result=array();
-        foreach ($rows as $row) { foreach (array(1,2) as $year) if ((int)$row['books_'.$year]===1) { $copy=$row; $copy['book_year']=$year; $copy['book_label']=$year===1?'1st Year Book':'2nd Year Book'; $result[]=$copy; } }
+        $pending = $this->ci->db->select('bi.student_id,bi.book_year,bi.item_id,bi.badge_id')->from('struckoff_badge_book_items bi')->join('struckoff_badges b','b.badge_id=bi.badge_id','inner')->where('b.status','pending')->order_by('bi.badge_id','DESC')->get()->result_array();
+        $pending_map=array(); foreach ($pending as $item) { $key=(int)$item['student_id'].':'.(int)$item['book_year']; if (!isset($pending_map[$key])) $pending_map[$key]=$item; }
+        foreach ($rows as $row) { foreach (array(1,2) as $year) if ((int)$row['books_'.$year]===1) { $copy=$row; $copy['book_year']=$year; $copy['book_label']=$year===1?'1st Year Book':'2nd Year Book'; $pending_item=isset($pending_map[(int)$row['student_id'].':'.$year])?$pending_map[(int)$row['student_id'].':'.$year]:null; $copy['pending_badge_id']=$pending_item?(int)$pending_item['badge_id']:null; $copy['pending_item_id']=$pending_item?(int)$pending_item['item_id']:null; $result[]=$copy; } }
         return array('success'=>true,'data'=>$result);
     }
 
