@@ -1155,6 +1155,14 @@ class Reports_service {
         $row['student_count'] = (int)$this->ci->db
             ->where('badge_id', (int)$row['badge_id'])
             ->count_all_results('struckoff_badge_items');
+        $row['students'] = $this->ci->db
+            ->select("i.student_id,i.process_count,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,s.address")
+            ->from('struckoff_badge_items i')
+            ->join('students s', 's.student_id=i.student_id', 'left')
+            ->where('i.badge_id', (int)$row['badge_id'])
+            ->order_by('s.roll_no', 'ASC')
+            ->get()
+            ->result_array();
         return $row;
     }
 
