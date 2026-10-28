@@ -347,7 +347,23 @@ class Dashboard extends CI_Controller {
 	public function clear_fee_update($payment_id)
 	{
 		$update_request = $this->db->get_where('update_payment_requests', array('id'=>$payment_id, 'ok_by_admin'=>0))->result_array();
-		$this->dashboards->updatePayment($update_request);
+		if (empty($update_request)) {
+			$this->session->set_flashdata('error', 'This fee request is no longer pending.');
+			redirect('dashboard/update_fee_status');
+			return;
+		}
+		$updated = $this->dashboards->updatePayment($update_request);
+		if (!$updated && (int)$update_request[0]['del'] === 1) {
+			// Close the stale delete request without touching the now-paid challan.
+			$this->db->where('id', $update_request[0]['id'])->update('update_payment_requests', array(
+				'del' => 0,
+				'ok_by_admin' => 1,
+				'clear_by' => $this->session->userdata('name').' (delete skipped: installment already paid)'
+			));
+			$this->session->set_flashdata('error', 'Delete request was not applied because this installment is already paid.');
+			redirect('dashboard/update_fee_status');
+			return;
+		}
 		$this->dashboards->updateClearPayment($update_request[0]['id']);
 		$this->session->set_flashdata('message', 'Fee Updated successfully.');
 		redirect('dashboard/update_fee_status');

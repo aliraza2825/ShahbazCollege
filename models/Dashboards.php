@@ -415,10 +415,16 @@ class Dashboards extends CI_Model {
 	
 	public function updatePayment($update_request)
 	{
+		if (empty($update_request)) return false;
 		if($update_request[0]['del']==1)
 		{
+			// A delete request may have been submitted while the challan was unpaid,
+			// then paid before an administrator approved it. Never delete a paid fee.
+			$current = $this->db->get_where('payments', array('id'=>$update_request[0]['id']))->row_array();
+			if (!$current || (int)$current['paid'] === 1) return false;
 			$this->db->where('id',$update_request[0]['id']);
 			$this->db->delete('payments');
+			return true;
 		}
 		else
 		{
@@ -461,6 +467,7 @@ class Dashboards extends CI_Model {
                 $this->db->update('payments');
             }
 		}
+		return true;
 	}
 	
 	public function updateClearPayment($payment_id)

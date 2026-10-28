@@ -2742,6 +2742,11 @@ class Students extends CI_Controller {
     public function update_edit_payment($update_type,$payment_id,$payment_no='')
     {
         $payment_details = $this->db->get_where('payments',array('id'=>$payment_id))->result_array();
+		if ($update_type === 'delete_payment' && !empty($payment_details) && (int)$payment_details[0]['paid'] === 1) {
+			$this->session->set_flashdata('error', 'Paid installments cannot be submitted for deletion.');
+			redirect('students/payments_paid/'.$payment_details[0]['student_id']);
+			return;
+		}
         $checkRequest = $this->student->checkChallanRequest($payment_id);
         if(count($checkRequest)>0)
         {
