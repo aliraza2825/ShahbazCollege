@@ -290,6 +290,17 @@ class Reports_service {
             PRIMARY KEY (`item_id`), UNIQUE KEY `uq_struckoff_badge_item` (`badge_id`,`struck_of_id`), KEY `idx_struckoff_badge_student` (`student_id`),
             CONSTRAINT `fk_struckoff_badge_item_badge` FOREIGN KEY (`badge_id`) REFERENCES `struckoff_badges` (`badge_id`) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        $this->ci->db->query("CREATE TABLE IF NOT EXISTS `struckoff_badge_book_items` (
+            `item_id` INT NOT NULL AUTO_INCREMENT,
+            `badge_id` INT NOT NULL,
+            `student_id` INT NOT NULL,
+            `book_year` TINYINT NOT NULL,
+            `issued_month` CHAR(7) NULL,
+            `status` VARCHAR(20) NOT NULL DEFAULT 'pending',
+            `created_at` DATETIME NOT NULL,
+            PRIMARY KEY (`item_id`), UNIQUE KEY `uq_struckoff_badge_book` (`badge_id`,`student_id`,`book_year`), KEY `idx_struckoff_badge_book_student` (`student_id`),
+            CONSTRAINT `fk_struckoff_badge_book_badge` FOREIGN KEY (`badge_id`) REFERENCES `struckoff_badges` (`badge_id`) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         foreach (array('post_receipt'=>'VARCHAR(255) NULL','post_amount'=>'DECIMAL(12,2) NULL','post_date'=>'DATE NULL','sent_by'=>'VARCHAR(255) NULL','sent_at'=>'DATETIME NULL','expense_id'=>'INT NULL') as $field=>$ddl) {
             if (!$this->ci->db->field_exists($field, 'struckoff_badges')) $this->ci->db->query("ALTER TABLE `struckoff_badges` ADD `$field` $ddl");
         }
@@ -312,11 +323,45 @@ class Reports_service {
         return $this->ci->db->query($sql, array_merge($params, $ids))->result_array();
     }
 
+    private function _struck_book_rows($user, $items)
+    {
+        $items = array_values(array_filter((array)$items, function ($item) { return is_array($item) && !empty($item['student_id']) && in_array((int)$item['book_year'], array(1, 2), true); }));
+        if (!$items) return array();
+        $ids = array_values(array_unique(array_map(function ($item) { return (int)$item['student_id']; }, $items)));
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $scope = $this->_struckoff_scope_filters($user);
+        if (empty($scope['allowed'])) return array();
+        $sql = "SELECT s.student_id,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,s.address,cl.name AS class_name,ca.campus_name,co.course_name FROM students s INNER JOIN classes cl ON cl.class_id=s.class_id LEFT JOIN campuses ca ON ca.campus_id=cl.campus_id LEFT JOIN courses co ON co.course_id=s.course_id WHERE s.student_id IN ($marks)";
+        $rows = $this->ci->db->query($sql, $ids)->result_array();
+        $by_id = array(); foreach ($rows as $row) $by_id[(int)$row['student_id']] = $row;
+        $result = array();
+        foreach ($items as $item) {
+            $student_id = (int)$item['student_id']; $year = (int)$item['book_year'];
+            if (empty($by_id[$student_id])) continue;
+            $row = $by_id[$student_id]; $row['book_year'] = $year; $row['book_label'] = $year === 1 ? '1st Year Book' : '2nd Year Book';
+            $result[] = $row;
+        }
+        return $result;
+    }
+
+    public function struck_free_books($user, $filters = array())
+    {
+        if (!$this->_struck_perm($user, 'struckoff_management_pending')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
+        $month = isset($filters['month']) ? trim((string)$filters['month']) : '';
+        $where = " WHERE (s.books_1=1 OR s.books_2=1)"; $params = array();
+        if (preg_match('/^\\d{4}-\\d{2}$/', $month)) { $where .= " AND DATE_FORMAT(s.entry_date,'%Y-%m')=?"; $params[] = $month; }
+        $sql = "SELECT s.student_id,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,s.address,s.books_1,s.books_2,s.entry_date AS issued_at,cl.name AS class_name,ca.campus_name,co.course_name FROM students s INNER JOIN classes cl ON cl.class_id=s.class_id LEFT JOIN campuses ca ON ca.campus_id=cl.campus_id LEFT JOIN courses co ON co.course_id=s.course_id".$where." ORDER BY issued_at DESC,s.student_id DESC";
+        $rows = $this->ci->db->query($sql,$params)->result_array(); $result=array();
+        foreach ($rows as $row) { foreach (array(1,2) as $year) if ((int)$row['books_'.$year]===1) { $copy=$row; $copy['book_year']=$year; $copy['book_label']=$year===1?'1st Year Book':'2nd Year Book'; $result[]=$copy; } }
+        return array('success'=>true,'data'=>$result);
+    }
+
     public function struck_badge_preview($user, $body)
     {
         if (!$this->_struck_perm($user, 'struckoff_management_batch_create')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
         $ids = isset($body['struck_of_ids']) && is_array($body['struck_of_ids']) ? $body['struck_of_ids'] : array();
+        $book_items = isset($body['book_items']) && is_array($body['book_items']) ? $body['book_items'] : array();
         $badge_id = isset($body['badge_id']) ? (int)$body['badge_id'] : 0;
         if (!$badge_id && $ids) {
             $marks = implode(',', array_fill(0, count($ids), '?'));
@@ -331,7 +376,13 @@ class Reports_service {
         if ($badge && $badge['status'] !== 'pending') $badge = null;
         $existing = !empty($body['only_selected']) ? array() : ($badge_id ? $this->ci->db->get_where('struckoff_badge_items', array('badge_id'=>$badge_id))->result_array() : array());
         $all = array_merge(array_column($existing, 'struck_of_id'), $ids);
-        return array('success'=>true,'data'=>array('badge'=>$badge,'rows'=>$this->_struck_badge_rows($user,$all),'badge_id'=>$badge ? (int)$badge['badge_id'] : null));
+        $book_rows = $this->_struck_book_rows($user, $book_items);
+        if ($badge_id && !$book_items) {
+            $book_existing = $this->ci->db->get_where('struckoff_badge_book_items',array('badge_id'=>$badge_id))->result_array();
+            foreach ($book_existing as $book) $book_items[] = array('student_id'=>$book['student_id'],'book_year'=>$book['book_year']);
+            $book_rows = $this->_struck_book_rows($user, $book_items);
+        }
+        return array('success'=>true,'data'=>array('badge'=>$badge,'rows'=>$this->_struck_badge_rows($user,$all),'book_rows'=>$book_rows,'badge_id'=>$badge ? (int)$badge['badge_id'] : null));
     }
 
     public function struck_badge_save($user, $body)
@@ -339,8 +390,9 @@ class Reports_service {
         if (!$this->_struck_perm($user, 'struckoff_management_batch_create')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
         $ids = isset($body['struck_of_ids']) && is_array($body['struck_of_ids']) ? array_values(array_unique(array_filter(array_map('intval',$body['struck_of_ids'])))) : array();
+        $book_items = isset($body['book_items']) && is_array($body['book_items']) ? $body['book_items'] : array();
         $badge_id = isset($body['badge_id']) ? (int)$body['badge_id'] : 0;
-        if (!$ids && !$badge_id) return array('success'=>false,'message'=>'Select at least one pending process','code'=>422);
+        if (!$ids && !$book_items && !$badge_id) return array('success'=>false,'message'=>'Select at least one pending process or book','code'=>422);
         if (!$badge_id && $ids) {
             $marks=implode(',',array_fill(0,count($ids),'?'));
             $found=$this->ci->db->query("SELECT b.badge_id FROM struckoff_badges b JOIN struckoff_badge_items i ON i.badge_id=b.badge_id WHERE b.status='pending' AND i.struck_of_id IN ($marks) ORDER BY b.badge_id DESC LIMIT 1",$ids)->row_array();
@@ -366,17 +418,22 @@ class Reports_service {
         foreach ($rows as $row) {
             $this->ci->db->query("INSERT IGNORE INTO struckoff_badge_items (badge_id,struck_of_id,student_id,process_count,created_at) VALUES (?,?,?,?,?)",array($badge_id,(int)$row['struck_of_id'],(int)$row['student_id'],(int)$row['process_count'],$now));
         }
+        foreach ($this->_struck_book_rows($user, $book_items) as $book) {
+            $this->ci->db->query("INSERT IGNORE INTO struckoff_badge_book_items (badge_id,student_id,book_year,issued_month,status,created_at) VALUES (?,?,?,?,?,?)",array($badge_id,(int)$book['student_id'],(int)$book['book_year'],substr((string)$book['issued_at'],0,7),'pending',$now));
+        }
         $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badges',array('updated_by'=>$this->_actor_name($user),'updated_at'=>$now));
         $this->ci->db->trans_complete();
         $badge=$this->ci->db->get_where('struckoff_badges',array('badge_id'=>$badge_id))->row_array();
-        return array('success'=>true,'data'=>array('badge'=>$badge,'rows'=>$this->_struck_badge_rows($user,array_column($this->ci->db->get_where('struckoff_badge_items',array('badge_id'=>$badge_id))->result_array(),'struck_of_id'))));
+        $badge_ids = array_column($this->ci->db->get_where('struckoff_badge_items',array('badge_id'=>$badge_id))->result_array(),'struck_of_id');
+        $book_items_out = array(); foreach ($this->ci->db->get_where('struckoff_badge_book_items',array('badge_id'=>$badge_id))->result_array() as $book) $book_items_out[] = array('student_id'=>$book['student_id'],'book_year'=>$book['book_year']);
+        return array('success'=>true,'data'=>array('badge'=>$badge,'rows'=>$this->_struck_badge_rows($user,$badge_ids),'book_rows'=>$this->_struck_book_rows($user,$book_items_out)));
     }
 
     public function struck_badges($user)
     {
         if (!$this->_struck_perm($user, 'struckoff_management_batches')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
-        $rows=$this->ci->db->query("SELECT b.*, e.expense_id AS attached_expense_id, e.expense_category_id AS attached_expense_category_id, COUNT(i.item_id) AS student_count, GROUP_CONCAT(i.struck_of_id ORDER BY i.struck_of_id) AS struck_of_ids FROM struckoff_badges b LEFT JOIN expenses e ON (e.struckoff_badge_id=b.badge_id OR e.expense_id=b.expense_id) LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
+        $rows=$this->ci->db->query("SELECT b.*, e.expense_id AS attached_expense_id, e.expense_category_id AS attached_expense_category_id, (COUNT(DISTINCT i.item_id)+COUNT(DISTINCT bi.item_id)) AS student_count, COUNT(DISTINCT bi.item_id) AS book_count, GROUP_CONCAT(DISTINCT i.struck_of_id ORDER BY i.struck_of_id) AS struck_of_ids FROM struckoff_badges b LEFT JOIN expenses e ON (e.struckoff_badge_id=b.badge_id OR e.expense_id=b.expense_id) LEFT JOIN struckoff_badge_items i ON i.badge_id=b.badge_id LEFT JOIN struckoff_badge_book_items bi ON bi.badge_id=b.badge_id GROUP BY b.badge_id ORDER BY b.badge_id DESC")->result_array();
         foreach ($rows as &$row) $row['struck_of_ids'] = $row['struck_of_ids'] ? array_map('intval', explode(',', $row['struck_of_ids'])) : array();
         unset($row);
         return array('success'=>true,'data'=>$rows);
@@ -387,8 +444,9 @@ class Reports_service {
         if (!$this->_struck_perm($user, 'struckoff_management_batch_remove_student')) return array('success'=>false,'message'=>'Struck-off access required','code'=>403);
         $this->_ensure_struck_badge_schema();
         $badge_id=(int)(isset($body['badge_id']) ? $body['badge_id'] : 0); $struck_of_id=(int)(isset($body['struck_of_id']) ? $body['struck_of_id'] : 0);
-        if (!$badge_id || !$struck_of_id) return array('success'=>false,'message'=>'Badge and student are required','code'=>422);
-        $this->ci->db->where(array('badge_id'=>$badge_id,'struck_of_id'=>$struck_of_id))->delete('struckoff_badge_items');
+        if (!$badge_id || (!$struck_of_id && empty($body['book_item_id']))) return array('success'=>false,'message'=>'Badge and item are required','code'=>422);
+        if (!empty($body['book_item_id'])) $this->ci->db->where(array('badge_id'=>$badge_id,'item_id'=>(int)$body['book_item_id']))->delete('struckoff_badge_book_items');
+        else $this->ci->db->where(array('badge_id'=>$badge_id,'struck_of_id'=>$struck_of_id))->delete('struckoff_badge_items');
         $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badges',array('updated_by'=>$this->_actor_name($user),'updated_at'=>date('Y-m-d H:i:s')));
         return array('success'=>true);
     }
@@ -437,6 +495,7 @@ class Reports_service {
         $items=$this->ci->db->select('student_id,process_count')->get_where('struckoff_badge_items',array('badge_id'=>$badge_id))->result_array();
         $receipt_value=isset($data['post_receipt']) ? $data['post_receipt'] : null;
         foreach ($items as $item) $this->ci->db->where(array('student_id'=>(int)$item['student_id'],'process_count'=>(int)$item['process_count']))->update('struckofdetails_students',array('status'=>$status==='sent'?'1':'0','post_receipt'=>$receipt_value,'post_amount'=>$data['post_amount'],'post_date'=>$data['post_date'],'sent_by'=>$data['sent_by'],'sent_at'=>$data['sent_at']));
+        $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badge_book_items',array('status'=>$status));
         $this->ci->db->trans_complete();
         return array('success'=>true,'data'=>$this->ci->db->get_where('struckoff_badges',array('badge_id'=>$badge_id))->row_array());
     }
@@ -1163,6 +1222,18 @@ class Reports_service {
             ->order_by('s.roll_no', 'ASC')
             ->get()
             ->result_array();
+        $book_students = $this->ci->db
+            ->select("bi.item_id,bi.student_id,bi.book_year,s.roll_no,TRIM(CONCAT(COALESCE(s.first_name,''),' ',COALESCE(s.last_name,''))) AS student_name,s.mobile,s.address,cl.name AS class_name,ca.campus_name,co.course_name")
+            ->from('struckoff_badge_book_items bi')
+            ->join('students s', 's.student_id=bi.student_id', 'left')
+            ->join('classes cl', 'cl.class_id=s.class_id', 'left')
+            ->join('campuses ca', 'ca.campus_id=cl.campus_id', 'left')
+            ->join('courses co', 'co.course_id=s.course_id', 'left')
+            ->where('bi.badge_id', (int)$row['badge_id'])->get()->result_array();
+        foreach ($book_students as &$book_student) { $book_student['book_label'] = ((int)$book_student['book_year'] === 1 ? '1st Year Book' : '2nd Year Book'); }
+        unset($book_student);
+        $row['students'] = array_merge($row['students'], $book_students);
+        $row['student_count'] += count($book_students);
         return $row;
     }
 

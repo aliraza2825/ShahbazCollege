@@ -3146,6 +3146,13 @@ class Studentsapi extends CI_Controller {
 		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
 	}
 
+	public function struck_free_books()
+	{
+		$this->_require_struckof();
+		$result=$this->_reports_service()->struck_free_books($this->current_user, $this->input->get());
+		$this->_json($result, isset($result['code']) ? $result['code'] : 200);
+	}
+
 	public function struck_badge_remove_item()
 	{
 		$this->_require_struckof();
