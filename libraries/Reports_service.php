@@ -385,6 +385,14 @@ class Reports_service {
             foreach ($book_existing as $book) $book_items[] = array('student_id'=>$book['student_id'],'book_year'=>$book['book_year']);
             $book_rows = $this->_struck_book_rows($user, $book_items);
         }
+        if ($badge_id && $book_rows) {
+            $book_item_map = array();
+            foreach ($this->ci->db->get_where('struckoff_badge_book_items', array('badge_id'=>$badge_id))->result_array() as $book_item) $book_item_map[(int)$book_item['student_id'].':'.(int)$book_item['book_year']] = (int)$book_item['item_id'];
+            foreach ($book_rows as $i => $book_row) {
+                $key = (int)$book_row['student_id'].':'.(int)$book_row['book_year'];
+                $book_rows[$i]['book_item_id'] = isset($book_item_map[$key]) ? $book_item_map[$key] : null;
+            }
+        }
         return array('success'=>true,'data'=>array('badge'=>$badge,'rows'=>$this->_struck_badge_rows($user,$all),'book_rows'=>$book_rows,'badge_id'=>$badge ? (int)$badge['badge_id'] : null));
     }
 
@@ -394,6 +402,8 @@ class Reports_service {
         $this->_ensure_struck_badge_schema();
         $ids = isset($body['struck_of_ids']) && is_array($body['struck_of_ids']) ? array_values(array_unique(array_filter(array_map('intval',$body['struck_of_ids'])))) : array();
         $book_items = isset($body['book_items']) && is_array($body['book_items']) ? $body['book_items'] : array();
+        $book_items_present = array_key_exists('book_items', $body);
+        $book_scope = isset($body['book_scope']) && is_array($body['book_scope']) ? $body['book_scope'] : array();
         $badge_id = isset($body['badge_id']) ? (int)$body['badge_id'] : 0;
         if (!$ids && !$book_items && !$badge_id) return array('success'=>false,'message'=>'Select at least one pending process or book','code'=>422);
         if (!$badge_id && $ids) {
@@ -423,6 +433,17 @@ class Reports_service {
         }
         foreach ($this->_struck_book_rows($user, $book_items) as $book) {
             $this->ci->db->query("INSERT IGNORE INTO struckoff_badge_book_items (badge_id,student_id,book_year,issued_month,status,created_at) VALUES (?,?,?,?,?,?)",array($badge_id,(int)$book['student_id'],(int)$book['book_year'],substr((string)$book['issued_at'],0,7),'pending',$now));
+        }
+        if ($book_items_present) {
+            $desired = array();
+            foreach ($this->_struck_book_rows($user, $book_items) as $book) $desired[(int)$book['student_id'].':'.(int)$book['book_year']] = true;
+            $scope = array();
+            foreach ($this->_struck_book_rows($user, $book_scope) as $book) $scope[(int)$book['student_id'].':'.(int)$book['book_year']] = true;
+            $existing_books = $this->ci->db->get_where('struckoff_badge_book_items', array('badge_id'=>$badge_id))->result_array();
+            foreach ($existing_books as $existing_book) {
+                $key = (int)$existing_book['student_id'].':'.(int)$existing_book['book_year'];
+                if ((!$scope || isset($scope[$key])) && !isset($desired[$key])) $this->ci->db->where('item_id',(int)$existing_book['item_id'])->delete('struckoff_badge_book_items');
+            }
         }
         $this->ci->db->where('badge_id',$badge_id)->update('struckoff_badges',array('updated_by'=>$this->_actor_name($user),'updated_at'=>$now));
         $this->ci->db->trans_complete();
