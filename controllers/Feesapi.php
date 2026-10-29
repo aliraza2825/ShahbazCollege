@@ -45,11 +45,17 @@ class Feesapi extends CI_Controller {
 	public function dues() {
 		$classId = (int)$this->input->get('class_id'); $campusId = (int)$this->input->get('campus_id'); $type = $this->input->get('type') === 'contractors' ? 'contractors' : 'students'; $todayWise = $this->input->get('today_wise') === '1';
 		if ($type === 'contractors') { $this->_json(array('success' => true, 'type' => $type, 'rows' => $this->_contractor_dues($campusId))); }
-		$allowed = $this->_class_ids(); if (!$classId || (count($allowed) && !in_array($classId, $allowed))) $this->_json(array('success' => false, 'message' => 'Select an allowed class'), 422);
+		$allowed = $this->_class_ids();
+		if ($todayWise && !$campusId) $this->_json(array('success' => false, 'message' => 'Select a campus for today attendance-wise dues'), 422);
+		if (!$todayWise && (!$classId || (count($allowed) && !in_array($classId, $allowed)))) $this->_json(array('success' => false, 'message' => 'Select an allowed class'), 422);
 		$this->db->select('p.id AS fee_id, s.student_id, s.first_name, s.last_name, s.mobile, s.emergency_no, s.cnic, s.roll_no, c.name AS class_name, c.campus_id, ca.campus_name, co.course_name')
 			->from('payments p')->join('students s', 's.student_id=p.student_id')->join('classes c', 'c.class_id=s.class_id')->join('campuses ca', 'ca.campus_id=c.campus_id')->join('courses co', 'co.course_id=s.course_id')
-			->where(array('s.status' => 1, 'c.class_id' => $classId, 'p.paid' => 0))->where('p.dead_line <=', date('Y-m-d', strtotime('+1 week')))->order_by('s.roll_no');
+			->where(array('s.status' => 1, 'p.paid' => 0))->where('p.dead_line <=', $todayWise ? date('Y-m-d') : date('Y-m-d', strtotime('+1 week')));
+		if ($classId && !$todayWise) $this->db->where('c.class_id', $classId);
+		if ($campusId) $this->db->where('c.campus_id', $campusId);
+		if (count($allowed)) $this->db->where_in('c.class_id', $allowed);
 		if ($todayWise) { $this->db->join('machine_data md', 'md.teacher_student_id=s.student_id')->join('attendence a', 'a.machine_user_id=md.machine_id')->where('a.time >=', date('Y-m-d').' 00:00:00')->where('a.time <=', date('Y-m-d').' 23:59:59')->group_by('s.student_id'); }
+		$this->db->order_by('s.roll_no');
 		$rows = $this->db->get()->result_array(); foreach ($rows as &$row) $row = array_merge($row, $this->_student_summary((int)$row['student_id'])); unset($row);
 		$this->_json(array('success' => true, 'type' => $type, 'rows' => $rows));
 	}
