@@ -5525,6 +5525,7 @@ class Studentsapi extends CI_Controller {
 
 		$instdate = isset($body['instdate']) ? (int)$body['instdate'] : 10;
 		$extendinstallments = isset($body['installments']) ? (int)$body['installments'] : 0;
+		$skip_next_month_fee = !empty($body['skip_next_month_fee']) && (int)date('j') >= 20;
 		$allowed_discount = isset($body['allowed_discount']) ? (float)$body['allowed_discount'] : (isset($body['discount']) ? (float)$body['discount'] : 0);
 		$request_more = isset($body['request_more_discount']) ? (float)$body['request_more_discount'] : 0;
 		$max_discount = (float)(isset($plan['max_discount']) ? $plan['max_discount'] : 0);
@@ -5540,13 +5541,14 @@ class Studentsapi extends CI_Controller {
 		$total_requested_discount = min($plan_total, $allowed_discount + $request_more);
 
 		// Plan is always created with zero admission discount; approved discounts adjust installments later.
-		$at_create = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, 0);
+		$at_create = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, 0, $skip_next_month_fee);
 		$if_discount_approved = $this->_build_payment_plan_rows(
 			$student_id,
 			$plan,
 			$instdate,
 			$extendinstallments,
-			$total_requested_discount
+			$total_requested_discount,
+			$skip_next_month_fee
 		);
 
 		$errors = array_merge($at_create['errors'], $if_discount_approved['errors']);
@@ -5563,6 +5565,7 @@ class Studentsapi extends CI_Controller {
 				'allowed_discount' => $allowed_discount,
 				'request_more_discount' => $request_more,
 				'total_requested_discount' => $total_requested_discount,
+				'skip_next_month_fee' => $skip_next_month_fee,
 				'max_allowed_discount' => $max_discount,
 				'max_request_more_discount' => $max_extra,
 			),
@@ -5583,6 +5586,7 @@ class Studentsapi extends CI_Controller {
 		$instdate = isset($body['instdate']) ? $body['instdate'] : 10;
 		$extendinstallments = isset($body['installments']) ? (int)$body['installments'] : 0;
 		$discount = isset($body['discount']) ? (float)$body['discount'] : 0;
+		$skip_next_month_fee = !empty($body['skip_next_month_fee']) && (int)date('j') >= 20;
 		$actor = $this->_actor_name();
 
 		$plan_rows = $this->db->get_where('fee_rules', array('fee_rule_id' => $payment_plan))->result_array();
@@ -5591,7 +5595,7 @@ class Studentsapi extends CI_Controller {
 		}
 		$plan = $plan_rows[0];
 
-		$built = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, $discount);
+		$built = $this->_build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, $discount, $skip_next_month_fee);
 		if (!empty($built['errors'])) {
 			$this->_json(array('success' => false, 'message' => implode("\n", $built['errors'])), 422);
 		}
@@ -5617,7 +5621,7 @@ class Studentsapi extends CI_Controller {
 		$this->_json(array('success' => true, 'message' => 'Payment plan created successfully'));
 	}
 
-	private function _build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, $discount)
+	private function _build_payment_plan_rows($student_id, $plan, $instdate, $extendinstallments, $discount, $skip_next_month_fee = false)
 	{
 		$student_id = (int)$student_id;
 		$discount = (float)$discount;
@@ -5705,10 +5709,11 @@ class Studentsapi extends CI_Controller {
 
 		$totalamount = (float)$plan['total_fee'] - $discount - (float)$plan['installment_on_admission'];
 		$permonth = $extendinstallments > 0 ? ($totalamount / $extendinstallments) : $totalamount;
+		$month_offset = $skip_next_month_fee ? 2 : 1;
 		for ($i = 1; $i <= $extendinstallments; $i++) {
 			$rows[] = array(
 				'amount' => (float)$permonth,
-				'dead_line' => date('Y-m-' . $instdate, strtotime('first day of +' . $i . ' month')),
+				'dead_line' => date('Y-m-' . $instdate, strtotime('first day of +' . ($i + $month_offset - 1) . ' month')),
 				'payment_plan' => 'Auto',
 				'disc_per_inst' => $plan['disc_per_inst'],
 				'payment_comment' => 'College Fee',

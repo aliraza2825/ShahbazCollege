@@ -1905,6 +1905,9 @@ class Students extends CI_Controller {
         $payment_plan = $this->input->post('plan_id');
         $instdate = $this->input->post('instdate');
         $extendinstallments = $this->input->post('installments');
+        // When a plan is created on/after the 20th, allow the operator to
+        // postpone the first monthly fee if the student has just paid.
+        $skip_next_month_fee = ((int)date('j') >= 20 && $this->input->post('skip_next_month_fee') === '1');
         $this->db->trans_start();
 
         $plan = $this->db->get_where('fee_rules', array('fee_rule_id'=>$payment_plan))->result_array();
@@ -2028,9 +2031,10 @@ class Students extends CI_Controller {
 
         $totalamount=$plan['total_fee']-$this->input->post('discount')-$plan['installment_on_admission'];
         $permonth = $totalamount/$extendinstallments;
+        $month_offset = $skip_next_month_fee ? 2 : 1;
         for($i=1; $i<=$extendinstallments; $i++)
         {
-            $dead_line = date("Y-m-" . $instdate, strtotime('first day of +' . $i . ' month'));
+            $dead_line = date("Y-m-" . $instdate, strtotime('first day of +' . ($i + $month_offset - 1) . ' month'));
             $challan_no = $this->getChallanNo();
             $this->db->set('amount', $permonth);
             $this->db->set('dead_line', $dead_line);

@@ -202,6 +202,19 @@ $myAccess = checkUserAccess();
                         </div>
                     </div>
 
+                    <?php if ((int)date('j') >= 20): ?>
+                    <div class="form-group">
+                        <label class="col-md-6 control-label">Do not create next month's fee?</label>
+                        <div class="col-md-6">
+                            <label class="checkbox-inline">
+                                <input type="checkbox" name="skip_next_month_fee" value="1">
+                                Yes, postpone next month's fee by one month
+                            </label>
+                            <span class="help-block">If checked, the first monthly installment will be postponed by one month.</span>
+                        </div>
+                    </div>
+                    <?php endif; ?>
+
                     <div class="form-actions">
                         <div class="row">
                             <div class="col-md-offset-3 col-md-9">
