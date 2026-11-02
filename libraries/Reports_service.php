@@ -49,6 +49,9 @@ class Reports_service {
             if ($this->ci->db->table_exists($table) && !$this->ci->db->field_exists('reports_discount_report', $table)) {
                 $this->ci->db->query("ALTER TABLE `$table` ADD `reports_discount_report` TINYINT(1) NULL DEFAULT NULL");
             }
+            if ($this->ci->db->table_exists($table) && !$this->ci->db->field_exists('reports_month_admissions', $table)) {
+                $this->ci->db->query("ALTER TABLE `$table` ADD `reports_month_admissions` TINYINT(1) NULL DEFAULT NULL");
+            }
         }
         $this->ci->db->reset_query();
     }
@@ -118,6 +121,7 @@ class Reports_service {
             'sidebar' => $is_admin || !empty($acc['reports_sidebar']),
             'how_to_use' => $is_admin,
             'students_fee_problem' => $is_admin || !empty($acc['reports_student_fee_problem']),
+            'month_admissions' => $is_admin || !empty($acc['reports_month_admissions']),
             'discount_report' => $is_admin || !empty($acc['reports_discount_report']),
             'struckoff_report' => $is_admin || !empty($acc['all_struckofstudent_report']),
             'teacher_questions' => $is_admin || !empty($acc['reports_sidebar']),
@@ -542,6 +546,17 @@ class Reports_service {
     public function batch_recovery_campuses($user)
     {
         if (!$this->_user_perm($user, 'reports_student_fee_problem')) return array('success'=>false, 'message'=>'Fee report access required');
+        return $this->_report_campuses($user);
+    }
+
+    public function month_admissions_campuses($user)
+    {
+        if (!$this->_user_perm($user, 'reports_month_admissions')) return array('success'=>false, 'message'=>'Month admissions report access required');
+        return $this->_report_campuses($user);
+    }
+
+    private function _report_campuses($user)
+    {
         $campuses = $this->_is_admin($user) ? array() : $this->_campus_ids($user);
         $classes = $this->_is_admin($user) ? array() : $this->_class_ids($user);
         if (!$this->_is_admin($user) && (!$campuses || !$classes)) return array('success'=>true, 'data'=>array());
@@ -611,10 +626,10 @@ class Reports_service {
 
     public function month_admissions($user, $campus_id, $month, $due_date)
     {
-        if (!$this->_user_perm($user, 'reports_student_fee_problem')) return array('success'=>false,'message'=>'Fee report access required','code'=>403);
+        if (!$this->_user_perm($user, 'reports_month_admissions')) return array('success'=>false,'message'=>'Month admissions report access required','code'=>403);
         if (!preg_match('/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/', (string)$month)) return array('success'=>false,'message'=>'Select a valid month','code'=>422);
         if (!preg_match('/^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$/', (string)$due_date) || date('Y-m-d',strtotime($due_date)) !== $due_date) return array('success'=>false,'message'=>'Select a valid due cutoff date','code'=>422);
-        $allowed = $this->batch_recovery_campuses($user);
+        $allowed = $this->month_admissions_campuses($user);
         $campus = null;
         foreach ($allowed['data'] as $c) if ((int)$c['campus_id'] === (int)$campus_id) $campus=$c;
         if (!$campus) return array('success'=>false,'message'=>'College not available','code'=>403);

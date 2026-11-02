@@ -49,6 +49,11 @@ class Access_service {
     {
         $this->ci =& get_instance();
         $this->ci->load->model('accesses');
+        foreach (array('access', 'access_rules') as $table) {
+            if ($this->ci->db->table_exists($table) && !$this->ci->db->field_exists('reports_month_admissions', $table)) {
+                $this->ci->db->query("ALTER TABLE `$table` ADD `reports_month_admissions` TINYINT(1) NULL DEFAULT NULL");
+            }
+        }
         $this->ensure_admission_process_access_columns();
         $this->ensure_struck_management_access_columns();
     }

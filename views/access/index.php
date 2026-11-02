@@ -677,6 +677,8 @@
                                                 <label class="checkbox-inline">
                                                     <input type="checkbox" id="inlineCheckbox1" name="reports_student_fee_problem" value="1" <?php if(@$access_values[0]['reports_student_fee_problem']!=NULL){echo 'checked';}?> /> Students Fee Problem </label>
                                                 <label class="checkbox-inline">
+                                                    <input type="checkbox" id="inlineCheckbox1" name="reports_month_admissions" value="1" <?php if(@$access_values[0]['reports_month_admissions']!=NULL){echo 'checked';}?> /> Month Admissions Report </label>
+                                                <label class="checkbox-inline">
                                                     <input type="checkbox" id="inlineCheckbox1" name="all_struckofstudent_report" value="1" <?php if(@$access_values[0]['all_struckofstudent_report']!=NULL){echo 'checked';}?> /> Struck of Students Report </label>
 
                                                 <label class="checkbox-inline">
