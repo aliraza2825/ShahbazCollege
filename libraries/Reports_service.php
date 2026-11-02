@@ -609,6 +609,36 @@ class Reports_service {
         return array('success'=>true,'data'=>$data);
     }
 
+    public function month_admissions($user, $campus_id, $month, $due_date)
+    {
+        if (!$this->_user_perm($user, 'reports_student_fee_problem')) return array('success'=>false,'message'=>'Fee report access required','code'=>403);
+        if (!preg_match('/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/', (string)$month)) return array('success'=>false,'message'=>'Select a valid month','code'=>422);
+        if (!preg_match('/^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$/', (string)$due_date) || date('Y-m-d',strtotime($due_date)) !== $due_date) return array('success'=>false,'message'=>'Select a valid due cutoff date','code'=>422);
+        $allowed = $this->batch_recovery_campuses($user);
+        $campus = null;
+        foreach ($allowed['data'] as $c) if ((int)$c['campus_id'] === (int)$campus_id) $campus=$c;
+        if (!$campus) return array('success'=>false,'message'=>'College not available','code'=>403);
+        $class_ids = $this->_is_admin($user) ? array() : $this->_class_ids($user);
+        if (!$this->_is_admin($user) && !$class_ids) return array('success'=>true,'data'=>array('campus'=>$campus,'month'=>$month,'due_date'=>$due_date,'student_count'=>0,'courses'=>array(),'totals'=>array('admissions'=>0,'total_due'=>0)));
+        $from=$month.'-01';
+        $until=date('Y-m-d',strtotime($from.' +1 month'));
+        $cutoff=$this->ci->db->escape($due_date);
+        $this->ci->db->select("s.student_id,s.roll_no,s.first_name,s.last_name,s.mobile,s.registration_date,s.add_by,co.course_id,co.course_name,MAX(CASE WHEN p.paid=1 THEN COALESCE(NULLIF(p.actual_paid_date,'0000-00-00'),NULLIF(p.paid_date,'0000-00-00')) ELSE NULL END) AS last_paid_fee_date,SUM(CASE WHEN p.paid=0 AND p.dead_line <= {$cutoff} THEN p.amount ELSE 0 END) AS total_due",false);
+        $this->ci->db->from('students s')->join('classes cl','cl.class_id=s.class_id')->join('courses co','co.course_id=s.course_id')->join('campuses ca','ca.campus_id=cl.campus_id')->join('payments p','p.student_id=s.student_id','left');
+        $this->ci->db->where('s.status',1)->where('cl.campus_id',(int)$campus_id)->where('s.registration_date >=',$from)->where('s.registration_date <',$until);
+        if (!$this->_is_admin($user)) $this->ci->db->where_in('cl.class_id',$class_ids);
+        $this->ci->db->group_by('s.student_id')->order_by('co.course_name','ASC')->order_by('s.roll_no','ASC');
+        $students=$this->ci->db->get()->result_array();
+        $courses=array(); $grand=array('admissions'=>0,'total_due'=>0);
+        foreach ($students as $student) {
+            $course_id=(int)$student['course_id'];
+            if (!isset($courses[$course_id])) $courses[$course_id]=array('course_id'=>$course_id,'course_name'=>$student['course_name'],'students'=>array(),'totals'=>array('admissions'=>0,'total_due'=>0));
+            $row=array('student_id'=>(int)$student['student_id'],'roll_no'=>(string)$student['roll_no'],'name'=>trim($student['first_name'].' '.$student['last_name']),'phone'=>(string)$student['mobile'],'last_paid_fee_date'=>!empty($student['last_paid_fee_date']) ? substr($student['last_paid_fee_date'],0,10) : null,'admission_date'=>substr($student['registration_date'],0,10),'total_due'=>(float)$student['total_due'],'admission_by'=>(string)$student['add_by']);
+            $courses[$course_id]['students'][]=$row; $courses[$course_id]['totals']['admissions']++; $courses[$course_id]['totals']['total_due']+=(float)$row['total_due']; $grand['admissions']++; $grand['total_due']+=(float)$row['total_due'];
+        }
+        return array('success'=>true,'data'=>array('campus'=>$campus,'month'=>$month,'due_date'=>$due_date,'student_count'=>count($students),'courses'=>array_values($courses),'totals'=>$grand));
+    }
+
     public function course_subjects($course_id)
     {
         return $this->ci->db

@@ -103,6 +103,12 @@ class Reportsapi extends CI_Controller {
         $this->_json($result, empty($result['success']) ? $result['code'] : 200);
     }
 
+    public function month_admissions()
+    {
+        $result=$this->service->month_admissions($this->current_user, (int)$this->input->get('campus_id'), $this->input->get('month'), $this->input->get('due_date'));
+        $this->_json($result, empty($result['success']) ? $result['code'] : 200);
+    }
+
     public function course_subjects($course_id)
     {
         $this->_json(array(
