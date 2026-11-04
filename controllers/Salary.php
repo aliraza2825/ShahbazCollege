@@ -405,6 +405,15 @@ class Salary  extends CI_Controller{
         $this->db->where(array('user_allowances.user_id' => $user_id));
         $alownce = $this->db->get()->result_array();
 
+        // Keep fixed allowances separate from month-specific calculated
+        // incentives that are appended below.
+        $allowance_total = 0.0;
+        foreach ($alownce as $allowance_row) {
+            if ((string) (isset($allowance_row['type']) ? $allowance_row['type'] : '') === '0') {
+                $allowance_total += (float) (isset($allowance_row['amount']) ? $allowance_row['amount'] : 0);
+            }
+        }
+
         if ($incentives_admission > 0) {
 
             array_push($alownce, array(
@@ -497,16 +506,9 @@ class Salary  extends CI_Controller{
         
         $data['income_tax'] = $income_tax['amount'];
 
-        // Fixed allowances belong to the separate Allowances total.  Some
-        // staff records have gross_salary equal to basic salary, so deriving
-        // this only from gross_salary - salary incorrectly returns zero even
-        // when user_allowances contains a fixed allowance.
-        $allowance_total = 0.0;
-        foreach ($alownce as $allowance_row) {
-            if ((string) (isset($allowance_row['type']) ? $allowance_row['type'] : '') === '0') {
-                $allowance_total += (float) (isset($allowance_row['amount']) ? $allowance_row['amount'] : 0);
-            }
-        }
+        // Fixed allowances belong to the separate Allowances total. Some
+        // staff records have gross_salary equal to basic salary, so use the
+        // fixed allowance rows first and only fall back to gross/basic.
         $gross_allowance_total = $gross_salary - $basic_salary;
         if ($allowance_total <= 0 && $gross_allowance_total > 0) {
             $allowance_total = $gross_allowance_total;
