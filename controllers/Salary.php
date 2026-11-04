@@ -128,11 +128,15 @@ class Salary  extends CI_Controller{
         $out['counted_days_default'] = isset($data['counted_days'], $data['leaves'], $data['absent'])
             ? ((float) $data['counted_days'] - (float) $data['leaves'] - (float) $data['absent'])
             : 0;
-        $out['allowance_amount'] = 0;
-        if (is_object($staff)) {
-            $out['allowance_amount'] = (float) $staff->gross_salary - (float) $staff->salary;
-        } elseif (is_array($staff)) {
-            $out['allowance_amount'] = (float) @$staff['gross_salary'] - (float) @$staff['salary'];
+        // Preserve the allowance total prepared from user_allowances.  Only
+        // derive it from gross/basic for older payloads that do not provide it.
+        if (!array_key_exists('allowance_amount', $data)) {
+            $out['allowance_amount'] = 0;
+            if (is_object($staff)) {
+                $out['allowance_amount'] = (float) $staff->gross_salary - (float) $staff->salary;
+            } elseif (is_array($staff)) {
+                $out['allowance_amount'] = (float) @$staff['gross_salary'] - (float) @$staff['salary'];
+            }
         }
         if (!isset($out['income_tax']) && isset($data['income_tax'])) {
             $out['income_tax'] = $data['income_tax'];
@@ -493,6 +497,21 @@ class Salary  extends CI_Controller{
         
         $data['income_tax'] = $income_tax['amount'];
 
+        // Fixed allowances belong to the separate Allowances total.  Some
+        // staff records have gross_salary equal to basic salary, so deriving
+        // this only from gross_salary - salary incorrectly returns zero even
+        // when user_allowances contains a fixed allowance.
+        $allowance_total = 0.0;
+        foreach ($alownce as $allowance_row) {
+            if ((string) (isset($allowance_row['type']) ? $allowance_row['type'] : '') === '0') {
+                $allowance_total += (float) (isset($allowance_row['amount']) ? $allowance_row['amount'] : 0);
+            }
+        }
+        $gross_allowance_total = $gross_salary - $basic_salary;
+        if ($allowance_total <= 0 && $gross_allowance_total > 0) {
+            $allowance_total = $gross_allowance_total;
+        }
+        $data['allowance_amount'] = $allowance_total;
         $data['user_allowances'] = $alownce;
         $strDateFrom = $data['from_date'];
         $strDateTo = $data['to_date'];
