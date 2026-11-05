@@ -1584,15 +1584,10 @@ class Salary  extends CI_Controller{
             $iscampus = 'false';
         }
 
+        // Keep the report net equal to the generated payroll/slip amount.
+        // Salary adjustment is already included in payroll.earned_salary;
+        // subtracting it here made the report disagree with Generate Salary.
         $salary = $this->db->get()->result_array();
-        if (!$minimum_adjustment_report) {
-            foreach ($salary as $key => $row) {
-                $minimumAdjustment = (float) @$row['minimum_salary_adjustment'];
-                if ($minimumAdjustment > 0) {
-                    $salary[$key]['earned_salary'] = (float) $row['earned_salary'] - $minimumAdjustment;
-                }
-            }
-        }
 
         $stat_rules = $this->db
             ->order_by('id', 'DESC')
