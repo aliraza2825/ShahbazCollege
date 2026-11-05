@@ -3682,13 +3682,25 @@ class Studentsapi extends CI_Controller {
 		if (($credit_amount - $amount_tagged) >= $amount) {
 			$this->_json(array('success' => true, 'message' => 'success', 'statement_id' => (int)$transaction[0]['id']));
 		}
-		$device = $this->db->get_where('payments', array('statement_id' => $transaction[0]['id']))->row_array();
+		$device = $this->db
+			->select('payments.challan_no, payments.student_id, students.roll_no, students.first_name, students.last_name')
+			->from('payments')
+			->join('students', 'students.student_id=payments.student_id', 'left')
+			->where('payments.statement_id', $transaction[0]['id'])
+			->order_by('payments.id', 'ASC')
+			->get()
+			->row_array();
+		$student_name = $device
+			? trim(trim((string)$device['first_name']) . ' ' . trim((string)$device['last_name']))
+			: null;
 		$this->_json(array(
 			'success' => false,
 			'message' => 'Already tagged',
 			'code' => 'already_found',
 			'challan_no' => $device ? $device['challan_no'] : null,
 			'student_id' => $device ? (int)$device['student_id'] : null,
+			'student_name' => $student_name ?: null,
+			'roll_no' => $device && $device['roll_no'] !== null ? (string)$device['roll_no'] : null,
 		));
 	}
 
