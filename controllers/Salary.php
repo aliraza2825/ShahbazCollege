@@ -1561,7 +1561,7 @@ class Salary  extends CI_Controller{
         $this->db->select('payroll.*,(select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Loan installment%")) as loan,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Advance installment%")) as advance,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name like("%Special%")) as special,
-            (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0) as earnings,
+            (select coalesce(sum(amount),0) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0 and lower(trim(name)) not in ("allowances", "allownces", "allowance", "minimum salary adjustment", "salary adjustment")) as report_incentive,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name in ("Minimum Salary Adjustment", "Salary Adjustment")) as minimum_salary_adjustment,
             users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name,campuses.campus_id');
@@ -1588,6 +1588,19 @@ class Salary  extends CI_Controller{
         // Salary adjustment is already included in payroll.earned_salary;
         // subtracting it here made the report disagree with Generate Salary.
         $salary = $this->db->get()->result_array();
+
+        foreach ($salary as &$savedPayroll) {
+            // Reconcile the saved payroll totals, never reprice historical days
+            // using today's staff allowance settings. Net remains the saved net.
+            $savedPayroll['report_earned'] = (float) $savedPayroll['earned_salary']
+                + (float) $savedPayroll['deductions'] + (float) $savedPayroll['tax']
+                - (float) $savedPayroll['report_incentive']
+                - (float) $savedPayroll['minimum_salary_adjustment'];
+            $savedPayroll['report_allowance'] = $savedPayroll['new_user_alownce'] !== null
+                ? (float) $savedPayroll['new_user_alownce']
+                : max(0, (float) $savedPayroll['gross_salary'] - (float) $savedPayroll['basic_salary']);
+        }
+        unset($savedPayroll);
 
         $stat_rules = $this->db
             ->order_by('id', 'DESC')
