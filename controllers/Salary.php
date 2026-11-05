@@ -1564,7 +1564,7 @@ class Salary  extends CI_Controller{
             (select coalesce(sum(amount),0) from payroll_earn_deducs where payroll_id=payroll.id and type_id = 0 and lower(trim(name)) not in ("allowances", "allownces", "allowance", "minimum salary adjustment", "salary adjustment")) as report_incentive,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name = "Allowances") as new_user_alownce,
             (select sum(amount) from payroll_earn_deducs where payroll_id=payroll.id and name in ("Minimum Salary Adjustment", "Salary Adjustment")) as minimum_salary_adjustment,
-            users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name,campuses.campus_id');
+            users.first_name,users.last_name,campuses.campus_name,user_allowances.amount as user_alownce,designations.designation_name as designation,departments.department_name as department,campuses.campus_name,campuses.campus_id', false);
         $this->db->from('payroll');
         $this->db->join('users','payroll.user_id = users.user_id ','inner');
         $this->db->join('campuses','users.campus_id = campuses.campus_id ','inner');
