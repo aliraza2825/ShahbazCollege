@@ -1568,7 +1568,10 @@ class Salary  extends CI_Controller{
         $this->db->from('payroll');
         $this->db->join('users','payroll.user_id = users.user_id ','inner');
         $this->db->join('campuses','users.campus_id = campuses.campus_id ','inner');
-        $this->db->join('user_allowances','user_allowances.user_id = users.user_id ','inner');
+        // A payroll row must remain visible even when the employee has no
+        // user_allowances record; INNER JOIN was hiding valid generated
+        // salaries from the report.
+        $this->db->join('user_allowances','user_allowances.user_id = users.user_id ','left');
         $this->db->join('designations', 'designations.designation_id=users.designation_id', 'INNER');
         $this->db->join('departments', 'departments.department_id=users.department_id', 'INNER');
         $this->db->group_by('users.user_id');
