@@ -5456,13 +5456,20 @@ class Accountsapi extends CI_Controller {
 		if (!$this->_table_exists('pay_pro_settlement')) {
 			$this->_json(array('success' => true, 'settlements' => array()));
 		}
+		$from = $this->input->get('from_date');
+		$to = $this->input->get('to_date');
+		$where = array();
+		$params = array();
+		if ($from) { $where[] = 'pay_pro_settlement.settlement_date >= ?'; $params[] = $from; }
+		if ($to) { $where[] = 'pay_pro_settlement.settlement_date <= ?'; $params[] = $to; }
 		$rows = $this->db->query(
 			"SELECT pay_pro_settlement.*,
 					CONCAT(users.first_name,' ',users.last_name) AS created_by_name
 			 FROM pay_pro_settlement
-			 LEFT JOIN users ON users.user_id = pay_pro_settlement.created_by
-			 ORDER BY pay_pro_settlement.settlement_date DESC, pay_pro_settlement.id DESC
-			 LIMIT 100"
+			 LEFT JOIN users ON users.user_id = pay_pro_settlement.created_by"
+			. ($where ? ' WHERE '.implode(' AND ', $where) : '')
+			. ' ORDER BY pay_pro_settlement.settlement_date DESC, pay_pro_settlement.id DESC'
+			. ($where ? '' : ' LIMIT 100'), $params
 		)->result_array();
         $tags = array();
         $has_channels = $this->_table_exists('paypro_bank_channel_tags');
