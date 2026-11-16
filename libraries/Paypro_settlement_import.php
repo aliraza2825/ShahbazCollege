@@ -42,12 +42,12 @@ class Paypro_settlement_import
             }
             $xml = $this->xml_part($zip,$sheet_path); $input = array();
             foreach ($xml->xpath('//*[local-name()="sheetData"]/*[local-name()="row"]') as $row) {
-                $r = (int)$row['r']; if ($r < 2) continue;
-                $cells = array_fill(0,11,'');
+                $r = (int)$row['r']; if ($r < 1) continue;
+                $cells = array_fill(0,20,'');
                 foreach ($row->xpath('./*[local-name()="c"]') as $cell) {
                     if (!preg_match('/^([A-Z]+)[0-9]+$/',(string)$cell['r'],$match)) continue;
                     $c = 0; foreach (str_split($match[1]) as $letter) $c = $c*26+ord($letter)-64;
-                    if ($c > 11) continue;
+                    if ($c > 20) continue;
                     $values = $cell->xpath('./*[local-name()="v"]'); $value = $values ? (string)$values[0] : '';
                     if ((string)$cell['t'] === 's') {
                         if (!isset($strings[(int)$value])) throw new Exception('Invalid shared string in settlement worksheet.');
@@ -69,9 +69,9 @@ class Paypro_settlement_import
         if ($book->getSheetCount() < 2) throw new Exception('PayPro settlement file must contain the second worksheet.');
         $sheet = $book->getSheet(1);
         $input = array();
-        for ($r = 2; $r <= $sheet->getHighestRow(); $r++) {
+        for ($r = 1; $r <= $sheet->getHighestRow(); $r++) {
             $cells = array();
-            for ($c = 0; $c <= 10; $c++) $cells[] = trim((string)$sheet->getCellByColumnAndRow($c,$r)->getValue());
+            for ($c = 0; $c < 20; $c++) $cells[] = trim((string)$sheet->getCellByColumnAndRow($c,$r)->getValue());
             $input[$r] = $cells;
         }
         return $this->parse_rows($input);
@@ -79,8 +79,14 @@ class Paypro_settlement_import
 
     private function parse_rows($input)
     {
-        $rows = array(); $date = null;
+        $rows = array(); $date = null; $via_col = 9; $delay_col = 10;
+        if (isset($input[1])) foreach ($input[1] as $col => $heading) {
+            $heading = strtolower(preg_replace('/[^a-z0-9]/i', '', $heading));
+            if ($heading === 'paidvia') $via_col = $col;
+            if (strpos($heading, 'delay') === 0) $delay_col = $col;
+        }
         foreach ($input as $r => $cells) {
+            if ($r < 2) continue;
             if (implode('', $cells) === '') continue;
             if ($cells[2] === '') throw new Exception('PayPro ID missing on row '.$r.'.');
             $settled = $this->date_value($cells[4], $r);
@@ -91,7 +97,7 @@ class Paypro_settlement_import
             if (!is_numeric($amount) || (float)$amount < 0) throw new Exception('Invalid paid amount on row '.$r.'.');
             $rows[] = array('customer'=>$cells[1], 'paypro_id'=>$cells[2], 'order_no'=>$cells[3],
                 'paid_date'=>$paid, 'received_date'=>$settled, 'paid_amount'=>(float)$amount,
-                'received_amount'=>(float)$amount, 'paid_via'=>$cells[9], 'paid_after_days'=>$cells[10]);
+                'received_amount'=>(float)$amount, 'paid_via'=>isset($cells[$via_col]) ? $cells[$via_col] : '', 'paid_after_days'=>isset($cells[$delay_col]) ? $cells[$delay_col] : '');
         }
         if (!$rows) throw new Exception('No settlement entries found in the second worksheet.');
         return array('date'=>$date,'rows'=>$rows);
