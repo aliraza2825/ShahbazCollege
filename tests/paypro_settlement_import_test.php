@@ -1,5 +1,6 @@
 <?php
 define('BASEPATH',__DIR__);
+date_default_timezone_set('Asia/Karachi');
 require __DIR__.'/../libraries/Paypro_settlement_import.php';
 class SettlementTestSheet {
     public $rows;

@@ -5478,6 +5478,18 @@ class Accountsapi extends CI_Controller {
 			 ORDER BY pay_pro_settlement.settlement_date DESC, pay_pro_settlement.id DESC
 			 LIMIT 100"
 		)->result_array();
+		$tags = array();
+		if ($rows && $this->_table_exists('bank_reconciliation_statement')) {
+			$bank_rows = $this->db->select('b.paypro_id,b.credit,b.trans_date,b.description,a.account_title,a.account_name')
+				->from('bank_reconciliation_statement b')->join('accounts a','a.id=b.account_id','left')
+				->where_in('b.paypro_id',array_column($rows,'id'))->get()->result_array();
+			foreach ($bank_rows as $tag) $tags[(int)$tag['paypro_id']][] = $tag;
+		}
+		foreach ($rows as &$settlement) {
+			$settlement['deductions_amount'] = (float)$settlement['total_amount'] - (float)$settlement['paid_amount'];
+			$settlement['bank_tags'] = isset($tags[(int)$settlement['id']]) ? $tags[(int)$settlement['id']] : array();
+		}
+		unset($settlement);
 		$this->_json(array('success' => true, 'settlements' => $rows));
 	}
 
@@ -5501,6 +5513,8 @@ class Accountsapi extends CI_Controller {
 			$result = $this->paypro_settlement_import->save($this->db,$parsed,$this->current_user['user_id']);
 		} catch (Exception $e) {
 			$this->_json(array('success'=>false,'message'=>$e->getMessage()),400);
+		} catch (Throwable $e) {
+			$this->_json(array('success'=>false,'message'=>'Unable to read this Excel file. Please check the settlement workbook.'),400);
 		}
 		$this->_json($result);
 	}
