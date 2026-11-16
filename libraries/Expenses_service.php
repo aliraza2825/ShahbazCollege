@@ -1332,6 +1332,7 @@ class Expenses_service {
                 'status' => $row['status'],
                 'has_sub' => $row['has_sub'],
                 'for_campus' => $row['for_campus'],
+                'type' => isset($row['type']) ? $row['type'] : '',
                 'children' => $this->build_category_tree((int) $row['expense_category_id'], null),
             );
         }
@@ -1353,6 +1354,31 @@ class Expenses_service {
             'campuses' => $this->ci->db->order_by('campus_name', 'ASC')->get_where('campuses', array('status' => 1))->result_array(),
             'legacy_root' => rtrim(base_url(), '/'),
         );
+    }
+
+    public function update_expense_category($user, $data)
+    {
+        $p = $this->permissions($user);
+        if (empty($p['category']) && empty($p['is_admin'])) {
+            return array('success'=>false, 'message'=>'Category permission required');
+        }
+        $id = isset($data['expense_category_id']) ? (int)$data['expense_category_id'] : 0;
+        $name = isset($data['name']) && is_string($data['name']) ? trim($data['name']) : '';
+        $status = isset($data['status']) ? $data['status'] : '';
+        $type = isset($data['type']) ? $data['type'] : '';
+        $ids = isset($data['campus_ids']) && is_array($data['campus_ids']) ? array_values(array_unique(array_filter(array_map('intval',$data['campus_ids'])))) : array();
+        if (!$id || $name === '' || !$ids || !in_array($status,array('active','inactive'),true) || !in_array($type,array('','general','advertisement'),true)) {
+            return array('success'=>false, 'message'=>'Valid category name, status, type and campuses required');
+        }
+        if (!$this->ci->db->get_where('expense_category',array('expense_category_id'=>$id))->row_array()) {
+            return array('success'=>false, 'message'=>'Category not found');
+        }
+        $campuses = $this->ci->db->select('campus_id')->where_in('campus_id',$ids)->get('campuses')->result_array();
+        if (count($campuses) !== count($ids)) return array('success'=>false, 'message'=>'Invalid campus selection');
+        $ok = $this->ci->db->where('expense_category_id',$id)->update('expense_category',array(
+            'name'=>$name, 'status'=>$status, 'type'=>$type, 'for_campus'=>implode(',',$ids),
+        ));
+        return array('success'=>(bool)$ok, 'message'=>$ok ? 'Expense category updated successfully!' : 'Unable to update category');
     }
 
     public function add_expense_category($user, $data)

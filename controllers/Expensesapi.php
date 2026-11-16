@@ -540,6 +540,13 @@ class Expensesapi extends CI_Controller {
         $this->_json($result);
     }
 
+    public function update_expense_category()
+    {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') $this->_json(array('success'=>false,'message'=>'POST required'),405);
+        $result = $this->service->update_expense_category($this->current_user, $this->_body());
+        $this->_json($result, empty($result['success']) ? 400 : 200);
+    }
+
     public function add_expense_category()
     {
         $body = $this->_body();
