@@ -4114,6 +4114,8 @@ class Accountsapi extends CI_Controller {
 			);
 		} elseif (!$this->_brs_empty(isset($row['paypro_id']) ? $row['paypro_id'] : null)) {
 			$pp = null;
+            $row['tagged_amount'] = $this->_brs_num($row['credit']);
+            $channel_tag = $this->_table_exists('paypro_bank_channel_tags') ? $this->db->get_where('paypro_bank_channel_tags',array('bank_trans_id'=>$row['id']))->row_array() : array();
 			if ($this->_table_exists('pay_pro_settlement')) {
 				$pp = $this->db->query(
 					'SELECT * FROM pay_pro_settlement WHERE id = ? LIMIT 1',
@@ -4125,6 +4127,7 @@ class Accountsapi extends CI_Controller {
 				'relate_label' => 'PayPro settlement',
 				'relate_detail' => $pp ? array(
 					'settlement_date' => $pp['settlement_date'],
+                    'paid_via' => isset($channel_tag['paid_via']) ? $channel_tag['paid_via'] : 'Legacy channel not recorded',
 					'tagged_credit' => isset($row['credit']) ? $row['credit'] : '',
 					'paid_amount' => $pp['paid_amount'],
 					'link_amount' => $pp['link_amount'],
@@ -4442,7 +4445,8 @@ class Accountsapi extends CI_Controller {
 		$page_size = (int)$this->input->get('page_size');
 		if ($page < 1) $page = 1;
 		if ($page_size < 1) $page_size = 25;
-		if ($page_size > 100) $page_size = 100;
+		// Match the statement table's supported per-page options (up to 5000).
+		if ($page_size > 5000) $page_size = 5000;
 		if (!$from) $from = date('Y-m-01');
 		if (!$to) $to = date('Y-m-d');
 		$offset = ($page - 1) * $page_size;
@@ -4643,21 +4647,18 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => true, 'message' => 'Bank transfer tagged'));
 		}
 
-		if ($type === 'paypro' || $type === 'pay_pro') {
-			$paypro_id = (int)(isset($body['paypro_id']) ? $body['paypro_id'] : (isset($body['related_id']) ? $body['related_id'] : (isset($body['tag_id']) ? $body['tag_id'] : 0)));
-			$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : (isset($body['id']) ? $body['id'] : $tag_id));
-			$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
-			if ($trans_id <= 0 || $paypro_id <= 0) {
-				$this->_json(array('success' => false, 'message' => 'bank_trans_id and paypro_id required'), 400);
-			}
-			$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('paypro_id' => $paypro_id));
-			if ($this->_table_exists('pay_pro_settlement') && $amount > 0) {
-				$this->db->set('tagged_amount', 'tagged_amount + ' . $amount, false);
-				$this->db->where('id', $paypro_id);
-				$this->db->update('pay_pro_settlement');
-			}
-			$this->_json(array('success' => true, 'message' => 'PayPro tagged'));
-		}
+        if ($type === 'paypro' || $type === 'pay_pro') {
+            $this->load->library('paypro_reconciliation');
+            $this->db->db_debug=false;
+            try {
+                $this->paypro_reconciliation->ensure_schema($this->db);
+                $this->paypro_reconciliation->tag($this->db,
+                    (int)(isset($body['bank_trans_id'])?$body['bank_trans_id']:@$body['id']),
+                    (int)(isset($body['paypro_id'])?$body['paypro_id']:@$body['tag_id']),
+                    isset($body['paid_via'])?$body['paid_via']:'',(int)$this->current_user['user_id']);
+            } catch(Exception $e) { $this->_json(array('success'=>false,'message'=>$e->getMessage()),400); }
+            $this->_json(array('success'=>true,'message'=>'PayPro tagged'));
+        }
 
 		$this->_json(array('success' => false, 'message' => 'Unknown type'), 400);
 	}
@@ -4683,7 +4684,10 @@ class Accountsapi extends CI_Controller {
 			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('closing_id' => null));
 		}
 		if (!empty($row['paypro_id'])) {
-			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('paypro_id' => null));
+			$this->load->library('paypro_reconciliation');
+			$this->paypro_reconciliation->ensure_schema($this->db);
+			try { $this->paypro_reconciliation->untag($this->db,$id); }
+			catch(Exception $e) { $this->_json(array('success'=>false,'message'=>$e->getMessage()),400); }
 		}
 		$this->_json(array('success' => true, 'message' => 'Successfully untagged'));
 	}
@@ -4780,16 +4784,14 @@ class Accountsapi extends CI_Controller {
 			$this->_json(array('success' => true, 'message' => 'Salary expenses untagged'));
 		}
 
-		if ($type === 'paypro') {
-			$amount = $this->_brs_num($row['credit']);
-			if (!empty($row['paypro_id']) && $this->_table_exists('pay_pro_settlement') && $amount > 0) {
-				$this->db->set('tagged_amount', 'GREATEST(0, tagged_amount - ' . $amount . ')', false);
-				$this->db->where('id', (int)$row['paypro_id']);
-				$this->db->update('pay_pro_settlement');
-			}
-			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('paypro_id' => null));
-			$this->_json(array('success' => true, 'message' => 'PayPro untagged'));
-		}
+        if ($type === 'paypro') {
+            $this->load->library('paypro_reconciliation');
+            $this->paypro_reconciliation->ensure_schema($this->db);
+            $this->db->db_debug=false;
+            try { $this->paypro_reconciliation->untag($this->db,$id); }
+            catch(Exception $e) { $this->_json(array('success'=>false,'message'=>$e->getMessage()),400); }
+            $this->_json(array('success'=>true,'message'=>'PayPro untagged'));
+        }
 
 		if ($type === 'closing') {
 			$this->db->where('id', $id)->update('bank_reconciliation_statement', array('closing_id' => null));
@@ -5025,58 +5027,42 @@ class Accountsapi extends CI_Controller {
 	}
 
 	/** POST bank_find_paypro — {bank_trans_id, from_date} */
-	public function bank_find_paypro()
-	{
-		$this->_assert_section('bank_reconciliation');
-		$body = $this->_body();
-		$bank_trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
-		$from_date = isset($body['from_date']) ? $body['from_date'] : date('Y-m-d');
-		if ($bank_trans_id <= 0) $this->_json(array('success' => false, 'message' => 'bank_trans_id required'), 400);
-		$transaction = $this->db->query(
-			'SELECT * FROM bank_reconciliation_statement WHERE id = ? LIMIT 1',
-			array($bank_trans_id)
-		)->row_array();
-		if (!$transaction) $this->_json(array('success' => false, 'message' => 'Not found'), 404);
-		if (!$this->_table_exists('pay_pro_settlement')) {
-			$this->_json(array('success' => true, 'entries' => array()));
-		}
-		$amount = (int)$this->_brs_num($transaction['credit']);
-		$entries = $this->db->query(
-			"SELECT * FROM pay_pro_settlement
-			 WHERE settlement_date = ? AND (total_amount - tagged_amount) <= ?
-			 ORDER BY id DESC",
-			array($from_date, $amount)
-		)->result_array();
-		$this->_json(array(
-			'success' => true,
-			'amount' => $amount,
-			'entries' => $entries,
-		));
-	}
+    public function bank_find_paypro()
+    {
+        $this->_assert_section('bank_reconciliation');
+        $body=$this->_body(); $channel=isset($body['paid_via']) ? $body['paid_via'] : '';
+        $date=isset($body['from_date']) ? $body['from_date'] : '';
+        $bank_id=(int)@$body['bank_trans_id'];
+        $bank=$this->db->get_where('bank_reconciliation_statement',array('id'=>$bank_id))->row_array();
+        if(!$bank) $this->_json(array('success'=>false,'message'=>'Bank transaction not found'),404);
+        $this->load->library('paypro_reconciliation');
+        $this->paypro_reconciliation->ensure_schema($this->db);
+        $channel=$this->paypro_reconciliation->channel($channel);
+        if(!in_array($channel,array('1Link','MBL','Debit/Credit'),true)) $this->_json(array('success'=>false,'message'=>'Select Paid Via'),400);
+        $settlements=$this->db->get_where('pay_pro_settlement',array('settlement_date'=>$date))->result_array();
+        $entries=array();
+        foreach($settlements as $settlement) {
+            $groups=$this->paypro_reconciliation->groups($this->db,(int)$settlement['id']);
+            if(!isset($groups[$channel])) continue;
+            $group=$groups[$channel];
+            $entries[]=array_merge($settlement,$group,array('amount_matches'=>abs($group['remaining']-$this->_brs_num($bank['credit']))<0.005 && $group['remaining']>0));
+        }
+        $this->_json(array('success'=>true,'entries'=>$entries));
+    }
 
-	/** POST bank_tag_paypro — {bank_trans_id, tag_id/paypro_id, amount?} */
-	public function bank_tag_paypro()
-	{
-		$this->_assert_section('bank_reconciliation');
-		$body = $this->_body();
-		$trans_id = (int)(isset($body['bank_trans_id']) ? $body['bank_trans_id'] : 0);
-		$tag_id = (int)(isset($body['tag_id']) ? $body['tag_id'] : (isset($body['paypro_id']) ? $body['paypro_id'] : 0));
-		$amount = isset($body['amount']) ? (float)$body['amount'] : 0;
-		if ($trans_id <= 0 || $tag_id <= 0) {
-			$this->_json(array('success' => false, 'message' => 'bank_trans_id and tag_id required'), 400);
-		}
-		if ($amount <= 0) {
-			$brs = $this->db->query('SELECT credit FROM bank_reconciliation_statement WHERE id = ?', array($trans_id))->row_array();
-			$amount = $brs ? $this->_brs_num($brs['credit']) : 0;
-		}
-		$this->db->where('id', $trans_id)->update('bank_reconciliation_statement', array('paypro_id' => $tag_id));
-		if ($this->_table_exists('pay_pro_settlement') && $amount > 0) {
-			$this->db->set('tagged_amount', 'tagged_amount + ' . $amount, false);
-			$this->db->where('id', $tag_id);
-			$this->db->update('pay_pro_settlement');
-		}
-		$this->_json(array('success' => true, 'message' => 'PayPro tagged'));
-	}
+    public function bank_tag_paypro()
+    {
+        $this->_assert_section('bank_reconciliation');
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') $this->_json(array('success'=>false,'message'=>'POST required'),405);
+        $body=$this->_body();
+        $this->load->library('paypro_reconciliation');
+        $this->paypro_reconciliation->ensure_schema($this->db);
+        $this->db->db_debug=false;
+        try {
+            $this->paypro_reconciliation->tag($this->db,(int)@$body['bank_trans_id'],(int)@$body['tag_id'],(string)@$body['paid_via'],(int)$this->current_user['user_id']);
+        } catch(Exception $e) { $this->_json(array('success'=>false,'message'=>$e->getMessage()),400); }
+        $this->_json(array('success'=>true,'message'=>'PayPro channel tagged'));
+    }
 
 	/** POST bank_cash_withdrawal — legacy add_cash_in_hand */
 	public function bank_cash_withdrawal()
@@ -5478,17 +5464,21 @@ class Accountsapi extends CI_Controller {
 			 ORDER BY pay_pro_settlement.settlement_date DESC, pay_pro_settlement.id DESC
 			 LIMIT 100"
 		)->result_array();
-		$tags = array();
-		if ($rows && $this->_table_exists('bank_reconciliation_statement')) {
-			$bank_rows = $this->db->select('b.paypro_id,b.credit,b.trans_date,b.description,a.account_title,a.account_name')
-				->from('bank_reconciliation_statement b')->join('accounts a','a.id=b.account_id','left')
-				->where_in('b.paypro_id',array_column($rows,'id'))->get()->result_array();
-			foreach ($bank_rows as $tag) $tags[(int)$tag['paypro_id']][] = $tag;
-		}
-		foreach ($rows as &$settlement) {
-			$settlement['deductions_amount'] = (float)$settlement['total_amount'] - (float)$settlement['paid_amount'];
-			$settlement['bank_tags'] = isset($tags[(int)$settlement['id']]) ? $tags[(int)$settlement['id']] : array();
-		}
+        $tags = array();
+        $has_channels = $this->_table_exists('paypro_bank_channel_tags');
+        if ($rows && $this->_table_exists('bank_reconciliation_statement')) {
+            $this->db->select('b.paypro_id,b.credit,b.trans_date,b.description,a.account_title,a.account_name'.($has_channels ? ',t.paid_via' : ''))
+                ->from('bank_reconciliation_statement b')->join('accounts a','a.id=b.account_id','left');
+            if($has_channels) $this->db->join('paypro_bank_channel_tags t','t.bank_trans_id=b.id','left');
+            $bank_rows = $this->db->where_in('b.paypro_id',array_column($rows,'id'))->get()->result_array();
+            foreach ($bank_rows as $tag) $tags[(int)$tag['paypro_id']][] = $tag;
+        }
+        foreach ($rows as &$settlement) {
+            $mbl=$this->db->select('SUM(received_amount) AS amount')->where('settlement_id',$settlement['id'])->where('UPPER(TRIM(paid_via)) =','MBL')->get('settlement_payments')->row_array();
+            $settlement['mbl_amount']=(float)@$mbl['amount'];
+            $settlement['deductions_amount'] = (float)$settlement['total_amount'] - (float)$settlement['paid_amount'];
+            $settlement['bank_tags'] = isset($tags[(int)$settlement['id']]) ? $tags[(int)$settlement['id']] : array();
+        }
 		unset($settlement);
 		$this->_json(array('success' => true, 'settlements' => $rows));
 	}
@@ -5514,7 +5504,9 @@ class Accountsapi extends CI_Controller {
 			}
 			// Return a JSON failure and let the importer roll back failed SQL.
 			$this->db->db_debug = false;
-			$result = $this->paypro_settlement_import->save($this->db,$parsed,$this->current_user['user_id']);
+			$this->load->library('paypro_reconciliation');
+			$this->paypro_reconciliation->ensure_schema($this->db);
+			$result = $this->paypro_settlement_import->save($this->db,$parsed,$this->current_user['user_id'], $this->input->post('preview') === '1', $this->paypro_reconciliation);
 		} catch (Exception $e) {
 			$this->_json(array('success'=>false,'message'=>$e->getMessage()),400);
 		} catch (Throwable $e) {

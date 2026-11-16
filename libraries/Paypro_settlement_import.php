@@ -105,37 +105,70 @@ class Paypro_settlement_import
         return $date->format('Y-m-d');
     }
 
-    public function save($db, $parsed, $user_id)
+    public function compare($existing, $incoming)
+    {
+        $by_id = array(); $added = array(); $same = 0; $conflicts = array();
+        foreach ($existing as $row) $by_id[(string)$row['paypro_id']] = $row;
+        foreach ($incoming as $row) {
+            $key = (string)$row['paypro_id'];
+            if (isset($by_id[$key])) {
+                $old = $by_id[$key]; $equal = true;
+                foreach (array('order_no','paid_date','received_date','paid_via') as $field) {
+                    if (strcasecmp(trim((string)$old[$field]),trim((string)$row[$field])) !== 0) $equal = false;
+                }
+                foreach (array('paid_amount','received_amount') as $field) if (abs((float)$old[$field]-(float)$row[$field]) > 0.005) $equal=false;
+                if ($equal) $same++; else $conflicts[] = $key;
+            } else { $added[]=$row; $by_id[$key]=$row; }
+        }
+        return array('added'=>$added,'unchanged'=>$same,'conflicts'=>$conflicts);
+    }
+
+    public function save($db, $parsed, $user_id, $preview = false, $reconciler = null)
     {
         $lock = 'paypro_settlement_'.$parsed['date'];
         $got = $db->query('SELECT GET_LOCK(?, 10) AS acquired',array($lock))->row_array();
         if (empty($got['acquired'])) throw new Exception('Another settlement upload is in progress. Please try again.');
         $started = false;
         try {
-            if ($db->get_where('pay_pro_settlement',array('settlement_date'=>$parsed['date']))->row_array()) {
-                throw new Exception('Settlement Details Already Uploaded');
+            $existing = $db->get_where('pay_pro_settlement',array('settlement_date'=>$parsed['date']))->row_array();
+            $old_rows = $existing ? $db->get_where('settlement_payments',array('settlement_id'=>$existing['id']))->result_array() : array();
+            $plan = $this->compare($old_rows,$parsed['rows']);
+            if ($preview) {
+                $db->query('SELECT RELEASE_LOCK(?)',array($lock));
+                return array('success'=>true,'preview'=>true,'settlement_date'=>$parsed['date'],'new_count'=>count($plan['added']),'unchanged_count'=>$plan['unchanged'],'conflicts'=>$plan['conflicts']);
             }
+            if ($plan['conflicts']) throw new Exception('Conflicting receipt details for PayPro ID(s): '.implode(', ',$plan['conflicts']).'. Existing entries were preserved.');
             $db->trans_begin(); $started = true;
+            // Capture unambiguous legacy allocations before new rows change
+            // channel totals, so their remainder stays correct after re-upload.
+            if ($existing && $reconciler) $reconciler->groups($db,(int)$existing['id'],true);
             $total = 0; $link = 0; $card = 0;
-            foreach ($parsed['rows'] as $row) {
+            foreach ($plan['added'] as $row) {
                 $total += $row['paid_amount'];
                 if ($row['paid_via'] === '1Link') $link += $row['paid_amount'];
                 if ($row['paid_via'] === 'Debit/Credit') $card += $row['paid_amount'];
             }
-            $db->insert('pay_pro_settlement',array('settlement_date'=>$parsed['date'], 'total_amount'=>$total,
-                'paid_amount'=>$total, 'link_amount'=>$link, 'card_amount'=>$card, 'created_by'=>(int)$user_id));
-            $id = (int)$db->insert_id();
-            foreach ($parsed['rows'] as $row) {
+            if ($existing) {
+                $id = (int)$existing['id'];
+                $db->where('id',$id)->update('pay_pro_settlement',array(
+                    'total_amount'=>(float)$existing['total_amount']+$total,'paid_amount'=>(float)$existing['paid_amount']+$total,
+                    'link_amount'=>(float)$existing['link_amount']+$link,'card_amount'=>(float)$existing['card_amount']+$card));
+            } else {
+                $db->insert('pay_pro_settlement',array('settlement_date'=>$parsed['date'], 'total_amount'=>$total,
+                    'paid_amount'=>$total, 'link_amount'=>$link, 'card_amount'=>$card, 'created_by'=>(int)$user_id));
+                $id = (int)$db->insert_id();
+            }
+            foreach ($plan['added'] as $row) {
                 $row['settlement_id'] = $id;
                 $db->insert('settlement_payments',$row);
                 $payment_id = (int)$db->insert_id();
                 $tags = array('settlement_id'=>$id,'settlement_payment_id'=>$payment_id);
-                $db->where('connect_pay_id',$row['paypro_id'])->update('students_payments',$tags);
+                $db->where('connect_pay_id',$row['paypro_id'])->group_start()->where('settlement_payment_id',null)->or_where('settlement_payment_id',0)->group_end()->update('students_payments',$tags);
                 $entries = $db->get_where('students_payments',array('connect_pay_id'=>$row['paypro_id']))->result_array();
                 foreach ($entries as $entry) {
                     if ($entry['type'] !== 'student') continue;
                     $challans = array_values(array_filter(array_map('trim',explode(',',$entry['challan_ids']))));
-                    if ($challans) $db->where_in('challan_no',$challans)->update('payments',$tags);
+                    if ($challans) $db->where_in('challan_no',$challans)->group_start()->where('settlement_payment_id',null)->or_where('settlement_payment_id',0)->group_end()->update('payments',$tags);
                 }
             }
             if (!$db->trans_status()) throw new Exception('Settlement could not be saved. No entries were imported.');
@@ -146,6 +179,6 @@ class Paypro_settlement_import
             throw $e;
         }
         $db->query('SELECT RELEASE_LOCK(?)',array($lock));
-        return array('success'=>true,'id'=>$id,'entry_count'=>count($parsed['rows']), 'message'=>'PayPro settlement uploaded successfully.');
+        return array('success'=>true,'id'=>$id,'entry_count'=>count($plan['added']),'unchanged_count'=>$plan['unchanged'], 'message'=>'Settlement updated. Existing entries and tags preserved.');
     }
 }

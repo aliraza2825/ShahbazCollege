@@ -16,11 +16,12 @@ class SettlementTestBook {
     function getSheet($i){if($i!==1)throw new Exception('Wrong sheet');return new SettlementTestSheet($this->rows);}
 }
 class SettlementTestDb {
-    public $table; public $inserts=array(); public $updates=array(); public $duplicate=false; public $valid=true; public $committed=false; public $rolledBack=false; public $released=false;
+    public $table; public $inserts=array(); public $updates=array(); public $duplicate=false; public $valid=true; public $committed=false; public $rolledBack=false; public $released=false; public $old_rows=array();
     function query($sql,$args){if(strpos($sql,'RELEASE_LOCK')!==false)$this->released=true;return $this;}
-    function row_array(){return $this->table==='pay_pro_settlement' ? ($this->duplicate ? array('id'=>1) : array()) : ($this->table==='students_payments' ? array('type'=>'student','challan_ids'=>'111,222') : array('acquired'=>1));}
+    function row_array(){return $this->table==='pay_pro_settlement' ? ($this->duplicate ? array('id'=>1,'total_amount'=>1700.5,'paid_amount'=>1700.5,'link_amount'=>300,'card_amount'=>1400.5) : array()) : ($this->table==='students_payments' ? array('type'=>'student','challan_ids'=>'111,222') : array('acquired'=>1));}
     function get_where($t,$args){$this->table=$t;return $this;}
-    function result_array(){return array($this->row_array());}
+    function result_array(){return $this->table==='settlement_payments' ? $this->old_rows : array($this->row_array());}
+    function group_start(){return $this;} function group_end(){return $this;} function or_where($k,$v){return $this;}
     function trans_begin(){} function trans_commit(){$this->committed=true;} function trans_rollback(){$this->rolledBack=true;}
     function trans_status(){return $this->valid;}
     function insert($t,$row){$this->inserts[]=array($t,$row);}
@@ -41,7 +42,18 @@ $db=new SettlementTestDb; $result=$service->save($db,$parsed,99);
 verifySettlement($result['entry_count']===3 && $db->inserts[0][1]['total_amount']===1700.5 && $db->inserts[0][1]['card_amount']===1400.5 && $db->inserts[0][1]['link_amount']===300.0,'settlement totals sum each receipt once');
 verifySettlement(count($db->updates)===6 && $db->committed && $db->released,'student payments and challans linked and transaction committed');
 $db=new SettlementTestDb; $db->duplicate=true;
-try{$service->save($db,$parsed,99);throw new RuntimeException('Duplicate accepted');}catch(RuntimeException $e){throw $e;}catch(Exception $e){verifySettlement(!$db->inserts && $db->released,'duplicate settlement rejected before writes');}
+$db->old_rows=$parsed['rows']; $result=$service->save($db,$parsed,99);
+verifySettlement($result['entry_count']===0 && !$db->inserts && $result['unchanged_count']===3,'identical re-upload adds no duplicate entries');
+$db=new SettlementTestDb; $db->duplicate=true; $db->old_rows=array_slice($parsed['rows'],0,2);
+$preview=$service->save($db,$parsed,99,true);
+verifySettlement($preview['new_count']===1 && $preview['unchanged_count']===2 && !$db->inserts && !$db->updates,'preview finds missing entry without writes');
+$result=$service->save(new SettlementTestDb,$parsed,99,true);
+verifySettlement($result['new_count']===3,'new settlement previews all receipts');
+$db=new SettlementTestDb; $db->duplicate=true; $db->old_rows=array_slice($parsed['rows'],0,2);
+$result=$service->save($db,$parsed,99);
+verifySettlement($result['entry_count']===1 && count($db->inserts)===1 && $db->updates[0][1]['total_amount']===2000.5 && !isset($db->updates[0][1]['tagged_amount']),'only missing entry added and original tagging totals preserved');
+$db=new SettlementTestDb; $db->duplicate=true; $db->old_rows=$parsed['rows']; $db->old_rows[0]['paid_amount']=999;
+try{$service->save($db,$parsed,99);throw new RuntimeException('Conflict accepted');}catch(RuntimeException $e){throw $e;}catch(Exception $e){verifySettlement(!$db->inserts && !$db->updates,'changed receipt amount rejected without overwriting');}
 $db=new SettlementTestDb; $db->valid=false;
 try{$service->save($db,$parsed,99);throw new RuntimeException('Failure committed');}catch(RuntimeException $e){throw $e;}catch(Exception $e){verifySettlement($db->rolledBack && !$db->committed && $db->released,'failed import rolls back and releases lock');}
 foreach(array('missing_sheet','bad_date','mixed_dates','bad_amount') as $case){
