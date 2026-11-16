@@ -635,7 +635,7 @@ class Reports_service {
         if (!preg_match('/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/', (string)$month)) return array('success'=>false,'message'=>'Select a valid month','code'=>422);
         if (!preg_match('/^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$/', (string)$due_date) || date('Y-m-d',strtotime($due_date)) !== $due_date) return array('success'=>false,'message'=>'Select a valid due cutoff date','code'=>422);
         $allowed = $this->month_admissions_campuses($user);
-        $campus = null;
+        $campus = (int)$campus_id === 0 ? array('campus_id'=>0, 'campus_name'=>'All colleges') : null;
         foreach ($allowed['data'] as $c) if ((int)$c['campus_id'] === (int)$campus_id) $campus=$c;
         if (!$campus) return array('success'=>false,'message'=>'College not available','code'=>403);
         $class_ids = $this->_is_admin($user) ? array() : $this->_class_ids($user);
@@ -645,7 +645,10 @@ class Reports_service {
         $cutoff=$this->ci->db->escape($due_date);
         $this->ci->db->select("s.student_id,s.roll_no,s.first_name,s.last_name,s.mobile,s.registration_date,s.add_by,co.course_id,co.course_name,MAX(CASE WHEN p.paid=1 THEN COALESCE(NULLIF(p.actual_paid_date,'0000-00-00'),NULLIF(p.paid_date,'0000-00-00')) ELSE NULL END) AS last_paid_fee_date,SUM(CASE WHEN p.paid=0 AND p.dead_line <= {$cutoff} THEN p.amount ELSE 0 END) AS total_due",false);
         $this->ci->db->from('students s')->join('classes cl','cl.class_id=s.class_id')->join('courses co','co.course_id=s.course_id')->join('campuses ca','ca.campus_id=cl.campus_id')->join('payments p','p.student_id=s.student_id','left');
-        $this->ci->db->where('s.status',1)->where('cl.campus_id',(int)$campus_id)->where('s.registration_date >=',$from)->where('s.registration_date <',$until);
+        $this->ci->db->where('s.status',1)->where('s.registration_date >=',$from)->where('s.registration_date <',$until);
+        if ((int)$campus_id !== 0) $this->ci->db->where('cl.campus_id',(int)$campus_id);
+        elseif (!empty($allowed['data'])) $this->ci->db->where_in('cl.campus_id',array_column($allowed['data'],'campus_id'));
+        else $this->ci->db->where('1=0',null,false);
         if (!$this->_is_admin($user)) $this->ci->db->where_in('cl.class_id',$class_ids);
         $this->ci->db->group_by('s.student_id')->order_by('co.course_name','ASC')->order_by('s.roll_no','ASC');
         $students=$this->ci->db->get()->result_array();

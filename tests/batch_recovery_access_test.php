@@ -12,6 +12,8 @@ class BatchAccessDb {
     function where_in($key,$value) { $this->filters[]=array($key,$value); return $this; }
     function where($key,$value) { $this->filters[]=array($key,$value); return $this; }
     function order_by($a,$b) { return $this; } function get() { return $this; }
+    function group_by($key) { return $this; }
+    function escape($value) { return "'".str_replace("'", "''", $value)."'"; }
     function result_array() { return $this->table==='campuses c' ? array(array('campus_id'=>17,'campus_name'=>'Test College')) : array(); }
     function query($sql,$params) { $this->queries[]=array($sql,$params); throw new Exception('Unexpected query'); }
 }
@@ -32,5 +34,16 @@ $db->filters=array();
 $r=$service->batch_recovery($user,0,'2026-10','2026-10-31');
 checkAccess($r['success'] && $r['data']['campus']['campus_id']===0,'no college selected returns all-colleges report');
 checkAccess(in_array(array('cl.campus_id',array(17)),$db->filters,true) && in_array(array('cl.class_id',array(54)),$db->filters,true),'all colleges still restricted to authorized campuses and classes');
+$db->access['reports_month_admissions']=1;
+$db->filters=array();
+$r=$service->month_admissions($user,0,'2026-11','2026-11-30');
+checkAccess($r['success'] && $r['data']['campus']['campus_name']==='All colleges','admissions supports no college selected');
+checkAccess(in_array(array('cl.campus_id',array(17)),$db->filters,true) && in_array(array('cl.class_id',array(54)),$db->filters,true),'all-colleges admissions preserves campus and class permissions');
+checkAccess(in_array(array('s.registration_date >=','2026-11-01'),$db->filters,true) && in_array(array('s.registration_date <','2026-12-01'),$db->filters,true),'all-colleges admissions preserves selected month');
+$r=$service->month_admissions($user,18,'2026-11','2026-11-30');
+checkAccess(!$r['success'] && $r['code']===403,'admissions rejects unauthorized college');
+$db->filters=array();
+$r=$service->month_admissions($user,17,'2026-11','2026-11-30');
+checkAccess($r['success'] && in_array(array('cl.campus_id',17),$db->filters,true),'admissions single-college selection still works');
 $db->access['class_ids']=''; $r=$service->batch_recovery_campuses($user); checkAccess(!$r['data'],'missing class scope exposes no colleges');
 $db->access['reports_student_fee_problem']=0; $r=$service->batch_recovery($user,17,'2026-10','2026-10-31'); checkAccess($r['code']===403,'fee report permission required');
