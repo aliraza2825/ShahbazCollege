@@ -6,6 +6,7 @@ function student($id,$course,$batch) { return array('student_id'=>$id,'course_id
 function payment($id,$sid,$paid,$amount,$actual,$deadline,$date='',$merged='',$fallback='') { return array('id'=>$id,'student_id'=>$sid,'paid'=>$paid,'amount'=>$amount,'actual_amount'=>$actual,'dead_line'=>$deadline,'actual_paid_date'=>$date,'paid_date'=>$fallback,'merged_challan'=>$merged); }
 $students=array(student(1,1,'2023-2025'),student(2,1,'2024-2026'),student(3,2,'2023-2025'),student(4,2,''));
 $students[0]['struckoff_letters']=3;
+$students[0]['registration_date']='2024-07-19 12:30:00';
 $payments=array(
  payment(1,1,0,100.10,0,'2026-09-30'), payment(2,1,0,200.20,0,'2026-10-31'), payment(3,1,0,999,0,'2026-11-01'),
  payment(4,1,1,100,90,'2025-01-01','2026-10-01'),
@@ -19,6 +20,8 @@ $payments=array(
 $r=(new Batch_recovery_report)->build($students,$payments,'2026-10','2026-10-31');
 verify(abs($r['courses'][0]['students'][0]['due']-300.30)<0.001,'arrears and cutoff included; future and invalid deadlines excluded');
 verify($r['courses'][0]['students'][0]['recovery']==540,'received amount used and merged receipt counted once');
+verify($r['courses'][0]['students'][0]['total_paid_fee']==550,'total paid includes other months and counts merged receipts once');
+verify($r['courses'][0]['students'][0]['admission_date']==='2024-07-19' && $r['courses'][0]['students'][1]['admission_date']===null,'saved admission date returned with missing date fallback');
 verify($r['courses'][0]['students'][1]['recovery']==80,'receipt date wins; fallback and month boundaries work');
 verify($r['totals']['2023-2025']['recovery']==585,'same merge label on different students remains separate');
 verify($r['student_count']==4 && count($r['courses'])==2 && count($r['batches'])==3,'courses, all batches and unassigned students retained');

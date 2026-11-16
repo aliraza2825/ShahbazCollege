@@ -574,14 +574,20 @@ class Reports_service {
         if (!preg_match('/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/', (string)$month)) return array('success'=>false,'message'=>'Select a valid month','code'=>422);
         if (!preg_match('/^[1-9][0-9]{3}-[0-9]{2}-[0-9]{2}$/', (string)$due_date) || date('Y-m-d',strtotime($due_date)) !== $due_date) return array('success'=>false,'message'=>'Select a valid due cutoff date','code'=>422);
         $allowed = $this->batch_recovery_campuses($user);
-        $campus = null;
+        $campus = (int)$campus_id === 0 ? array('campus_id'=>0, 'campus_name'=>'All colleges') : null;
         foreach ($allowed['data'] as $c) if ((int)$c['campus_id'] === (int)$campus_id) $campus=$c;
         if (!$campus) return array('success'=>false,'message'=>'College not available','code'=>403);
         $class_ids = $this->_is_admin($user) ? array() : $this->_class_ids($user);
-        $this->ci->db->select('s.student_id,s.roll_no,s.first_name,s.last_name,s.mobile,s.add_by,s.last_edit,s.course_id,cl.session,co.course_name');
+        $this->ci->db->select('s.student_id,s.roll_no,s.first_name,s.last_name,s.mobile,s.registration_date,s.add_by,s.last_edit,s.course_id,cl.session,co.course_name');
         $this->ci->db->from('students s')->join('classes cl','cl.class_id=s.class_id')->join('courses co','co.course_id=s.course_id');
-        $this->ci->db->where('s.status',1)->where('cl.campus_id',(int)$campus_id);
-        if (!$this->_is_admin($user)) $this->ci->db->where_in('cl.class_id',$class_ids);
+        $this->ci->db->where('s.status',1);
+        if ((int)$campus_id !== 0) $this->ci->db->where('cl.campus_id',(int)$campus_id);
+        elseif (!empty($allowed['data'])) $this->ci->db->where_in('cl.campus_id',array_column($allowed['data'],'campus_id'));
+        else $this->ci->db->where('1=0',null,false);
+        if (!$this->_is_admin($user)) {
+            if ($class_ids) $this->ci->db->where_in('cl.class_id',$class_ids);
+            else $this->ci->db->where('1=0',null,false);
+        }
         $students=$this->ci->db->order_by('co.course_name','ASC')->order_by('cl.session','DESC')->order_by('s.roll_no','ASC')->order_by('s.student_id','ASC')->get()->result_array();
         // Only the current pending process contributes letters; completed history is excluded.
         $letter_counts=array(); $letter_processes=array();
@@ -612,11 +618,10 @@ class Reports_service {
         }
         unset($student);
         $payments=array();
-        $from=$month.'-01'; $until=date('Y-m-d',strtotime($from.' +1 month'));
         foreach (array_chunk(array_column($students,'student_id'),500) as $ids) {
             $marks=implode(',',array_fill(0,count($ids),'?'));
-            $sql="SELECT id,student_id,amount,actual_amount,paid,dead_line,paid_date,actual_paid_date,merged_challan FROM payments WHERE student_id IN ($marks) AND ((paid=0 AND dead_line >= '1000-01-01' AND dead_line <= ?) OR (paid=1 AND COALESCE(NULLIF(NULLIF(actual_paid_date,'0000-00-00'),''),NULLIF(paid_date,'0000-00-00')) >= ? AND COALESCE(NULLIF(NULLIF(actual_paid_date,'0000-00-00'),''),NULLIF(paid_date,'0000-00-00')) < ?))";
-            $payments=array_merge($payments,$this->ci->db->query($sql,array_merge($ids,array($due_date,$from,$until)))->result_array());
+            $sql="SELECT id,student_id,amount,actual_amount,paid,dead_line,paid_date,actual_paid_date,merged_challan FROM payments WHERE student_id IN ($marks) AND ((paid=0 AND dead_line >= '1000-01-01' AND dead_line <= ?) OR paid=1)";
+            $payments=array_merge($payments,$this->ci->db->query($sql,array_merge($ids,array($due_date)))->result_array());
         }
         $this->ci->load->library('batch_recovery_report');
         $data=$this->ci->batch_recovery_report->build($students,$payments,$month,$due_date);

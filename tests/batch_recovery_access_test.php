@@ -28,5 +28,9 @@ $r=$service->batch_recovery($user,17,'2026-10','2026-02-30'); checkAccess($r['co
 $r=$service->batch_recovery($user,17,'2026-10','2026-10-31');
 checkAccess($r['success'] && !$r['data']['student_count'] && !$db->queries,'empty report avoids payment query');
 checkAccess(in_array(array('cl.class_id',array(54)),$db->filters,true) && in_array(array('cl.campus_id',17),$db->filters,true),'student scope restricted by campus and class');
+$db->filters=array();
+$r=$service->batch_recovery($user,0,'2026-10','2026-10-31');
+checkAccess($r['success'] && $r['data']['campus']['campus_id']===0,'no college selected returns all-colleges report');
+checkAccess(in_array(array('cl.campus_id',array(17)),$db->filters,true) && in_array(array('cl.class_id',array(54)),$db->filters,true),'all colleges still restricted to authorized campuses and classes');
 $db->access['class_ids']=''; $r=$service->batch_recovery_campuses($user); checkAccess(!$r['data'],'missing class scope exposes no colleges');
 $db->access['reports_student_fee_problem']=0; $r=$service->batch_recovery($user,17,'2026-10','2026-10-31'); checkAccess($r['code']===403,'fee report permission required');

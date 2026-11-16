@@ -4,8 +4,8 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 /** Read-only aggregation for the course/batch recovery matrix. Amounts are summed in paisa. */
 class Batch_recovery_report {
     public function build($students, $payments, $month, $due_date) {
-        $amounts = array(); $receipts = array();
-        foreach ($students as $s) $amounts[(int)$s['student_id']] = array('due'=>0, 'recovery'=>0);
+        $amounts = array(); $receipts = array(); $all_receipts = array();
+        foreach ($students as $s) $amounts[(int)$s['student_id']] = array('due'=>0, 'recovery'=>0, 'total_paid_fee'=>0);
         foreach ($payments as $p) {
             $sid = (int)$p['student_id'];
             if (!isset($amounts[$sid])) continue;
@@ -14,13 +14,17 @@ class Batch_recovery_report {
             }
             // Actual receipt date matches the recovery collection report; old rows may only have paid_date.
             $date = !empty($p['actual_paid_date']) && $p['actual_paid_date'] >= '1000-01-01' ? $p['actual_paid_date'] : $p['paid_date'];
-            if ((int)$p['paid'] !== 1 || substr((string)$date,0,7) !== $month) continue;
+            if ((int)$p['paid'] !== 1) continue;
             $key = $sid . ':' . (!empty($p['merged_challan']) ? 'm:'.$p['merged_challan'] : 's:'.$p['id']);
             $value = (int)round((float)$p['actual_amount'] * 100);
+            if (!isset($all_receipts[$key])) $all_receipts[$key] = array('student_id'=>$sid, 'amount'=>$value);
+            else $all_receipts[$key]['amount'] = max($all_receipts[$key]['amount'], $value);
+            if (substr((string)$date,0,7) !== $month) continue;
             if (!isset($receipts[$key])) $receipts[$key] = array('student_id'=>$sid, 'amount'=>$value);
             else $receipts[$key]['amount'] = max($receipts[$key]['amount'], $value);
         }
         foreach ($receipts as $r) $amounts[$r['student_id']]['recovery'] += $r['amount'];
+        foreach ($all_receipts as $r) $amounts[$r['student_id']]['total_paid_fee'] += $r['amount'];
         $courses = array(); $batches = array(); $grand = array();
         foreach ($students as $s) {
             $cid = (int)$s['course_id'];
@@ -29,9 +33,13 @@ class Batch_recovery_report {
             $batches[$batch] = true;
             if (!isset($courses[$cid])) $courses[$cid] = array('course_id'=>$cid,'course_name'=>$s['course_name'],'students'=>array(),'totals'=>array());
             $a = $amounts[(int)$s['student_id']];
+            $admission_date = isset($s['registration_date']) && $s['registration_date'] >= '1000-01-01' ? substr($s['registration_date'],0,10) : null;
             $created_by = isset($s['add_by']) ? trim((string)$s['add_by']) : '';
             if ($created_by === '') $created_by = isset($s['last_edit']) ? trim((string)$s['last_edit']) : '';
             $courses[$cid]['students'][] = array('student_id'=>(int)$s['student_id'],'roll_no'=>$s['roll_no'], 'name'=>trim($s['first_name'].' '.$s['last_name']), 'phone'=>$s['mobile'], 'created_by'=>$created_by, 'last_paid_fee_date'=>isset($s['last_paid_fee_date']) ? $s['last_paid_fee_date'] : null, 'struckoff_process'=>isset($s['struckoff_process']) ? (int)$s['struckoff_process'] : null, 'struckoff_letters'=>isset($s['struckoff_letters']) ? (int)$s['struckoff_letters'] : 0, 'batch'=>$batch,'due'=>$a['due']/100,'recovery'=>$a['recovery']/100);
+            $index = count($courses[$cid]['students']) - 1;
+            $courses[$cid]['students'][$index]['admission_date'] = $admission_date;
+            $courses[$cid]['students'][$index]['total_paid_fee'] = $a['total_paid_fee']/100;
             foreach (array('due','recovery') as $key) {
                 if (!isset($courses[$cid]['totals'][$batch][$key])) $courses[$cid]['totals'][$batch][$key]=0;
                 if (!isset($grand[$batch][$key])) $grand[$batch][$key]=0;
