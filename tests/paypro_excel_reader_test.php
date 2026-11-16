@@ -31,4 +31,25 @@ foreach (array('Excel2007','Excel5') as $format) {
     }
     unlink($path);
 }
+
+// PayPro exports prefix all spreadsheet XML elements with x: and use absolute
+// relationship targets. Older PHPExcel silently returns an empty workbook.
+$path = tempnam(sys_get_temp_dir(),'paypro_namespace_');
+PHPExcel_IOFactory::createWriter($book,'Excel2007')->save($path);
+$zip = new ZipArchive; $zip->open($path);
+foreach (array('xl/workbook.xml','xl/sharedStrings.xml','xl/worksheets/sheet1.xml','xl/worksheets/sheet2.xml') as $part) {
+    $xml = $zip->getFromName($part);
+    if ($xml === false) continue;
+    $xml = preg_replace('/(<\/?)([a-zA-Z][a-zA-Z0-9]*)(?=[\s>\/])/','$1x:$2',$xml);
+    $xml = str_replace('xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"','xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"',$xml);
+    $zip->addFromString($part,$xml);
+}
+$rels=$zip->getFromName('xl/_rels/workbook.xml.rels');
+$rels=str_replace('Target="worksheets/','Target="/xl/worksheets/',$rels);
+$zip->addFromString('xl/_rels/workbook.xml.rels',$rels); $zip->close();
+$importer = new Paypro_settlement_import;
+$r=$importer->read_xlsx($path);
+if(count($r['rows'])!==1 || $r['rows'][0]['paypro_id']!=='000123' || $r['rows'][0]['paid_amount']!==1250.5) throw new Exception('Namespaced export mismatch');
+echo "PASS: PayPro prefixed XML, shared strings and absolute worksheet targets\n";
+unlink($path);
 $book->disconnectWorksheets();

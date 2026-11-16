@@ -5505,9 +5505,13 @@ class Accountsapi extends CI_Controller {
 		$this->load->library('PHPExcel',NULL,'excel');
 		$this->load->library('paypro_settlement_import');
 		try {
-			$book = PHPExcel_IOFactory::load($file['tmp_name']);
-			$parsed = $this->paypro_settlement_import->parse($book);
-			$book->disconnectWorksheets();
+			if (strtolower(pathinfo($file['name'],PATHINFO_EXTENSION)) === 'xlsx') {
+				$parsed = $this->paypro_settlement_import->read_xlsx($file['tmp_name']);
+			} else {
+				$book = PHPExcel_IOFactory::load($file['tmp_name']);
+				$parsed = $this->paypro_settlement_import->parse($book);
+				$book->disconnectWorksheets();
+			}
 			// Return a JSON failure and let the importer roll back failed SQL.
 			$this->db->db_debug = false;
 			$result = $this->paypro_settlement_import->save($this->db,$parsed,$this->current_user['user_id']);
