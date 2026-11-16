@@ -5481,6 +5481,30 @@ class Accountsapi extends CI_Controller {
 		$this->_json(array('success' => true, 'settlements' => $rows));
 	}
 
+	public function upload_paypro_settlement()
+	{
+		$this->_assert_section('bank_reconciliation');
+		if ($_SERVER['REQUEST_METHOD'] !== 'POST') $this->_json(array('success'=>false,'message'=>'POST required'),405);
+		if (empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) $this->_json(array('success'=>false,'message'=>'Select a valid Excel file. Upload may exceed the server limit.'),400);
+		$file = $_FILES['file'];
+		if (!in_array(strtolower(pathinfo($file['name'],PATHINFO_EXTENSION)),array('xls','xlsx'),true) || $file['size'] > 10*1024*1024 || !is_uploaded_file($file['tmp_name'])) {
+			$this->_json(array('success'=>false,'message'=>'Select an .xls or .xlsx file up to 10 MB.'),400);
+		}
+		$this->load->library('PHPExcel',NULL,'excel');
+		$this->load->library('paypro_settlement_import');
+		try {
+			$book = PHPExcel_IOFactory::load($file['tmp_name']);
+			$parsed = $this->paypro_settlement_import->parse($book);
+			$book->disconnectWorksheets();
+			// Return a JSON failure and let the importer roll back failed SQL.
+			$this->db->db_debug = false;
+			$result = $this->paypro_settlement_import->save($this->db,$parsed,$this->current_user['user_id']);
+		} catch (Exception $e) {
+			$this->_json(array('success'=>false,'message'=>$e->getMessage()),400);
+		}
+		$this->_json($result);
+	}
+
 	/**
 	 * Legacy: Excel_import::entries
 	 * GET paypro_settlement_entries?id=
