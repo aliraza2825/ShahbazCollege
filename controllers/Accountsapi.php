@@ -5045,7 +5045,7 @@ class Accountsapi extends CI_Controller {
             $groups=$this->paypro_reconciliation->groups($this->db,(int)$settlement['id']);
             if(!isset($groups[$channel])) continue;
             $group=$groups[$channel];
-            $entries[]=array_merge($settlement,$group,array('amount_matches'=>abs($group['remaining']-$this->_brs_num($bank['credit']))<0.005 && $group['remaining']>0));
+            $entries[]=array_merge($settlement,$group,array('amount_matches'=>$this->paypro_reconciliation->amounts_match_for_tag($group['remaining'],$this->_brs_num($bank['credit']))));
         }
         $this->_json(array('success'=>true,'entries'=>$entries));
     }

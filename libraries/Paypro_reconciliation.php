@@ -22,6 +22,11 @@ class Paypro_reconciliation
         return (string)$value;
     }
 
+    public function amounts_match_for_tag($remaining, $credit)
+    {
+        return $remaining > 0 && $credit > 0 && floor($remaining) === floor($credit);
+    }
+
     public function groups($db,$settlement_id,$persist_legacy = false)
     {
         $groups=array(); $ambiguous=false;
@@ -112,8 +117,8 @@ class Paypro_reconciliation
             $group=$groups[$channel];
             if($group['needs_review']) throw new Exception('Existing bank tags need channel review before adding another tag.');
             $credit=round((float)str_replace(',','',$bank['credit']),2);
-            if($credit<=0 || abs($group['remaining']-$credit)>0.005) throw new Exception('Bank credit must match the remaining channel amount. Refresh settlements.');
-            $db->insert('paypro_bank_channel_tags',array('bank_trans_id'=>$bank_id,'settlement_id'=>$settlement_id,'paid_via'=>$channel,'amount'=>$credit,'created_by'=>$actor));
+            if(!$this->amounts_match_for_tag($group['remaining'], $credit)) throw new Exception('Bank credit must match the remaining channel amount. Refresh settlements.');
+            $db->insert('paypro_bank_channel_tags',array('bank_trans_id'=>$bank_id,'settlement_id'=>$settlement_id,'paid_via'=>$channel,'amount'=>$group['remaining'],'created_by'=>$actor));
             $db->where('id',$bank_id)->update('bank_reconciliation_statement',array('paypro_id'=>$settlement_id));
             $db->set('tagged_amount','COALESCE(tagged_amount,0) + '.$credit,false)->where('id',$settlement_id)->update('pay_pro_settlement');
             if(!$db->trans_status()) throw new Exception('Unable to save PayPro tag.');
