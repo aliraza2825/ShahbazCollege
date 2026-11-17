@@ -5539,6 +5539,23 @@ class Accountsapi extends CI_Controller {
 			 WHERE settlement_id = ? ORDER BY id ASC",
 			array($id)
 		)->result_array();
+		$tags = array();
+		if ($this->_table_exists('bank_reconciliation_statement')) {
+			$has_channels = $this->_table_exists('paypro_bank_channel_tags');
+			$this->db->select('b.credit,b.trans_date,b.description,a.account_title,a.account_name'.($has_channels ? ',t.paid_via' : ''))
+				->from('bank_reconciliation_statement b')->join('accounts a', 'a.id=b.account_id', 'left');
+			if ($has_channels) $this->db->join('paypro_bank_channel_tags t', 't.bank_trans_id=b.id', 'left');
+			$tags = $this->db->where('b.paypro_id', $id)->get()->result_array();
+		}
+		$this->load->library('paypro_reconciliation');
+		foreach ($rows as &$row) {
+			$row['bank_tags'] = array();
+			foreach ($tags as $tag) {
+				if (!empty($tag['paid_via']) && $this->paypro_reconciliation->channel($tag['paid_via']) === $this->paypro_reconciliation->channel($row['paid_via'])) $row['bank_tags'][] = $tag;
+			}
+			$row['legacy_bank_tag'] = count(array_filter($tags, function ($tag) { return empty($tag['paid_via']); })) > 0;
+		}
+		unset($row);
 		$this->_json(array('success' => true, 'id' => $id, 'entries' => $rows));
 	}
 
