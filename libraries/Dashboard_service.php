@@ -1007,16 +1007,25 @@ class Dashboard_service {
             ))->row_array();
             if (!$paypro_payment) return false;
         }
-        $stats = $this->ci->db
-            ->select('bank_reconciliation_statement.*, pay_pro_settlement.paid_amount, pay_pro_settlement.link_amount, pay_pro_settlement.card_amount, accounts.account_title, accounts.account_name')
+        $has_channel_tags = $this->ci->db->table_exists('paypro_bank_channel_tags');
+        $query = $this->ci->db
+            ->select('bank_reconciliation_statement.*, pay_pro_settlement.paid_amount, pay_pro_settlement.link_amount, pay_pro_settlement.card_amount, accounts.account_title, accounts.account_name'.($has_channel_tags ? ', paypro_bank_channel_tags.paid_via AS tag_paid_via' : ''))
             ->from('bank_reconciliation_statement')
             ->join('pay_pro_settlement', 'pay_pro_settlement.id = bank_reconciliation_statement.paypro_id', 'inner')
-            ->join('accounts', 'accounts.id = bank_reconciliation_statement.account_id', 'inner')
-            ->where('bank_reconciliation_statement.paypro_id', $row['settlement_id'])
-            ->get()->result_array();
+            ->join('accounts', 'accounts.id = bank_reconciliation_statement.account_id', 'inner');
+        if ($has_channel_tags) {
+            $query->join('paypro_bank_channel_tags', 'paypro_bank_channel_tags.bank_trans_id = bank_reconciliation_statement.id AND paypro_bank_channel_tags.settlement_id = pay_pro_settlement.id', 'left');
+        }
+        $stats = $query->where('bank_reconciliation_statement.paypro_id', $row['settlement_id'])->get()->result_array();
         foreach ($stats as $stat) {
             $credit = (int) str_replace(',', '', $stat['credit']);
             $via = $paypro_payment && isset($paypro_payment['paid_via']) ? $paypro_payment['paid_via'] : '';
+            if (!empty($stat['tag_paid_via'])) {
+                $tag_channel = strtolower(preg_replace('/[^a-z0-9]/i', '', $stat['tag_paid_via']));
+                $payment_channel = strtolower(preg_replace('/[^a-z0-9]/i', '', $via));
+                if ($payment_channel !== '' && $tag_channel === $payment_channel) return true;
+                if ($payment_channel !== '') continue;
+            }
             $link_amount = (int) (isset($stat['link_amount']) ? $stat['link_amount'] : 0);
             $paid_amount = (int) (isset($stat['paid_amount']) ? $stat['paid_amount'] : 0);
             $card_amount = (int) (isset($stat['card_amount']) ? $stat['card_amount'] : 0);
