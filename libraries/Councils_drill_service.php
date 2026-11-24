@@ -1153,43 +1153,44 @@ class Councils_drill_service {
             'error' => null,
         );
 
+        // An existing student fee remains valid even after its creation rule expires.
+        $already = $this->ci->db->get_where('payments', array(
+            'student_id' => $student['student_id'],
+            'exam_sequence_id' => $next_exam['id'],
+            'exam_class' => $next_exam['class'],
+            'council_sequence_id' => $task['council_sequence_id'],
+        ))->row_array();
+
         if ($fee) {
             $block['fee_rule'] = array(
                 'exam_fee' => $fee['exam_fee'],
                 'from_date' => $fee['from_date'],
                 'to_date' => $fee['to_date'],
             );
+        }
 
-            $already = $this->ci->db->get_where('payments', array(
-                'student_id' => $student['student_id'],
-                'exam_sequence_id' => $next_exam['id'],
-                'exam_class' => $next_exam['class'],
-                'council_sequence_id' => $task['council_sequence_id'],
-            ))->row_array();
-
-            if ($already) {
-                $block['fee_created'] = true;
-                $block['paid'] = ((int) $already['paid'] === 1);
-                if ($block['paid']) {
-                    $block['paid_at'] = $already['updated_at'];
-                }
-            } else {
-                $fee_item = array(
-                    'next_exam_sequence_id' => $next_exam['id'],
-                    'council_sequence_id' => $task['council_sequence_id'],
-                    'class' => $next_exam['class'],
-                    'dead_line' => $fee['from_date'],
-                    'course_type' => $is_year,
-                    'exam_no' => $next_exam['first_year'],
-                    'amount' => $fee['exam_fee'],
-                    'type' => 'College fee',
-                );
-                if ($task['recurring'] === 'After Chances') {
-                    $fee_item['type'] = 'Extra fee';
-                    $fee_item['comment'] = 'This Fee For ' . $task['type_name'];
-                }
-                $fee_items[] = $fee_item;
+        if ($already) {
+            $block['fee_created'] = true;
+            $block['paid'] = ((int) $already['paid'] === 1);
+            if ($block['paid']) {
+                $block['paid_at'] = $already['updated_at'];
             }
+        } elseif ($fee) {
+            $fee_item = array(
+                'next_exam_sequence_id' => $next_exam['id'],
+                'council_sequence_id' => $task['council_sequence_id'],
+                'class' => $next_exam['class'],
+                'dead_line' => $fee['from_date'],
+                'course_type' => $is_year,
+                'exam_no' => $next_exam['first_year'],
+                'amount' => $fee['exam_fee'],
+                'type' => 'College fee',
+            );
+            if ($task['recurring'] === 'After Chances') {
+                $fee_item['type'] = 'Extra fee';
+                $fee_item['comment'] = 'This Fee For ' . $task['type_name'];
+            }
+            $fee_items[] = $fee_item;
         } else {
             $block['error'] = 'Fee is Not Created. Please create Fee for ' . $task['type_name'] . '.';
         }
